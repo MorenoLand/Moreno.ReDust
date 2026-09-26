@@ -6,6 +6,7 @@ import (
 )
 
 var ErrUnterminatedBlock = errors.New("script block ended before its closing parenthesis")
+var ErrUnsupportedTerminatorPair = errors.New("unsupported structured block token pair")
 
 func ParenthesizedBlockEnd(records []Record, start int) (int, error) {
 	if start < 0 || start >= len(records) {
@@ -102,6 +103,9 @@ func scanConditional(records []Record, start int, endIfReturnsAfter bool) (int32
 }
 
 func FindNestedTerminator(records []Record, start int, open, close uint16) (int32, uint16, error) {
+	if !((open == 4009 && close == 4010) || (open == 4012 && close == 4015)) {
+		return -1, 0, fmt.Errorf("%w: %d/%d", ErrUnsupportedTerminatorPair, open, close)
+	}
 	return findNestedTerminator(records, start, open, close, 0x1f)
 }
 
