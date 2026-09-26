@@ -24,3 +24,15 @@ func ParenthesizedBlockEnd(records []Record, start int) (int, error) {
 	}
 	return 0, ErrUnterminatedBlock
 }
+
+func FindCodeMarker(records []Record) (int, bool) {
+	for i, record := range records {
+		if record.Kind == 4001 {
+			return i, true
+		}
+		if record.Kind == 0 {
+			return 0, false
+		}
+	}
+	return 0, false
+}

@@ -305,6 +305,9 @@ var opcodeIDs = map[string]uint16{
 	"wiperight":       24012,
 	"wipeup":          24011,
 	"|":               8006,
+	"\xad":            8009,
+	"\xb2":            8013,
+	"\xb3":            8012,
 }
 
 func LookupOpcode(name string) uint16 {
