@@ -17,20 +17,28 @@ type Program struct {
 }
 
 func (p Program) IdentifierPascal(index int) ([]byte, error) {
+	return p.pascalRecord(index, 5)
+}
+
+func (p Program) LiteralPascal(index int) ([]byte, error) {
+	return p.pascalRecord(index, 3)
+}
+
+func (p Program) pascalRecord(index int, kind uint16) ([]byte, error) {
 	if index < 0 || index >= len(p.Records) {
-		return nil, fmt.Errorf("identifier record index %d is out of range", index)
+		return nil, fmt.Errorf("string record index %d is out of range", index)
 	}
-	if p.Records[index].Kind != 5 {
-		return nil, fmt.Errorf("record %d is not an identifier", index)
+	if p.Records[index].Kind != kind {
+		return nil, fmt.Errorf("record %d has type %d, want %d", index, p.Records[index].Kind, kind)
 	}
 	poolOffset := int64(index)*8 + int64(int32(p.Records[index].Data)) - int64(len(p.Records))*8
 	if poolOffset < 0 || poolOffset >= int64(len(p.StringPool)) {
-		return nil, fmt.Errorf("identifier record %d points outside the string pool", index)
+		return nil, fmt.Errorf("string record %d points outside the string pool", index)
 	}
 	start := int(poolOffset)
 	length := int(p.StringPool[start])
 	if length+1 > len(p.StringPool)-start {
-		return nil, fmt.Errorf("identifier record %d has a truncated Pascal string", index)
+		return nil, fmt.Errorf("string record %d has a truncated Pascal string", index)
 	}
 	return append([]byte(nil), p.StringPool[start:start+length+1]...), nil
 }

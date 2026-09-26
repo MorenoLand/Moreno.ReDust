@@ -153,3 +153,135 @@ func nextNonLineRecord(program Program, index int) (int, error) {
 	}
 	return index, nil
 }
+
+func ExpressionPrecedence(opcode uint16) (uint8, bool) {
+	switch opcode {
+	case 8001, 8002:
+		return 1, true
+	case 8003, 8004:
+		return 0, true
+	case 8005:
+		return 5, true
+	case 8006:
+		return 6, true
+	case 8007:
+		return 2, true
+	case 8008, 8009:
+		return 4, true
+	case 8010, 8011, 8012, 8013:
+		return 3, true
+	default:
+		return 0, false
+	}
+}
+
+func ApplyBinaryOperator(left, right Record, opcode uint16, strings *StringRegisters) (Record, uint16, error) {
+	result := Record{Kind: left.Kind, Tail: left.Tail}
+	switch opcode {
+	case 8001, 8002, 8003, 8004:
+		if left.Kind != 4 || right.Kind != 4 {
+			return Record{}, 14, nil
+		}
+		switch opcode {
+		case 8001:
+			result.Data = left.Data + right.Data
+		case 8002:
+			result.Data = left.Data - right.Data
+		case 8003:
+			result.Data = left.Data * right.Data
+		case 8004:
+			if right.Data == 0 {
+				return Record{}, 0x37, nil
+			}
+			result.Data = left.Data / right.Data
+		}
+	case 8005, 8006:
+		if left.Kind != 2 || right.Kind != 2 {
+			return Record{}, 14, nil
+		}
+		if opcode == 8005 {
+			result.Data = left.Data & right.Data
+		} else {
+			result.Data = left.Data | right.Data
+		}
+	case 8007:
+		if strings == nil {
+			return Record{}, 0, fmt.Errorf("expression string registers are unavailable")
+		}
+		leftText, status, err := strings.Load(left)
+		if err != nil || status != 0 {
+			return Record{}, status, err
+		}
+		rightText, status, err := strings.Load(right)
+		if err != nil || status != 0 {
+			return Record{}, status, err
+		}
+		length := int(leftText[0]) + int(rightText[0])
+		if length > 0xff {
+			return Record{}, 0x1a, nil
+		}
+		text := make([]byte, length+1)
+		text[0] = byte(length)
+		copy(text[1:], leftText[1:])
+		copy(text[1+int(leftText[0]):], rightText[1:])
+		return strings.Store(text)
+	case 8008, 8009:
+		var equal bool
+		if left.Kind != right.Kind {
+			result.Data = 0
+			if opcode == 8009 {
+				result.Kind = 2
+				result.Data = 1
+			}
+			return result, 0, nil
+		}
+		switch left.Kind {
+		case 2, 4:
+			equal = left.Data == right.Data
+		case 3:
+			if strings == nil {
+				return Record{}, 0, fmt.Errorf("expression string registers are unavailable")
+			}
+			leftText, status, err := strings.Load(left)
+			if err != nil || status != 0 {
+				return Record{}, status, err
+			}
+			rightText, status, err := strings.Load(right)
+			if err != nil || status != 0 {
+				return Record{}, status, err
+			}
+			equal = equalPascalString(leftText, rightText)
+		default:
+			return Record{}, 14, nil
+		}
+		result.Kind = 2
+		if opcode == 8008 && equal || opcode == 8009 && !equal {
+			result.Data = 1
+		}
+	case 8010, 8011, 8012, 8013:
+		if left.Kind != 4 || right.Kind != 4 {
+			return Record{}, 14, nil
+		}
+		result.Kind = 2
+		switch opcode {
+		case 8010:
+			result.Data = boolWord(left.Data > right.Data)
+		case 8011:
+			result.Data = boolWord(left.Data < right.Data)
+		case 8012:
+			result.Data = boolWord(left.Data >= right.Data)
+		case 8013:
+			result.Data = boolWord(left.Data <= right.Data)
+		}
+	default:
+		return Record{}, 14, nil
+	}
+	return result, 0, nil
+}
+
+func boolWord(value bool) uint32 {
+	if value {
+		return 1
+	}
+	return 0
+}
