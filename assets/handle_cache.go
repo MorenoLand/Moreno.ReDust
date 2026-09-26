@@ -28,7 +28,7 @@ func (e *NativeResourceError) Unwrap() error {
 }
 
 type NativeMemoryStatus func() (pageFile, virtual, totalPhysical uint32)
-type NativeCacheEvictor func(required *int32) uint32
+type NativeCacheEvictor func(required *int32) (uint32, error)
 
 type NativeMemoryHooks struct {
 	Status     NativeMemoryStatus
@@ -139,7 +139,10 @@ func (c *HandleCache) ensureMemory(required int32) error {
 		return nil
 	}
 	remaining := int32(uint32(required) - available + 500000)
-	status := c.memory.EvictOther(&remaining)
+	status, err := c.memory.EvictOther(&remaining)
+	if err != nil {
+		return &NativeResourceError{Code: 0x145f, Cause: err}
+	}
 	if uint16(status) != 0 {
 		return &NativeResourceError{Code: 0x145f, Cause: fmt.Errorf("first-level eviction returned 0x%04x", uint16(status))}
 	}

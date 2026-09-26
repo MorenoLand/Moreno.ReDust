@@ -17,7 +17,10 @@ type Workspace struct {
 	WorkDir   string
 	AssetRoot string
 	open      func(string) (AssetFile, int64, error)
+	registry  *ResourceCacheRegistry
 }
+
+func (w Workspace) ResourceCacheRegistry() *ResourceCacheRegistry { return w.registry }
 
 func webAssetPath(locationPath, name string) string {
 	base := locationPath

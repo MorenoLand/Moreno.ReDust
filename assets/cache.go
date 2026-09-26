@@ -43,6 +43,7 @@ type ResourceCache struct {
 	lastSlot  int
 	hasLast   bool
 	createdAt uint32
+	registry  *ResourceCacheRegistry
 	closed    bool
 }
 
@@ -61,6 +62,9 @@ func NewResourceCache(container *Container) (*ResourceCache, error) {
 }
 
 func (w Workspace) OpenResourceCache(name string) (*ResourceCache, error) {
+	if w.registry == nil {
+		return nil, ErrResourceCacheRegistryUnavailable
+	}
 	container, err := w.OpenContainer(name)
 	if err != nil {
 		return nil, err
@@ -68,8 +72,13 @@ func (w Workspace) OpenResourceCache(name string) (*ResourceCache, error) {
 	cache, err := NewResourceCache(container)
 	if err != nil {
 		container.Close()
+		return nil, err
 	}
-	return cache, err
+	if err := w.registry.Register(cache); err != nil {
+		cache.Close()
+		return nil, err
+	}
+	return cache, nil
 }
 
 func (c *ResourceCache) Header() (Header, error) {
@@ -198,12 +207,22 @@ func (c *ResourceCache) Close() error {
 			c.mu.Unlock()
 			return ErrResourceInUse
 		}
+		if slot.flags != 0 {
+			c.mu.Unlock()
+			return ErrResourceWritebackUnsupported
+		}
 	}
 	c.closed = true
 	c.slots = nil
 	container := c.container
+	registry := c.registry
+	c.registry = nil
 	c.mu.Unlock()
-	return container.Close()
+	err := container.Close()
+	if registry != nil {
+		registry.unregister(c)
+	}
+	return err
 }
 
 func (l *ResourceLease) Bytes() ([]byte, error) {

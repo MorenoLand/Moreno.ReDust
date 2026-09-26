@@ -40,5 +40,5 @@ func NewWorkspace(work string) (Workspace, error) {
 		}
 		return memoryAsset{bytes.NewReader(data)}, int64(len(data)), nil
 	}
-	return Workspace{WorkDir: ".", AssetRoot: "assets", open: open}, nil
+	return Workspace{WorkDir: ".", AssetRoot: "assets", open: open, registry: ProcessResourceCacheRegistry()}, nil
 }

@@ -45,5 +45,5 @@ func NewWorkspace(work string) (Workspace, error) {
 		}
 		return file, info.Size(), nil
 	}
-	return Workspace{WorkDir: root, AssetRoot: assetRoot, open: open}, nil
+	return Workspace{WorkDir: root, AssetRoot: assetRoot, open: open, registry: ProcessResourceCacheRegistry()}, nil
 }
