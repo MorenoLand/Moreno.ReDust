@@ -184,7 +184,7 @@ func DecodeMoviePixels(data, previous []byte) (MoviePixels, error) {
 		var err error
 		position, err = decodeMovieRuns(data, position, pixels, &destination, reference, width)
 		if err != nil {
-			return MoviePixels{}, fmt.Errorf("movie row %d: %w", row, err)
+			return MoviePixels{Width: width, Height: height, Pitch: pitch, Consumed: position, Pixels: pixels}, fmt.Errorf("movie row %d: %w", row, err)
 		}
 		destination += pitch - width
 	}

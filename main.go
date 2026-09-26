@@ -10,6 +10,7 @@ import (
 	"redust/assets"
 	"redust/engine"
 	"redust/render"
+	"redust/scripts"
 )
 
 func run() error {
@@ -68,19 +69,75 @@ func run() error {
 	if *debug {
 		log.Printf("scene=%s/%s size=%dx%d resource=%d", stage.Name[1:], stage.Scenes[0].Name[1:], frame.Width, frame.Height, stage.Scenes[0].Fields[1])
 	}
-	runErr := engine.Run(frame, func(point uint32) error {
-		name, hit, err := stage.HitTestSceneHandler(0, point)
+	currentScene, currentPixels := 0, pixels
+	runErr := engine.Run(frame, func(point uint32) (render.IndexedFrame, bool, error) {
+		handler, hit, err := stage.HitTestSceneHandler(currentScene, point)
 		if err != nil {
-			return fmt.Errorf("hit test initial scene: %w", err)
+			return render.IndexedFrame{}, false, fmt.Errorf("hit test scene %d: %w", currentScene, err)
 		}
 		if *debug {
-			handler := ""
+			handlerName := ""
 			if hit {
-				handler = string(name[1:])
+				handlerName = string(handler.Name[1:])
 			}
-			log.Printf("mouse scene=%s point=%d,%d hit=%t handler=%s", stage.Scenes[0].Name[1:], int16(point>>16), int16(point), hit, handler)
+			log.Printf("mouse scene=%s point=%d,%d hit=%t handler=%s", stage.Scenes[currentScene].Name[1:], int16(point>>16), int16(point), hit, handlerName)
 		}
-		return nil
+		if !hit {
+			return render.IndexedFrame{}, false, nil
+		}
+		lease, err := stage.AcquireResource(handler.ScriptResource)
+		if err != nil {
+			return render.IndexedFrame{}, false, fmt.Errorf("load button script resource %d: %w", handler.ScriptResource, err)
+		}
+		scriptBytes, err := lease.Bytes()
+		if closeErr := lease.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return render.IndexedFrame{}, false, fmt.Errorf("read button script resource %d: %w", handler.ScriptResource, err)
+		}
+		program, err := scripts.ParseProgram(scriptBytes)
+		if err != nil {
+			return render.IndexedFrame{}, false, fmt.Errorf("parse button script resource %d: %w", handler.ScriptResource, err)
+		}
+		target, found, err := scripts.MouseDownFlatTarget(program)
+		if err != nil {
+			return render.IndexedFrame{}, false, fmt.Errorf("run button script resource %d: %w", handler.ScriptResource, err)
+		}
+		if !found {
+			return render.IndexedFrame{}, false, nil
+		}
+		if target < 0 || target >= len(stage.Scenes) {
+			return render.IndexedFrame{}, false, fmt.Errorf("button script resource %d selects stage scene %d", handler.ScriptResource, target)
+		}
+		frameLease, err := stage.AcquireSceneFrameResource(target)
+		if err != nil {
+			return render.IndexedFrame{}, false, fmt.Errorf("load stage scene %d: %w", target, err)
+		}
+		data, readErr := frameLease.Bytes()
+		closeErr := frameLease.Close()
+		if readErr != nil {
+			return render.IndexedFrame{}, false, fmt.Errorf("read stage scene %d: %w", target, readErr)
+		}
+		if closeErr != nil {
+			return render.IndexedFrame{}, false, fmt.Errorf("release stage scene %d: %w", target, closeErr)
+		}
+		nextPixels, decodeErr := render.DecodeMoviePixels(data, currentPixels.Pixels)
+		if decodeErr != nil && len(nextPixels.Pixels) == 0 {
+			return render.IndexedFrame{}, false, fmt.Errorf("decode stage scene %d: %w", target, decodeErr)
+		}
+		if decodeErr != nil && *debug {
+			log.Printf("scene=%s partial-frame: %v", stage.Scenes[target].Name[1:], decodeErr)
+		}
+		nextFrame, err := render.StageFrame(stage, nextPixels.Pixels)
+		if err != nil {
+			return render.IndexedFrame{}, false, fmt.Errorf("render stage scene %d: %w", target, err)
+		}
+		currentScene, currentPixels = target, nextPixels
+		if *debug {
+			log.Printf("scene transition=%s resource=%d", stage.Scenes[target].Name[1:], stage.Scenes[target].Fields[1])
+		}
+		return nextFrame, true, nil
 	})
 	closeErr := stage.Close()
 	if runErr != nil {

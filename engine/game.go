@@ -15,7 +15,7 @@ type Game struct {
 	height       int
 	screenWidth  int
 	screenHeight int
-	mouseDown    func(uint32) error
+	mouseDown    func(uint32) (render.IndexedFrame, bool, error)
 }
 
 func NewGame(frame render.IndexedFrame) (*Game, error) {
@@ -38,8 +38,16 @@ func (g *Game) Update() error {
 		if g.screenWidth > 0 && g.screenHeight > 0 {
 			x, y = x*g.width/g.screenWidth, y*g.height/g.screenHeight
 		}
-		if err := g.mouseDown(uint32(uint16(x))<<16 | uint32(uint16(y))); err != nil {
+		frame, changed, err := g.mouseDown(uint32(uint16(x))<<16 | uint32(uint16(y)))
+		if err != nil {
 			return err
+		}
+		if changed {
+			image, err := frame.EbitenImage()
+			if err != nil {
+				return err
+			}
+			g.frame, g.width, g.height = image, frame.Width, frame.Height
 		}
 	}
 	return nil
@@ -58,7 +66,7 @@ func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
 	return outsideWidth, outsideHeight
 }
 
-func Run(frame render.IndexedFrame, mouseDown func(uint32) error) error {
+func Run(frame render.IndexedFrame, mouseDown func(uint32) (render.IndexedFrame, bool, error)) error {
 	game, err := NewGame(frame)
 	if err != nil {
 		return err
