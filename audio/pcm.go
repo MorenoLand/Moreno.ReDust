@@ -15,6 +15,44 @@ type PCMFormat struct {
 	BitsPerSample int
 }
 
+type NativeSoundMetadata struct {
+	SampleRate               uint32
+	Channels                 int16
+	AverageBytesPerSecond    int32
+	BytesPerChannelPerSecond int32
+	RateMultiplier           uint8
+	RateCode                 uint8
+	Flags                    [2]uint32
+	Name                     []byte
+}
+
+func ParseNativeSoundMetadata(resource, name []byte) (NativeSoundMetadata, error) {
+	if len(resource) < 0x28 {
+		return NativeSoundMetadata{}, fmt.Errorf("native sound resource is shorter than its 0x28-byte header")
+	}
+	channels := int16(binary.LittleEndian.Uint16(resource[0x1a:0x1c]))
+	if channels == 0 {
+		return NativeSoundMetadata{}, fmt.Errorf("native sound resource has zero channels")
+	}
+	var multiplier, rateCode uint8
+	sampleRate := binary.LittleEndian.Uint32(resource[0x1c:0x20])
+	switch sampleRate {
+	case 0x2b11:
+		multiplier, rateCode = 1, 2
+	case 0x5622:
+		multiplier, rateCode = 2, 3
+	case 0xac44:
+		multiplier, rateCode = 4, 4
+	default:
+		return NativeSoundMetadata{}, fmt.Errorf("unsupported native sound rate %d", sampleRate)
+	}
+	if len(name) == 0 || int(name[0])+1 > len(name) {
+		return NativeSoundMetadata{}, fmt.Errorf("native sound name is not a complete Pascal string")
+	}
+	average := int32(binary.LittleEndian.Uint32(resource[0x24:0x28]))
+	return NativeSoundMetadata{SampleRate: sampleRate, Channels: channels, AverageBytesPerSecond: average, BytesPerChannelPerSecond: average / int32(channels), RateMultiplier: multiplier, RateCode: rateCode, Flags: [2]uint32{1, 1}, Name: append([]byte(nil), name[:int(name[0])+1]...)}, nil
+}
+
 func PCMFormatFromNative(rateMultiplier, bytesPerSample, channels int) (PCMFormat, error) {
 	if rateMultiplier <= 0 || uint64(rateMultiplier) > uint64(^uint32(0))/0x2b11 {
 		return PCMFormat{}, fmt.Errorf("invalid native audio rate multiplier %d", rateMultiplier)
