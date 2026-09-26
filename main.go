@@ -399,12 +399,17 @@ func run() error {
 			}
 			return
 		}
+		if key != ebiten.KeyEscape && key != ebiten.KeySpace && key != ebiten.KeyQ && key != ebiten.KeyPeriod {
+			return
+		}
 		playback.Skip()
 		if *debug {
 			keyName := "q"
 			switch key {
 			case ebiten.KeyEscape:
 				keyName = "escape"
+			case ebiten.KeySpace:
+				keyName = "space"
 			case ebiten.KeyPeriod:
 				keyName = "period"
 			}

@@ -31,7 +31,7 @@ func NewGame(frame render.IndexedFrame) (*Game, error) {
 
 func (g *Game) Update() error {
 	if g.keyDown != nil {
-		for _, key := range []ebiten.Key{ebiten.KeyEscape, ebiten.KeyQ, ebiten.KeyPeriod} {
+		for _, key := range []ebiten.Key{ebiten.KeyEscape, ebiten.KeySpace, ebiten.KeyQ, ebiten.KeyPeriod, ebiten.KeyArrowUp, ebiten.KeyArrowLeft, ebiten.KeyArrowRight} {
 			if inpututil.IsKeyJustPressed(key) {
 				g.keyDown(key)
 				break
