@@ -1,8 +1,10 @@
 package audio
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 
 	ebitenaudio "github.com/hajimehoshi/ebiten/v2/audio"
 )
@@ -11,6 +13,23 @@ type PCMFormat struct {
 	SampleRate    int
 	Channels      int
 	BitsPerSample int
+}
+
+func PCMFormatFromNative(rateMultiplier, bytesPerSample, channels int) (PCMFormat, error) {
+	if rateMultiplier <= 0 || uint64(rateMultiplier) > uint64(^uint32(0))/0x2b11 {
+		return PCMFormat{}, fmt.Errorf("invalid native audio rate multiplier %d", rateMultiplier)
+	}
+	sampleRate := uint64(rateMultiplier) * 0x2b11
+	if sampleRate > uint64(int(^uint(0)>>1)) {
+		return PCMFormat{}, fmt.Errorf("native audio sample rate %d exceeds the supported range", sampleRate)
+	}
+	if bytesPerSample != 1 && bytesPerSample != 2 {
+		return PCMFormat{}, fmt.Errorf("unsupported native audio sample size %d", bytesPerSample)
+	}
+	if channels != 1 && channels != 2 {
+		return PCMFormat{}, fmt.Errorf("unsupported native audio channel count %d", channels)
+	}
+	return PCMFormat{SampleRate: int(sampleRate), Channels: channels, BitsPerSample: bytesPerSample * 8}, nil
 }
 
 func ToStereoPCM16(input []byte, format PCMFormat) ([]byte, error) {
@@ -58,5 +77,33 @@ func NewPlayer(context *ebitenaudio.Context, input []byte, format PCMFormat) (*e
 	if err != nil {
 		return nil, err
 	}
+	if format.SampleRate != context.SampleRate() {
+		pcm, err = resampleStereoPCM16(pcm, format.SampleRate, context.SampleRate())
+		if err != nil {
+			return nil, err
+		}
+	}
 	return context.NewPlayerFromBytes(pcm), nil
+}
+
+func resampleStereoPCM16(input []byte, from, to int) ([]byte, error) {
+	if from <= 0 || to <= 0 {
+		return nil, fmt.Errorf("invalid resample rate %d to %d", from, to)
+	}
+	if len(input)%4 != 0 {
+		return nil, fmt.Errorf("stereo PCM byte count %d is not frame aligned", len(input))
+	}
+	if from == to {
+		return input, nil
+	}
+	frames := int64(len(input) / 4)
+	if frames != 0 && int64(to) > int64(^uint64(0)>>1)/frames {
+		return nil, fmt.Errorf("resampled audio size exceeds the supported range")
+	}
+	outputFrames := frames * int64(to) / int64(from)
+	if outputFrames > int64(int(^uint(0)>>1)/4) {
+		return nil, fmt.Errorf("resampled audio size exceeds the supported range")
+	}
+	source := ebitenaudio.ResampleReader(bytes.NewReader(input), int64(len(input)), from, to)
+	return io.ReadAll(io.LimitReader(source, outputFrames*4))
 }
