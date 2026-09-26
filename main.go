@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	ebitenaudio "github.com/hajimehoshi/ebiten/v2/audio"
@@ -20,6 +21,7 @@ import (
 func run() error {
 	work := flag.String("work", "bin", "work directory; assets are read from its assets child")
 	debug := flag.Bool("debug", false, "enable diagnostics")
+	silent := flag.Bool("silent", false, "render the initial level to a PNG and exit without opening a window")
 	flag.Parse()
 	workspace, err := assets.NewWorkspace(*work)
 	if err != nil {
@@ -43,13 +45,27 @@ func run() error {
 		}
 		log.Printf("BootFile APPL header: entries=%d pages=%d size=%d", header.CountB, header.CountA>>7, header.FileSize)
 	}
-	soundBank, err := audio.OpenSoundBank(workspace, "DATA/UNILIB.SND")
-	if err != nil {
-		return fmt.Errorf("open startup sound bank: %w", err)
+	var soundBank *audio.SoundBank
+	var themeBank *audio.SoundBank
+	var themePlayer *ebitenaudio.Player
+	var audioContext *ebitenaudio.Context
+	if !*silent {
+		soundBank, err = audio.OpenSoundBank(workspace, "DATA/UNILIB.SND")
+		if err != nil {
+			return fmt.Errorf("open startup sound bank: %w", err)
+		}
+		defer func() { _ = soundBank.Close() }()
+		audioContext = ebitenaudio.NewContext(44100)
 	}
-	defer func() { _ = soundBank.Close() }()
-	audioContext := ebitenaudio.NewContext(44100)
-	if *debug {
+	defer func() {
+		if themePlayer != nil {
+			_ = themePlayer.Close()
+		}
+		if themeBank != nil {
+			_ = themeBank.Close()
+		}
+	}()
+	if *debug && soundBank != nil {
 		log.Printf("sound-bank=DATA/UNILIB.SND samples=%d", len(soundBank.Names()))
 	}
 	stage, err := workspace.OpenStage("DATA/NEW.FLT")
@@ -82,7 +98,65 @@ func run() error {
 	if *debug {
 		log.Printf("scene=%s/%s size=%dx%d resource=%d", stage.Name[1:], stage.Scenes[0].Name[1:], frame.Width, frame.Height, stage.Scenes[0].Fields[1])
 	}
-	stageFrame := frame
+	nightSet, err := workspace.OpenSet("DATA/NITE.SET")
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("open startup game set: %w", err)
+	}
+	defer func() { _ = nightSet.Close() }()
+	view, found := nightSet.FindView("Scene G15")
+	if !found {
+		stage.Close()
+		return fmt.Errorf("startup game set has no Scene G15 view")
+	}
+	backgroundResource, found, err := nightSet.BackgroundResourceForDirection(view, assets.SetDirectionNorth)
+	if err != nil || !found {
+		stage.Close()
+		if err != nil {
+			return fmt.Errorf("resolve startup game background: %w", err)
+		}
+		return fmt.Errorf("startup game set has no north-facing background for Scene G15")
+	}
+	backgroundData, err := nightSet.Resource(backgroundResource)
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("read startup game background resource %d: %w", backgroundResource, err)
+	}
+	backgroundPixels, backgroundDecodeErr := render.DecodeMoviePixels(backgroundData, nil)
+	if len(backgroundPixels.Pixels) == 0 {
+		stage.Close()
+		return fmt.Errorf("decode startup game background resource %d: %w", backgroundResource, backgroundDecodeErr)
+	}
+	if backgroundDecodeErr != nil && *debug {
+		log.Printf("level=set=NITE.SET view=Scene G15 partial-frame: %v", backgroundDecodeErr)
+	}
+	backgroundFrame, err := render.StageFrame(&assets.Stage{Width: uint16(backgroundPixels.Width), Height: uint16(backgroundPixels.Height), PaletteRaw: nightSet.Palette()}, backgroundPixels.Pixels)
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("render startup game background: %w", err)
+	}
+	stageFrame, err := render.CompositeUnderlay(backgroundFrame, frame)
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("compose startup game background: %w", err)
+	}
+	if *debug {
+		log.Printf("level=set=NITE.SET view=%s ids=%d,%d direction=north frame-resource=%d size=%dx%d", view.Name[1:], view.SceneID, view.DirectionID, backgroundResource, backgroundFrame.Width, backgroundFrame.Height)
+	}
+	if *silent {
+		screenshotPath := filepath.Join(workspace.WorkDir, "redust-silent.png")
+		if err := render.WritePNG(screenshotPath, stageFrame); err != nil {
+			stage.Close()
+			return fmt.Errorf("write silent startup screenshot: %w", err)
+		}
+		if *debug {
+			log.Printf("silent screenshot=%s", screenshotPath)
+		}
+		if err := stage.Close(); err != nil {
+			return fmt.Errorf("close initial stage: %w", err)
+		}
+		return nil
+	}
 	movieNames := []string{"MOVIES/INTRO.MOV", "MOVIES/INTRO2.MOV"}
 	movieIndex := 0
 	movieWarningCount := make([]int, len(movieNames))
@@ -219,6 +293,23 @@ func run() error {
 		if *debug {
 			log.Printf("startup movies complete; scene=%s", stage.Scenes[currentScene].Name[1:])
 		}
+		if themePlayer == nil {
+			themeBank, err = audio.OpenSoundBank(workspace, "DATA/NIGHT.SND")
+			if err != nil {
+				return render.IndexedFrame{}, false, fmt.Errorf("open startup theme bank: %w", err)
+			}
+			theme, err := themeBank.LoadTheme("town.snd")
+			if err != nil {
+				return render.IndexedFrame{}, false, fmt.Errorf("load startup town theme: %w", err)
+			}
+			themePlayer, err = theme.Play(audioContext)
+			if err != nil {
+				return render.IndexedFrame{}, false, fmt.Errorf("start startup town theme: %w", err)
+			}
+			if *debug {
+				log.Printf("track-file=DATA/NIGHT.SND theme=%s events=%d voices=%d playing=%t", theme.Name, len(theme.Events), len(theme.Tracks), themePlayer.IsPlaying())
+			}
+		}
 		if err := soundBank.Play(audioContext, "pageturn", 4); err != nil {
 			return render.IndexedFrame{}, false, fmt.Errorf("play intro transition sound: %w", err)
 		}
@@ -323,6 +414,12 @@ func run() error {
 		nextFrame, err := render.StageFrame(stage, nextPixels.Pixels)
 		if err != nil {
 			return render.IndexedFrame{}, false, fmt.Errorf("render stage scene %d: %w", target, err)
+		}
+		if target == 0 {
+			nextFrame, err = render.CompositeUnderlay(backgroundFrame, nextFrame)
+			if err != nil {
+				return render.IndexedFrame{}, false, fmt.Errorf("compose startup game background: %w", err)
+			}
 		}
 		currentScene, currentPixels = target, nextPixels
 		if action.VisualEffect != 0 {

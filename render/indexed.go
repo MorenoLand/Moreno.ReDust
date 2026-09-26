@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
+	"image/png"
 	"math"
+	"os"
 
 	"github.com/hajimehoshi/ebiten/v2"
 
@@ -17,6 +20,7 @@ type IndexedFrame struct {
 	Height  int
 	Pixels  []byte
 	Palette color.Palette
+	rgba    *image.RGBA
 }
 
 type paletteEntry struct {
@@ -102,11 +106,65 @@ func (f IndexedFrame) Image() (*image.Paletted, error) {
 }
 
 func (f IndexedFrame) EbitenImage() (*ebiten.Image, error) {
+	if f.rgba != nil {
+		if f.rgba.Bounds().Dx() != f.Width || f.rgba.Bounds().Dy() != f.Height {
+			return nil, fmt.Errorf("true-color frame does not match %dx%d", f.Width, f.Height)
+		}
+		return ebiten.NewImageFromImage(f.rgba), nil
+	}
 	frame, err := f.Image()
 	if err != nil {
 		return nil, err
 	}
 	return ebiten.NewImageFromImage(frame), nil
+}
+
+func (f IndexedFrame) rgbaImage() (*image.RGBA, error) {
+	if f.rgba != nil {
+		return f.rgba, nil
+	}
+	frame, err := f.Image()
+	if err != nil {
+		return nil, err
+	}
+	rgba := image.NewRGBA(frame.Bounds())
+	draw.Draw(rgba, rgba.Bounds(), frame, frame.Bounds().Min, draw.Src)
+	return rgba, nil
+}
+
+func CompositeUnderlay(background, overlay IndexedFrame) (IndexedFrame, error) {
+	if background.Width != overlay.Width || background.Height <= 0 || background.Height >= overlay.Height {
+		return IndexedFrame{}, fmt.Errorf("underlay %dx%d does not fit overlay %dx%d", background.Width, background.Height, overlay.Width, overlay.Height)
+	}
+	backgroundRGBA, err := background.rgbaImage()
+	if err != nil {
+		return IndexedFrame{}, err
+	}
+	overlayRGBA, err := overlay.rgbaImage()
+	if err != nil {
+		return IndexedFrame{}, err
+	}
+	composite := image.NewRGBA(image.Rect(0, 0, overlay.Width, overlay.Height))
+	draw.Draw(composite, image.Rect(0, 0, background.Width, background.Height), backgroundRGBA, image.Point{}, draw.Src)
+	draw.Draw(composite, image.Rect(0, background.Height, overlay.Width, overlay.Height), overlayRGBA, image.Point{Y: background.Height}, draw.Src)
+	overlay.rgba = composite
+	return overlay, nil
+}
+
+func WritePNG(path string, frame IndexedFrame) error {
+	image, err := frame.rgbaImage()
+	if err != nil {
+		return err
+	}
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	if err := png.Encode(file, image); err != nil {
+		_ = file.Close()
+		return err
+	}
+	return file.Close()
 }
 
 func StageFrame(stage *assets.Stage, pixels []byte) (IndexedFrame, error) {

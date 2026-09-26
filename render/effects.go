@@ -1,6 +1,10 @@
 package render
 
-import "fmt"
+import (
+	"fmt"
+	"image"
+	"image/draw"
+)
 
 type BarndoorEffect struct {
 	from         IndexedFrame
@@ -11,6 +15,8 @@ type BarndoorEffect struct {
 	elapsed      int
 	open         bool
 	done         bool
+	fromRGBA     *image.RGBA
+	targetRGBA   *image.RGBA
 }
 
 func NewBarndoorOpen(from, target IndexedFrame, duration int) (*BarndoorEffect, error) {
@@ -25,14 +31,16 @@ func newBarndoorEffect(from, target IndexedFrame, duration int, open bool) (*Bar
 	if from.Width <= 0 || from.Height <= 0 || from.Width != target.Width || from.Height != target.Height || len(from.Pixels) != from.Width*from.Height || len(target.Pixels) != target.Width*target.Height {
 		return nil, fmt.Errorf("barndooropen frames do not have matching pixel dimensions")
 	}
-	if duration < 1 || duration > 1000 || len(from.Palette) == 0 || len(from.Palette) != len(target.Palette) {
+	if duration < 1 || duration > 1000 || (from.rgba == nil && target.rgba == nil && (len(from.Palette) == 0 || len(from.Palette) != len(target.Palette))) {
 		return nil, fmt.Errorf("barndooropen duration or palette is invalid")
 	}
-	for i := range from.Palette {
-		fr, fg, fb, fa := from.Palette[i].RGBA()
-		tr, tg, tb, ta := target.Palette[i].RGBA()
-		if fr != tr || fg != tg || fb != tb || fa != ta {
-			return nil, fmt.Errorf("barndooropen palettes differ at entry %d", i)
+	if from.rgba == nil && target.rgba == nil {
+		for i := range from.Palette {
+			fr, fg, fb, fa := from.Palette[i].RGBA()
+			tr, tg, tb, ta := target.Palette[i].RGBA()
+			if fr != tr || fg != tg || fb != tb || fa != ta {
+				return nil, fmt.Errorf("barndooropen palettes differ at entry %d", i)
+			}
 		}
 	}
 	stepTicks := duration / 8
@@ -41,7 +49,19 @@ func newBarndoorEffect(from, target IndexedFrame, duration int, open bool) (*Bar
 	}
 	from.Pixels = append([]byte(nil), from.Pixels...)
 	target.Pixels = append([]byte(nil), target.Pixels...)
-	return &BarndoorEffect{from: from, target: target, bandHeight: from.Height/16 + 1, ticksPerStep: stepTicks, step: 1, open: open}, nil
+	effect := &BarndoorEffect{from: from, target: target, bandHeight: from.Height/16 + 1, ticksPerStep: stepTicks, step: 1, open: open}
+	if from.rgba != nil || target.rgba != nil {
+		var err error
+		effect.fromRGBA, err = from.rgbaImage()
+		if err != nil {
+			return nil, err
+		}
+		effect.targetRGBA, err = target.rgbaImage()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return effect, nil
 }
 
 func (e *BarndoorEffect) CurrentFrame() IndexedFrame {
@@ -49,6 +69,11 @@ func (e *BarndoorEffect) CurrentFrame() IndexedFrame {
 		return IndexedFrame{}
 	}
 	pixels := append([]byte(nil), e.from.Pixels...)
+	var rgba *image.RGBA
+	if e.fromRGBA != nil {
+		rgba = image.NewRGBA(image.Rect(0, 0, e.from.Width, e.from.Height))
+		draw.Draw(rgba, rgba.Bounds(), e.fromRGBA, image.Point{}, draw.Src)
+	}
 	center := e.from.Height / 2
 	for band := 0; band < e.step; band++ {
 		topStart, topEnd := band*e.bandHeight, (band+1)*e.bandHeight
@@ -71,12 +96,18 @@ func (e *BarndoorEffect) CurrentFrame() IndexedFrame {
 		}
 		for y := topStart; y < topEnd; y++ {
 			copy(pixels[y*e.from.Width:(y+1)*e.from.Width], e.target.Pixels[y*e.target.Width:(y+1)*e.target.Width])
+			if rgba != nil {
+				copy(rgba.Pix[y*rgba.Stride:y*rgba.Stride+e.from.Width*4], e.targetRGBA.Pix[y*e.targetRGBA.Stride:y*e.targetRGBA.Stride+e.from.Width*4])
+			}
 		}
 		for y := bottomStart; y < bottomEnd; y++ {
 			copy(pixels[y*e.from.Width:(y+1)*e.from.Width], e.target.Pixels[y*e.target.Width:(y+1)*e.target.Width])
+			if rgba != nil {
+				copy(rgba.Pix[y*rgba.Stride:y*rgba.Stride+e.from.Width*4], e.targetRGBA.Pix[y*e.targetRGBA.Stride:y*e.targetRGBA.Stride+e.from.Width*4])
+			}
 		}
 	}
-	return IndexedFrame{Width: e.from.Width, Height: e.from.Height, Pixels: pixels, Palette: e.target.Palette}
+	return IndexedFrame{Width: e.from.Width, Height: e.from.Height, Pixels: pixels, Palette: e.target.Palette, rgba: rgba}
 }
 
 func (e *BarndoorEffect) TargetFrame() IndexedFrame {
