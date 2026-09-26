@@ -45,6 +45,18 @@ func run() error {
 		}
 		log.Printf("BootFile APPL header: entries=%d pages=%d size=%d", header.CountB, header.CountA>>7, header.FileSize)
 	}
+	gangCast, err := workspace.OpenCast("DATA/GANG.CST")
+	if err != nil {
+		return fmt.Errorf("open actor cast: %w", err)
+	}
+	extraCast, err := workspace.OpenCast("DATA/EXTRA.CST")
+	if err != nil {
+		return fmt.Errorf("open extra actor cast: %w", err)
+	}
+	if *debug {
+		log.Printf("cast-file=DATA/GANG.CST actors=%d", len(gangCast.Actors))
+		log.Printf("cast-file=DATA/EXTRA.CST actors=%d", len(extraCast.Actors))
+	}
 	var soundBank *audio.SoundBank
 	var themeBank *audio.SoundBank
 	var themePlayer *ebitenaudio.Player
@@ -113,6 +125,17 @@ func run() error {
 	if err != nil {
 		stage.Close()
 		return fmt.Errorf("read startup game position: %w", err)
+	}
+	townActors, err := extraCast.ResolveLocations(nightSet, "town")
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("resolve startup town actors: %w", err)
+	}
+	if *debug {
+		log.Printf("actor-locations=set=NITE.SET selector=town resolved=%d", len(townActors))
+		for _, actor := range townActors {
+			log.Printf("actor-location name=%s point=%v script=%s", actor.Name, actor.Position, actor.Script)
+		}
 	}
 	backgroundResource, found, err := nightSet.BackgroundResourceForDirection(view, worldPoint[2])
 	if err != nil || !found {
