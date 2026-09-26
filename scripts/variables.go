@@ -69,6 +69,29 @@ func (t *VariableTable) Lookup(name []byte, cache *Record) (uint16, uint16, erro
 	return 0, 9, nil
 }
 
+func (t *VariableTable) ReadValue(id uint16, strings *StringRegisters) (Record, uint16, error) {
+	if t == nil || int(id) >= len(t.slots) {
+		return Record{}, 9, nil
+	}
+	slot := t.slots[id]
+	value := Record{Kind: slot.ValueType(), Data: binary.LittleEndian.Uint32(slot[2:6])}
+	if value.Kind != 3 {
+		return value, 0, nil
+	}
+	offset := int(int32(value.Data))
+	if offset < 0 || offset >= t.stringUsed || offset >= len(t.stringHeap) {
+		return Record{}, 0, fmt.Errorf("variable string offset %d is outside the heap", offset)
+	}
+	length := int(t.stringHeap[offset])
+	if length+1 > t.stringUsed-offset || length+1 > len(t.stringHeap)-offset {
+		return Record{}, 0, fmt.Errorf("variable string at offset %d is truncated", offset)
+	}
+	if strings == nil {
+		return Record{}, 0, fmt.Errorf("expression string registers are unavailable")
+	}
+	return strings.Store(t.stringHeap[offset : offset+length+1])
+}
+
 func ResolveVariableList(program *Program, start int, table *VariableTable) (int32, uint16, error) {
 	if program == nil || start < 0 || start >= len(program.Records) {
 		return -1, 0, fmt.Errorf("variable-list start index %d is out of range", start)

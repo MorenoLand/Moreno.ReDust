@@ -285,3 +285,105 @@ func boolWord(value bool) uint32 {
 	}
 	return 0
 }
+
+type ExpressionAtomParser func(program Program, start int) (Record, uint32, uint32, error)
+
+type ExpressionState struct {
+	Stack             [40]Record
+	Top               int
+	Strings           *StringRegisters
+	AvailableBytes    func() int32
+	SetProgramCounter func(int)
+}
+
+func (s *ExpressionState) Evaluate(program Program, start int, parseAtom ExpressionAtomParser) (Record, uint32, uint32, error) {
+	if s == nil || s.AvailableBytes == nil || s.SetProgramCounter == nil || parseAtom == nil {
+		return Record{}, 0, 0, fmt.Errorf("expression runtime dependencies are unavailable")
+	}
+	if s.AvailableBytes() < 0x800 {
+		return Record{}, 0, 0x2c, nil
+	}
+	if start < 0 || start >= len(program.Records) || s.Top < 0 || s.Top >= len(s.Stack) {
+		return Record{}, 0, 0, fmt.Errorf("expression start or stack index is out of range")
+	}
+	base := s.Top
+	s.SetProgramCounter(start)
+	value, consumed, status, err := parseAtom(program, start)
+	if err != nil || uint16(status) != 0 {
+		return Record{}, 0, status, err
+	}
+	if consumed == 0 {
+		return Record{}, 0, 0, fmt.Errorf("expression atom consumed no records")
+	}
+	if stackStatus := s.push(value); stackStatus != 0 {
+		return Record{}, 0, uint32(stackStatus), nil
+	}
+	operatorStart := s.Top
+	position := start + int(consumed)
+	for {
+		if position < 0 || position >= len(program.Records) {
+			return Record{}, 0, 0, fmt.Errorf("expression record index %d is out of range", position)
+		}
+		if program.Records[position].Kind < 8000 || program.Records[position].Kind > 8014 {
+			break
+		}
+		if stackStatus := s.push(program.Records[position]); stackStatus != 0 {
+			return Record{}, 0, uint32(stackStatus), nil
+		}
+		s.SetProgramCounter(position)
+		if position+1 >= len(program.Records) {
+			return Record{}, 0, 0, fmt.Errorf("operand record index %d is out of range", position+1)
+		}
+		value, consumed, status, err = parseAtom(program, position+1)
+		if err != nil || uint16(status) != 0 {
+			return Record{}, 0, status, err
+		}
+		if consumed == 0 {
+			return Record{}, 0, 0, fmt.Errorf("expression atom consumed no records")
+		}
+		if stackStatus := s.push(value); stackStatus != 0 {
+			return Record{}, 0, uint32(stackStatus), nil
+		}
+		position += int(consumed) + 1
+	}
+	for precedence := uint8(0); precedence < 7; precedence++ {
+		for operator := operatorStart; operator < s.Top; operator += 2 {
+			level, ok := ExpressionPrecedence(s.Stack[operator].Kind)
+			if !ok {
+				return Record{}, 0, 0xffff, nil
+			}
+			if level != precedence {
+				continue
+			}
+			if operator <= base || operator+1 >= s.Top {
+				return Record{}, 0, 0, fmt.Errorf("operator at stack index %d has no operand pair", operator)
+			}
+			value, operationStatus, err := ApplyBinaryOperator(s.Stack[operator-1], s.Stack[operator+1], s.Stack[operator].Kind, s.Strings)
+			if err != nil || operationStatus != 0 {
+				return Record{}, 0, uint32(operationStatus), err
+			}
+			s.Stack[operator-1] = value
+			copy(s.Stack[operator:s.Top-2], s.Stack[operator+2:s.Top])
+			s.Top -= 2
+			operator -= 2
+		}
+	}
+	if base >= s.Top {
+		return Record{}, 0, 0, fmt.Errorf("expression stack lost its result")
+	}
+	result := s.Stack[base]
+	s.Top--
+	return result, uint32(position - start), 0, nil
+}
+
+func (s *ExpressionState) push(value Record) uint16 {
+	if s.Top < 0 || s.Top >= len(s.Stack) {
+		return 3
+	}
+	s.Stack[s.Top] = value
+	s.Top++
+	if s.Top > 0x27 {
+		return 3
+	}
+	return 0
+}
