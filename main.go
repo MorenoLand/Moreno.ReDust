@@ -66,32 +66,6 @@ func run() error {
 	var nativeLoops scripts.LoopScheduler
 	var nativeRandom scripts.NativeRandom
 	var currentThemeName string
-	runNativeScheduler := func() error {
-		status, err := nativeLoops.Pass(func(loop scripts.ScriptLoop) (uint16, error) {
-			if loop.Callback != "nightfxs" {
-				return 0, nil
-			}
-			cue, found := scripts.NightWildlifeCue(currentThemeName, &nativeRandom)
-			if found {
-				played, err := themeBank.PlayAtVolume(audioContext, cue.Name, 255)
-				if err != nil {
-					return 0, fmt.Errorf("play NITE wildlife cue %s: %w", cue.Name, err)
-				}
-				if *debug {
-					log.Printf("ambient-cue=%s pan=%d played=%t", cue.Name, cue.Pan, played)
-				}
-			}
-			loop.Remaining = 2
-			return nativeLoops.Register(loop), nil
-		})
-		if err != nil {
-			return err
-		}
-		if status != 0 {
-			return fmt.Errorf("native scene scheduler returned status %#x", status)
-		}
-		return nil
-	}
 	if !*silent {
 		soundBank, err = audio.OpenSoundBank(workspace, "DATA/UNILIB.SND")
 		if err != nil {
@@ -168,6 +142,7 @@ func run() error {
 		stage.Close()
 		return fmt.Errorf("resolve G15 Leroy position: %w", err)
 	}
+	actorPoses := map[string]string{"leroy": "stand", "dog": "stand"}
 	loadWorldActors := func(point [3]int16) ([]render.WorldActorSprite, error) {
 		actors := make([]render.WorldActorSprite, 0, 1)
 		for _, actor := range gangCast.Actors {
@@ -178,7 +153,7 @@ func run() error {
 				return nil, fmt.Errorf("NITE.SET has no town.leroy1 coordinate")
 			}
 			actor.Position, actor.Located = leroyPosition, true
-			sprite, err := render.LoadCastActorFrame(workspace, gangCast, actor, "stand", 0, 1100, render.NativeActorViewAngle(leroyPosition, point, 0))
+			sprite, err := render.LoadCastActorFrame(workspace, gangCast, actor, actorPoses["leroy"], 0, 1100, render.NativeActorViewAngle(leroyPosition, point, 0))
 			if err != nil {
 				return nil, fmt.Errorf("load G15 actor %s: %w", actor.Name, err)
 			}
@@ -188,7 +163,7 @@ func run() error {
 			if gameClock != 3 || !strings.EqualFold(actor.Name, "dog") {
 				continue
 			}
-			sprite, err := render.LoadCastActorFrame(workspace, extraCast, actor, "stand", 0, 880, render.NativeActorViewAngle(actor.Position, point, 32))
+			sprite, err := render.LoadCastActorFrame(workspace, extraCast, actor, actorPoses["dog"], 0, 880, render.NativeActorViewAngle(actor.Position, point, 32))
 			if err != nil {
 				return nil, fmt.Errorf("load G15 actor %s: %w", actor.Name, err)
 			}
@@ -347,6 +322,74 @@ func run() error {
 	}
 	currentScene, currentPixels := 0, pixels
 	currentFrame := stageFrame
+	refreshWorldScene := func() error {
+		if currentScene != 0 {
+			return nil
+		}
+		actors, err := loadWorldActors(worldPoint)
+		if err != nil {
+			return err
+		}
+		worldBackground, projected, err := render.CompositeWorldActors(backgroundFrame, worldPoint, actors)
+		if err != nil {
+			return fmt.Errorf("refresh NITE actors: %w", err)
+		}
+		panel, err := render.StageFrame(stage, currentPixels.Pixels)
+		if err != nil {
+			return fmt.Errorf("refresh mainpanel: %w", err)
+		}
+		nextFrame, err := render.CompositeUnderlay(worldBackground, panel)
+		if err != nil {
+			return fmt.Errorf("compose refreshed NITE scene: %w", err)
+		}
+		worldActors, projectedActors = actors, projected
+		stageFrame, currentFrame = nextFrame, nextFrame
+		return nil
+	}
+	runNativeScheduler := func() (bool, error) {
+		displayChanged := false
+		status, err := nativeLoops.Pass(func(loop scripts.ScriptLoop) (uint16, error) {
+			switch loop.Callback {
+			case "nightfxs":
+				cue, found := scripts.NightWildlifeCue(currentThemeName, &nativeRandom)
+				if found {
+					played, err := themeBank.PlayAtVolume(audioContext, cue.Name, 255)
+					if err != nil {
+						return 0, fmt.Errorf("play NITE wildlife cue %s: %w", cue.Name, err)
+					}
+					if *debug {
+						log.Printf("ambient-cue=%s pan=%d played=%t", cue.Name, cue.Pan, played)
+					}
+				}
+				loop.Remaining = 2
+			case "lookright", "doleft", "lookleft", "doright":
+				step, found := scripts.DogIdleStep(loop.Callback, &nativeRandom)
+				if !found {
+					return 0, fmt.Errorf("unknown dog idle callback %q", loop.Callback)
+				}
+				actorPoses["dog"], loop.Callback, loop.Remaining = step.Pose, step.Callback, step.Remaining
+				displayChanged = displayChanged || currentScene == 0
+				if *debug {
+					log.Printf("actor=dog pose=%s next=%s ticks=%d", step.Pose, step.Callback, step.Remaining)
+				}
+			default:
+				return 0, fmt.Errorf("unknown native loop callback %q", loop.Callback)
+			}
+			return nativeLoops.Register(loop), nil
+		})
+		if err != nil {
+			return false, err
+		}
+		if status != 0 {
+			return false, fmt.Errorf("native scene scheduler returned status %#x", status)
+		}
+		if displayChanged {
+			if err := refreshWorldScene(); err != nil {
+				return false, err
+			}
+		}
+		return displayChanged, nil
+	}
 	startSceneMovie := func(name string) error {
 		if movieAudio != nil {
 			if err := movieAudio.Close(); err != nil {
@@ -381,6 +424,15 @@ func run() error {
 	var pendingMovement assets.SceneMove
 	var transition *render.BarndoorEffect
 	runErr := engine.Run(playback.CurrentFrame(), func() (render.IndexedFrame, bool, error) {
+		if playback == nil && transition == nil {
+			changed, err := runNativeScheduler()
+			if err != nil {
+				return render.IndexedFrame{}, false, err
+			}
+			if changed {
+				return currentFrame, true, nil
+			}
+		}
 		if playback == nil && transition == nil && currentScene == 0 && pendingMovement != 0 {
 			movement := pendingMovement
 			pendingMovement = 0
@@ -521,6 +573,15 @@ func run() error {
 			currentThemeName = theme.FirstVoiceName()
 			tick := scripts.NativeTickMilliseconds()
 			nativeRandom = scripts.NewNativeRandom(scripts.NativeRandomSeed(tick))
+			if gameClock == 3 {
+				step, found := scripts.DogIdleStep("doright", &nativeRandom)
+				if found {
+					actorPoses["dog"] = step.Pose
+					if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "dog", Callback: step.Callback, Remaining: step.Remaining}); status != 0 {
+						return render.IndexedFrame{}, false, fmt.Errorf("register dog idle loop returned status %#x", status)
+					}
+				}
+			}
 			if currentThemeName == "nightwind3" {
 				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 1, Owner: "scene g14", Callback: "nightfxs", Remaining: 2}); status != 0 {
 					return render.IndexedFrame{}, false, fmt.Errorf("register NITE nightfxs loop returned status %#x", status)
@@ -736,9 +797,6 @@ func run() error {
 		}
 		currentScene, currentPixels = target, nextPixels
 		if action.VisualEffect != 0 {
-			if err := runNativeScheduler(); err != nil {
-				return render.IndexedFrame{}, false, err
-			}
 			effectName := ""
 			switch action.VisualEffect {
 			case scripts.LookupOpcode("barndooropen"):

@@ -24,7 +24,6 @@ type ProjectedWorldActor struct {
 	Name   string
 	Depth  int
 	Bounds image.Rectangle
-	frame  PuppetFrame
 	pixels []byte
 	mask   []bool
 }
@@ -172,10 +171,8 @@ func CompositeWorldActors(background IndexedFrame, point [3]int16, actors []Worl
 	draw.Draw(composite, composite.Bounds(), base, image.Point{}, draw.Src)
 	for _, actor := range projected {
 		for y := 0; y < actor.Bounds.Dy(); y++ {
-			sourceY := y * actor.frame.Height / actor.Bounds.Dy()
 			for x := 0; x < actor.Bounds.Dx(); x++ {
-				sourceX := x * actor.frame.Width / actor.Bounds.Dx()
-				index := sourceY*actor.frame.Width + sourceX
+				index := y*actor.Bounds.Dx() + x
 				if !actor.mask[index] {
 					continue
 				}
@@ -196,13 +193,19 @@ func HitTestWorldActors(actors []ProjectedWorldActor, point image.Point) (string
 		if !point.In(actor.Bounds) {
 			continue
 		}
-		x := (point.X - actor.Bounds.Min.X) * actor.frame.Width / actor.Bounds.Dx()
-		y := (point.Y - actor.Bounds.Min.Y) * actor.frame.Height / actor.Bounds.Dy()
-		if actor.mask[y*actor.frame.Width+x] {
+		x, y := point.X-actor.Bounds.Min.X, point.Y-actor.Bounds.Min.Y
+		if actor.mask[y*actor.Bounds.Dx()+x] {
 			return actor.Name, true
 		}
 	}
 	return "", false
+}
+
+func nativeScaleSourceIndex(destination, sourceSize, destinationSize int) int {
+	if sourceSize > destinationSize {
+		return (destination*sourceSize + destinationSize - 1) / destinationSize
+	}
+	return destination * sourceSize / destinationSize
 }
 
 func projectWorldActor(background IndexedFrame, point [3]int16, actor WorldActorSprite) (ProjectedWorldActor, bool, error) {
@@ -223,20 +226,41 @@ func projectWorldActor(background IndexedFrame, point [3]int16, actor WorldActor
 	if depth <= 0 {
 		return ProjectedWorldActor{}, false, nil
 	}
-	pixels, mask, err := decodeWorldActorFrame(actor.Frame)
-	if err != nil {
-		return ProjectedWorldActor{}, false, fmt.Errorf("decode cast actor %q frame: %w", actor.Name, err)
-	}
 	denominator := depth * 1000
 	scale := int(actor.Scale) * int(actor.Metric)
 	width, height := actor.Frame.Width*scale/denominator, actor.Frame.Height*scale/denominator
 	if width < 1 || height < 1 {
 		return ProjectedWorldActor{}, false, nil
 	}
+	sourcePixels, sourceMask, err := decodeWorldActorFrame(actor.Frame)
+	if err != nil {
+		return ProjectedWorldActor{}, false, fmt.Errorf("decode cast actor %q frame: %w", actor.Name, err)
+	}
+	pixels, mask := scaleWorldActorFrame(actor.Frame, sourcePixels, sourceMask, width, height)
 	anchorX, anchorY := background.Width/2+310*lateral/depth, background.Height/2-310*(int(actor.Position[2])-cameraZ)/depth
-	left := anchorX - actor.Frame.Origin.X*scale/denominator
-	top := anchorY - actor.Frame.Origin.Y*scale/denominator
-	return ProjectedWorldActor{Name: actor.Name, Depth: depth, Bounds: image.Rect(left, top, left+width, top+height), frame: actor.Frame, pixels: pixels, mask: mask}, true, nil
+	left := anchorX - actor.Frame.Origin.X*width/actor.Frame.Width
+	top := anchorY - actor.Frame.Origin.Y*height/actor.Frame.Height
+	return ProjectedWorldActor{Name: actor.Name, Depth: depth, Bounds: image.Rect(left, top, left+width, top+height), pixels: pixels, mask: mask}, true, nil
+}
+
+func scaleWorldActorFrame(frame PuppetFrame, sourcePixels []byte, sourceMask []bool, width, height int) ([]byte, []bool) {
+	pixels, mask := make([]byte, width*height), make([]bool, width*height)
+	for y := 0; y < height; y++ {
+		sourceY := nativeScaleSourceIndex(y, frame.Height, height)
+		for sourceX := 0; sourceX < frame.Width; sourceX++ {
+			sourceIndex := sourceY*frame.Width + sourceX
+			if !sourceMask[sourceIndex] {
+				continue
+			}
+			destinationLeft := sourceX * width / frame.Width
+			destinationRight := (sourceX + 1) * width / frame.Width
+			for x := destinationLeft; x < destinationRight; x++ {
+				destinationIndex := y*width + x
+				pixels[destinationIndex], mask[destinationIndex] = sourcePixels[sourceIndex], true
+			}
+		}
+	}
+	return pixels, mask
 }
 
 func decodeWorldActorFrame(frame PuppetFrame) ([]byte, []bool, error) {
