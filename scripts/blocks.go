@@ -102,6 +102,14 @@ func scanConditional(records []Record, start int, endIfReturnsAfter bool) (int32
 }
 
 func FindNestedTerminator(records []Record, start int, open, close uint16) (int32, uint16, error) {
+	return findNestedTerminator(records, start, open, close, 0x1f)
+}
+
+func FindWhileEnd(records []Record, start int) (int32, uint16, error) {
+	return findNestedTerminator(records, start, 4016, 4017, 0x25)
+}
+
+func findNestedTerminator(records []Record, start int, open, close, endCodeStatus uint16) (int32, uint16, error) {
 	if start < 0 || start >= len(records) {
 		return -1, 0, fmt.Errorf("structured block start index %d is out of range", start)
 	}
@@ -111,7 +119,7 @@ func FindNestedTerminator(records []Record, start int, open, close uint16) (int3
 		case 0:
 			return -1, 0x1b, nil
 		case 4004:
-			return -1, 0x1f, nil
+			return -1, endCodeStatus, nil
 		case open:
 			depth++
 		case close:
