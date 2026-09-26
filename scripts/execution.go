@@ -70,6 +70,100 @@ func equalPascalText(value []byte, text string) bool {
 	return true
 }
 
+type ScriptFrameState [39]uint16
+
+func (f *ScriptFrameState) SetBaseByteOffset(offset uint32) {
+	f[10] = uint16(offset)
+	f[11] = uint16(offset >> 16)
+}
+
+func (f ScriptFrameState) RecordsConsumed() int32 {
+	return int32(uint32(f[6]) | uint32(f[7])<<16)
+}
+
+type ScriptExecutionState struct {
+	SavedFrame ScriptFrameState
+	Saved      bool
+}
+
+func (s *ScriptExecutionState) saveFrame(frame *ScriptFrameState) {
+	if !s.Saved && int16(frame[12]) > 0 {
+		s.SavedFrame = *frame
+		s.Saved = true
+	}
+}
+
+type ParenthesizedBlockRunner func(context, callState *ScriptFrameState, start int) (uint16, error)
+
+func ExecuteParenthesizedBlock(program *Program, start int, contexts []ScriptFrameState, contextIndex int, callState *ScriptFrameState, state *ScriptExecutionState, availableBytes func() int32, run ParenthesizedBlockRunner) (uint16, int, error) {
+	if availableBytes == nil {
+		return 0, 0, fmt.Errorf("available-memory probe is unavailable")
+	}
+	if availableBytes() < 0x800 {
+		return 0x2c, 0, nil
+	}
+	if program == nil || start < 0 || start >= len(program.Records) {
+		return 0, 0, fmt.Errorf("parenthesized block start index %d is out of range", start)
+	}
+	end, scanStatus, err := ParenthesizedBlockScan(program.Records, start)
+	if err != nil {
+		return 0, 0, err
+	}
+	if scanStatus != 0 {
+		return scanStatus, 0, nil
+	}
+	consumed := end - start
+	if callState == nil || state == nil || run == nil {
+		return 0, consumed, fmt.Errorf("parenthesized block runtime is incomplete")
+	}
+	if contextIndex < 0 || contextIndex >= len(contexts) {
+		return 0, consumed, fmt.Errorf("script context index %d is out of range", contextIndex)
+	}
+	for {
+		context := &contexts[contextIndex]
+		status, err := run(context, callState, start)
+		if err != nil {
+			return 0, consumed, err
+		}
+		if status == 0 {
+			return 0, consumed, nil
+		}
+		if status == 4 {
+			if context[0] == 0 {
+				status = 0
+			}
+			boundary, err := ResolveNamedBoundary(program, start)
+			if err != nil {
+				return 0, consumed, err
+			}
+			if boundary != 0 {
+				status = 0
+			}
+		}
+		if status == 0 {
+			if context[0] != 0 {
+				return 0, consumed, nil
+			}
+			contextIndex++
+			if contextIndex >= len(contexts) {
+				return 0, consumed, fmt.Errorf("script context stack ended at frame %d", contextIndex)
+			}
+			continue
+		}
+		if status == 4 {
+			callState[12] = 4
+			delta := int32(uint32(start*8) - (uint32(callState[10]) | uint32(callState[11])<<16))
+			callState[6] = uint16(delta >> 3)
+			callState[7] = uint16(uint32(delta>>3) >> 16)
+			state.saveFrame(callState)
+			return 4, consumed, nil
+		}
+		context[12] = status
+		state.saveFrame(context)
+		return status, consumed, nil
+	}
+}
+
 func ExecuteCodeBlock(frame *ExecutionFrame, factory CodeSessionFactory) (uint16, error) {
 	if frame == nil || frame.CodeStart < 0 || frame.CodeStart >= len(frame.Records) {
 		return 4, nil

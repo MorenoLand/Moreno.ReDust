@@ -9,24 +9,35 @@ var ErrUnterminatedBlock = errors.New("script block ended before its closing par
 var ErrUnsupportedTerminatorPair = errors.New("unsupported structured block token pair")
 
 func ParenthesizedBlockEnd(records []Record, start int) (int, error) {
-	if start < 0 || start >= len(records) {
+	end, status, err := ParenthesizedBlockScan(records, start)
+	if err != nil {
+		return 0, err
+	}
+	if status != 0 {
 		return 0, ErrUnterminatedBlock
+	}
+	return end, nil
+}
+
+func ParenthesizedBlockScan(records []Record, start int) (int, uint16, error) {
+	if start < 0 || start >= len(records) {
+		return 0, 0, ErrUnterminatedBlock
 	}
 	depth := 0
 	for i := start; i < len(records); i++ {
 		switch records[i].Kind {
+		case 0, 6:
+			return 0, 2, nil
 		case 4018:
 			depth++
 		case 4019:
 			depth--
 			if depth < 1 {
-				return i + 1, nil
+				return i + 1, 0, nil
 			}
-		case 0, 6:
-			return 0, ErrUnterminatedBlock
 		}
 	}
-	return 0, ErrUnterminatedBlock
+	return 0, 0, ErrUnterminatedBlock
 }
 
 func FindCodeMarker(records []Record) (int, bool) {
