@@ -296,6 +296,15 @@ type ExpressionState struct {
 	SetProgramCounter func(int)
 }
 
+func ResetExpressionRuntime(state *ExpressionState, strings *StringRegisters) {
+	if state != nil {
+		state.Top = 0
+	}
+	if strings != nil {
+		strings.Reset()
+	}
+}
+
 func (s *ExpressionState) Evaluate(program Program, start int, parseAtom ExpressionAtomParser) (Record, uint32, uint32, error) {
 	if s == nil || s.AvailableBytes == nil || s.SetProgramCounter == nil || parseAtom == nil {
 		return Record{}, 0, 0, fmt.Errorf("expression runtime dependencies are unavailable")

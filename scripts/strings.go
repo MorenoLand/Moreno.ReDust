@@ -7,6 +7,12 @@ type StringRegisters struct {
 	active [20]bool
 }
 
+func (s *StringRegisters) Reset() {
+	if s != nil {
+		s.active = [20]bool{}
+	}
+}
+
 func (s *StringRegisters) Store(pascal []byte) (Record, uint16, error) {
 	if len(pascal) == 0 || int(pascal[0])+1 != len(pascal) {
 		return Record{}, 0, fmt.Errorf("malformed Pascal string")
