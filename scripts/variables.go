@@ -79,17 +79,47 @@ func (t *VariableTable) ReadValue(id uint16, strings *StringRegisters) (Record, 
 		return value, 0, nil
 	}
 	offset := int(int32(value.Data))
-	if offset < 0 || offset >= t.stringUsed || offset >= len(t.stringHeap) {
-		return Record{}, 0, fmt.Errorf("variable string offset %d is outside the heap", offset)
-	}
-	length := int(t.stringHeap[offset])
-	if length+1 > t.stringUsed-offset || length+1 > len(t.stringHeap)-offset {
-		return Record{}, 0, fmt.Errorf("variable string at offset %d is truncated", offset)
-	}
 	if strings == nil {
 		return Record{}, 0, fmt.Errorf("expression string registers are unavailable")
 	}
-	return strings.Store(t.stringHeap[offset : offset+length+1])
+	pascal, err := t.readHeapString(offset)
+	if err != nil {
+		return Record{}, 0, err
+	}
+	return strings.Store(pascal)
+}
+
+func (t *VariableTable) Remove(name []byte, cache *Record) (uint16, error) {
+	if len(name) == 0 || int(name[0])+1 != len(name) {
+		return 0, fmt.Errorf("malformed Pascal variable name")
+	}
+	if name[0] > 15 {
+		return 1, nil
+	}
+	id, status, err := t.Lookup(name, cache)
+	if err != nil {
+		return 0, err
+	}
+	if status != 0 {
+		return status, fmt.Errorf("variable deletion target is not present")
+	}
+	slot := t.slots[id]
+	if slot.ValueType() == 3 {
+		pascal, err := t.readHeapString(int(int32(binary.LittleEndian.Uint32(slot[2:6]))))
+		if err != nil {
+			return 0, err
+		}
+		t.stringGarbage += len(pascal)
+	}
+	last := len(t.slots) - 1
+	t.slots[id] = t.slots[last]
+	t.slots = t.slots[:last]
+	if t.stringGarbage > 0x7ff {
+		if err := t.compactStrings(); err != nil {
+			return 0, err
+		}
+	}
+	return 0, nil
 }
 
 func ResolveVariableList(program *Program, start int, table *VariableTable) (int32, uint16, error) {
@@ -104,6 +134,31 @@ func ResolveVariableList(program *Program, start int, table *VariableTable) (int
 			return -1, status, err
 		}
 		_, status, err = table.ResolveOrCreate(name, &program.Records[identifierIndex])
+		if err != nil || status != 0 {
+			return -1, status, err
+		}
+		current += 2
+		if current < 0 || current >= len(program.Records) {
+			return -1, 0, fmt.Errorf("variable-list index %d is out of range", current)
+		}
+		if program.Records[current].Kind != 4020 {
+			return int32(current - start), 0, nil
+		}
+	}
+}
+
+func RemoveVariableList(program *Program, start int, table *VariableTable) (int32, uint16, error) {
+	if program == nil || start < 0 || start >= len(program.Records) {
+		return -1, 0, fmt.Errorf("variable-list start index %d is out of range", start)
+	}
+	current := start
+	for {
+		identifierIndex := current + 1
+		name, status, err := identifierAt(*program, identifierIndex)
+		if err != nil || status != 0 {
+			return -1, status, err
+		}
+		status, err = table.Remove(name, &program.Records[identifierIndex])
 		if err != nil || status != 0 {
 			return -1, status, err
 		}
@@ -137,4 +192,41 @@ func (s VariableSlot) ValueType() uint16 { return binary.LittleEndian.Uint16(s[:
 func (s VariableSlot) pascalName() []byte {
 	length := int(s[16])
 	return s[16 : 17+length]
+}
+
+func (t *VariableTable) readHeapString(offset int) ([]byte, error) {
+	if t == nil || offset < 0 || offset >= t.stringUsed || offset >= len(t.stringHeap) {
+		return nil, fmt.Errorf("variable string offset %d is outside the heap", offset)
+	}
+	length := int(t.stringHeap[offset])
+	if length+1 > t.stringUsed-offset || length+1 > len(t.stringHeap)-offset {
+		return nil, fmt.Errorf("variable string at offset %d is truncated", offset)
+	}
+	return append([]byte(nil), t.stringHeap[offset:offset+length+1]...), nil
+}
+
+func (t *VariableTable) compactStrings() error {
+	newCapacity := 0x800
+	newHeap := make([]byte, 0, newCapacity)
+	for i := range t.slots {
+		if t.slots[i].ValueType() != 3 {
+			continue
+		}
+		oldOffset := int(int32(binary.LittleEndian.Uint32(t.slots[i][2:6])))
+		pascal, err := t.readHeapString(oldOffset)
+		if err != nil {
+			return err
+		}
+		if len(newHeap)+len(pascal) >= newCapacity {
+			newCapacity += len(pascal) + 0x800
+		}
+		newOffset := len(newHeap)
+		newHeap = append(newHeap, pascal...)
+		binary.LittleEndian.PutUint32(t.slots[i][2:6], uint32(newOffset))
+	}
+	t.stringHeap = newHeap
+	t.stringUsed = len(newHeap)
+	t.stringCapacity = newCapacity
+	t.stringGarbage = 0
+	return nil
 }
