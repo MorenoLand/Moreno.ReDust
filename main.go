@@ -592,17 +592,76 @@ func run() error {
 			}
 		}
 		if !hit && currentScene == 0 {
-			if action, found := scripts.NiteNorthObjectAction(worldPoint[2], point, gameClock); found {
-				if *debug {
-					log.Printf("world-object=%s movie=%s", action.Object, action.Movie)
+			if strings.EqualFold(string(view.Name[1:]), "Scene G15") {
+				if action, found := scripts.NiteNorthObjectAction(worldPoint[2], point, gameClock); found {
+					if *debug {
+						log.Printf("world-object=%s movie=%s", action.Object, action.Movie)
+					}
+					if err := startSceneMovie(action.Movie); err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+					return currentFrame, true, nil
 				}
-				if err := startSceneMovie(action.Movie); err != nil {
-					return render.IndexedFrame{}, false, err
-				}
-				return currentFrame, true, nil
 			}
-			if actorName, found := render.HitTestWorldActors(projectedActors, image.Pt(int(int16(point>>16)), int(int16(point)))); found && *debug {
-				log.Printf("world-actor-hit=%s", actorName)
+			if actorName, found := render.HitTestWorldActors(projectedActors, image.Pt(int(int16(point>>16)), int(int16(point)))); found {
+				if *debug {
+					log.Printf("world-actor-hit=%s", actorName)
+				}
+				if sceneName, handlesClick := scripts.CastActorMouseDownScene(actorName); handlesClick {
+					nextView, found := nightSet.FindView(sceneName)
+					if !found {
+						return render.IndexedFrame{}, false, fmt.Errorf("NITE.SET has no view %q", sceneName)
+					}
+					nextPoint := [3]int16{int16(nextView.DirectionID), int16(nextView.SceneID), worldPoint[2]}
+					frameResource, found, err := nightSet.BackgroundResourceForDirection(nextView, nextPoint[2])
+					if err != nil || !found {
+						if err != nil {
+							return render.IndexedFrame{}, false, fmt.Errorf("resolve %s background: %w", sceneName, err)
+						}
+						return render.IndexedFrame{}, false, fmt.Errorf("%s has no background for direction %d", sceneName, nextPoint[2])
+					}
+					backgroundData, err := nightSet.Resource(frameResource)
+					if err != nil {
+						return render.IndexedFrame{}, false, fmt.Errorf("read %s background resource %d: %w", sceneName, frameResource, err)
+					}
+					backgroundPixels, decodeErr := render.DecodeMoviePixels(backgroundData, nil)
+					if len(backgroundPixels.Pixels) == 0 {
+						return render.IndexedFrame{}, false, fmt.Errorf("decode %s background resource %d: %w", sceneName, frameResource, decodeErr)
+					}
+					if decodeErr != nil && *debug {
+						log.Printf("scene=%s resource=%d partial-frame: %v", sceneName, frameResource, decodeErr)
+					}
+					nextBackground, err := render.StageFrame(&assets.Stage{Width: uint16(backgroundPixels.Width), Height: uint16(backgroundPixels.Height), PaletteRaw: nightSet.Palette()}, backgroundPixels.Pixels)
+					if err != nil {
+						return render.IndexedFrame{}, false, fmt.Errorf("render %s background: %w", sceneName, err)
+					}
+					nextActors, err := loadWorldActors(nextPoint)
+					if err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+					nextWorldBackground, nextProjectedActors, err := render.CompositeWorldActors(nextBackground, nextPoint, nextActors)
+					if err != nil {
+						return render.IndexedFrame{}, false, fmt.Errorf("render %s actors: %w", sceneName, err)
+					}
+					panel, err := render.StageFrame(stage, currentPixels.Pixels)
+					if err != nil {
+						return render.IndexedFrame{}, false, fmt.Errorf("render mainpanel over %s: %w", sceneName, err)
+					}
+					nextFrame, err := render.CompositeUnderlay(nextWorldBackground, panel)
+					if err != nil {
+						return render.IndexedFrame{}, false, fmt.Errorf("compose %s scene: %w", sceneName, err)
+					}
+					view, worldPoint, backgroundFrame = nextView, nextPoint, nextBackground
+					worldActors, projectedActors = nextActors, nextProjectedActors
+					stageFrame, currentFrame = nextFrame, nextFrame
+					if *debug {
+						log.Printf("scene=%s direction=%d frame-resource=%d", view.Name[1:], worldPoint[2], frameResource)
+						for _, actor := range projectedActors {
+							log.Printf("world-actor=%s depth=%d bounds=%d,%d,%d,%d", actor.Name, actor.Depth, actor.Bounds.Min.X, actor.Bounds.Min.Y, actor.Bounds.Max.X, actor.Bounds.Max.Y)
+						}
+					}
+					return nextFrame, true, nil
+				}
 			}
 		}
 		if !hit {
