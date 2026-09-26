@@ -89,34 +89,56 @@ func DispatchPlayMovie(runtime *ConditionRuntime, frame ConditionFrame, start in
 	return int32(next - start + 1), 0, nil
 }
 
-func MouseDownFlatTarget(program Program) (int, bool, error) {
+type MouseDownAction struct {
+	FlatTarget   int
+	VisualEffect uint16
+	Duration     int
+}
+
+func MouseDownFlatAction(program Program) (MouseDownAction, bool, error) {
 	start, err := FindCode(program, "mousedown")
 	if errors.Is(err, ErrCodeNotFound) {
-		return 0, false, nil
+		return MouseDownAction{}, false, nil
 	}
 	if err != nil {
-		return 0, false, err
+		return MouseDownAction{}, false, err
 	}
 	length, err := NextCodeOffset(program.Records, start)
 	if err != nil {
-		return 0, false, err
+		return MouseDownAction{}, false, err
 	}
 	end := start + int(length)
 	if length < 0 {
 		end = len(program.Records) - 1
 	}
+	action, found := MouseDownAction{}, false
 	for i := start + 1; i < end; i++ {
-		if program.Records[i].Kind != LookupOpcode("gotoflat") {
-			continue
+		switch program.Records[i].Kind {
+		case LookupOpcode("gotoflat"):
+			if i+3 >= end || program.Records[i+1].Kind != 4018 || program.Records[i+2].Kind != 4 || program.Records[i+3].Kind != 4019 {
+				return MouseDownAction{}, false, fmt.Errorf("mousedown gotoflat statement at record %d does not match the verified call form", i)
+			}
+			target := int32(program.Records[i+2].Data)
+			if target < 1 {
+				return MouseDownAction{}, false, fmt.Errorf("mousedown gotoflat target %d is invalid", target)
+			}
+			action.FlatTarget, found = int(target-1), true
+		case LookupOpcode("visualeffect"):
+			if i+5 >= end || program.Records[i+1].Kind != 4018 || program.Records[i+3].Kind != 4020 || program.Records[i+4].Kind != 4 || program.Records[i+5].Kind != 4019 {
+				return MouseDownAction{}, false, fmt.Errorf("mousedown visualeffect statement at record %d does not match the verified call form", i)
+			}
+			effect := program.Records[i+2].Kind
+			if effect < 24001 || effect > 24014 {
+				return MouseDownAction{}, false, fmt.Errorf("mousedown visualeffect id %d is invalid", effect)
+			}
+			duration := int32(program.Records[i+4].Data)
+			if duration < 1 {
+				duration = 1
+			} else if duration > 1000 {
+				duration = 1000
+			}
+			action.VisualEffect, action.Duration = effect, int(duration)
 		}
-		if i+3 >= end || program.Records[i+1].Kind != 4018 || program.Records[i+2].Kind != 4 || program.Records[i+3].Kind != 4019 {
-			return 0, false, fmt.Errorf("mousedown gotoflat statement at record %d does not match the verified call form", i)
-		}
-		target := int32(program.Records[i+2].Data)
-		if target < 1 {
-			return 0, false, fmt.Errorf("mousedown gotoflat target %d is invalid", target)
-		}
-		return int(target - 1), true, nil
 	}
-	return 0, false, nil
+	return action, found, nil
 }

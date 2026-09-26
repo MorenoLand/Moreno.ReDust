@@ -98,9 +98,18 @@ func run() error {
 		log.Printf("movie=%s frames=%d", movieNames[movieIndex], movie.FrameCount())
 	}
 	currentScene, currentPixels := 0, pixels
+	currentFrame := stageFrame
+	var transition *render.BarndoorEffect
 	runErr := engine.Run(playback.CurrentFrame(), func() (render.IndexedFrame, bool, error) {
 		if playback == nil {
-			return render.IndexedFrame{}, false, nil
+			if transition == nil {
+				return render.IndexedFrame{}, false, nil
+			}
+			transitionFrame, changed, done := transition.Update()
+			if done {
+				currentFrame, transition = transition.TargetFrame(), nil
+			}
+			return transitionFrame, changed, nil
 		}
 		movieFrame, changed, done, err := playback.Update()
 		if err != nil {
@@ -138,12 +147,13 @@ func run() error {
 			return playback.CurrentFrame(), true, nil
 		}
 		playback = nil
+		currentFrame = stageFrame
 		if *debug {
 			log.Printf("startup movies complete; scene=%s", stage.Scenes[currentScene].Name[1:])
 		}
 		return stageFrame, true, nil
 	}, func(point uint32) (render.IndexedFrame, bool, error) {
-		if playback != nil {
+		if playback != nil || transition != nil {
 			return render.IndexedFrame{}, false, nil
 		}
 		handler, hit, err := stage.HitTestSceneHandler(currentScene, point)
@@ -175,13 +185,14 @@ func run() error {
 		if err != nil {
 			return render.IndexedFrame{}, false, fmt.Errorf("parse button script resource %d: %w", handler.ScriptResource, err)
 		}
-		target, found, err := scripts.MouseDownFlatTarget(program)
+		action, found, err := scripts.MouseDownFlatAction(program)
 		if err != nil {
 			return render.IndexedFrame{}, false, fmt.Errorf("run button script resource %d: %w", handler.ScriptResource, err)
 		}
 		if !found {
 			return render.IndexedFrame{}, false, nil
 		}
+		target := action.FlatTarget
 		if target < 0 || target >= len(stage.Scenes) {
 			return render.IndexedFrame{}, false, fmt.Errorf("button script resource %d selects stage scene %d", handler.ScriptResource, target)
 		}
@@ -209,6 +220,27 @@ func run() error {
 			return render.IndexedFrame{}, false, fmt.Errorf("render stage scene %d: %w", target, err)
 		}
 		currentScene, currentPixels = target, nextPixels
+		if action.VisualEffect != 0 {
+			effectName := ""
+			switch action.VisualEffect {
+			case scripts.LookupOpcode("barndooropen"):
+				effectName = "barndooropen"
+				transition, err = render.NewBarndoorOpen(currentFrame, nextFrame, action.Duration)
+			case scripts.LookupOpcode("barndoorclose"):
+				effectName = "barndoorclose"
+				transition, err = render.NewBarndoorClose(currentFrame, nextFrame, action.Duration)
+			default:
+				return render.IndexedFrame{}, false, fmt.Errorf("button script resource %d uses unsupported visual effect %d", handler.ScriptResource, action.VisualEffect)
+			}
+			if err != nil {
+				return render.IndexedFrame{}, false, fmt.Errorf("start %s transition: %w", effectName, err)
+			}
+			if *debug {
+				log.Printf("visualeffect=%s duration=%d", effectName, action.Duration)
+			}
+			return transition.CurrentFrame(), true, nil
+		}
+		currentFrame = nextFrame
 		if *debug {
 			log.Printf("scene transition=%s resource=%d", stage.Scenes[target].Name[1:], stage.Scenes[target].Fields[1])
 		}
