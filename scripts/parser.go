@@ -16,6 +16,25 @@ type Program struct {
 	StringPool []byte
 }
 
+func (p Program) IdentifierPascal(index int) ([]byte, error) {
+	if index < 0 || index >= len(p.Records) {
+		return nil, fmt.Errorf("identifier record index %d is out of range", index)
+	}
+	if p.Records[index].Kind != 5 {
+		return nil, fmt.Errorf("record %d is not an identifier", index)
+	}
+	poolOffset := int64(index)*8 + int64(int32(p.Records[index].Data)) - int64(len(p.Records))*8
+	if poolOffset < 0 || poolOffset >= int64(len(p.StringPool)) {
+		return nil, fmt.Errorf("identifier record %d points outside the string pool", index)
+	}
+	start := int(poolOffset)
+	length := int(p.StringPool[start])
+	if length+1 > len(p.StringPool)-start {
+		return nil, fmt.Errorf("identifier record %d has a truncated Pascal string", index)
+	}
+	return append([]byte(nil), p.StringPool[start:start+length+1]...), nil
+}
+
 type ParseError struct {
 	Offset int
 	Code   uint16
@@ -139,10 +158,11 @@ func CompileText(source []byte) (Program, error) {
 			position++
 		}
 	}
+	appendRecord(Record{}, false)
 	recordBytes := uint32(len(program.Records) * 8)
 	for i, isPoolReference := range poolRefs {
 		if isPoolReference {
-			program.Records[i].Data += recordBytes
+			program.Records[i].Data += recordBytes - uint32(i*8)
 		}
 	}
 	program.StringPool = pool.data

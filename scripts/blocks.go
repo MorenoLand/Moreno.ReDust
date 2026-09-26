@@ -36,3 +36,26 @@ func FindCodeMarker(records []Record) (int, bool) {
 	}
 	return 0, false
 }
+
+var ErrInvalidCodeMarker = errors.New("record is not a code marker")
+
+func NextCodeOffset(records []Record, start int) (int32, error) {
+	if start < 0 || start >= len(records) || records[start].Kind != 4001 {
+		return 0, ErrInvalidCodeMarker
+	}
+	if records[start].Data != 0 {
+		return int32(records[start].Data), nil
+	}
+	for i := start + 1; i < len(records); i++ {
+		if records[i].Kind == 0 {
+			records[start].Data = ^uint32(0)
+			return -1, nil
+		}
+		if records[i].Kind == 4001 {
+			records[start].Data = uint32(i - start)
+			return int32(i - start), nil
+		}
+	}
+	records[start].Data = ^uint32(0)
+	return -1, nil
+}
