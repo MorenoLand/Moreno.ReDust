@@ -75,14 +75,18 @@ func (p *ExpressionValueParser) Parse(program Program, start int) (Record, uint3
 		value.Data ^= 1
 		return value, consumed + 1, 0, nil
 	case 0xfba, 0xfbb:
-		if p.Services.ReadContextPascal == nil || p.Strings == nil {
+		if p.Strings == nil {
 			return Record{}, 0, 0, fmt.Errorf("context string services are unavailable")
 		}
 		offset := 30
 		if kind == 0xfbb {
 			offset = 62
 		}
-		pascal, err := p.Services.ReadContextPascal(p.Context, offset)
+		reader := p.Services.ReadContextPascal
+		if reader == nil {
+			reader = ReadScriptFrameContextPascal
+		}
+		pascal, err := reader(p.Context, offset)
 		if err != nil {
 			return Record{}, 0, 0, err
 		}

@@ -96,6 +96,47 @@ func (f ScriptFrameState) RecordsConsumed() int32 {
 	return int32(uint32(f[6]) | uint32(f[7])<<16)
 }
 
+func ReadScriptFrameContextPascal(context any, offset int) ([]byte, error) {
+	var frame ScriptFrameState
+	switch value := context.(type) {
+	case ScriptFrameState:
+		frame = value
+	case *ScriptFrameState:
+		if value == nil {
+			return nil, fmt.Errorf("script context is nil")
+		}
+		frame = *value
+	default:
+		return nil, fmt.Errorf("script context has type %T", context)
+	}
+	fieldSize := 0
+	switch offset {
+	case 30:
+		fieldSize = 32
+	case 62:
+		fieldSize = 16
+	default:
+		return nil, fmt.Errorf("script context string offset %d is unsupported", offset)
+	}
+	length := int(scriptFrameByte(frame, offset))
+	if length+1 > fieldSize {
+		return nil, fmt.Errorf("script context string at offset %d exceeds its %d-byte field", offset, fieldSize)
+	}
+	pascal := make([]byte, length+1)
+	for index := range pascal {
+		pascal[index] = scriptFrameByte(frame, offset+index)
+	}
+	return pascal, nil
+}
+
+func scriptFrameByte(frame ScriptFrameState, offset int) byte {
+	word := frame[offset/2]
+	if offset%2 == 0 {
+		return byte(word)
+	}
+	return byte(word >> 8)
+}
+
 type ScriptExecutionState struct {
 	SavedFrame ScriptFrameState
 	Saved      bool
