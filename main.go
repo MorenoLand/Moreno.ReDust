@@ -7,7 +7,10 @@ import (
 	"log"
 	"os"
 
+	ebitenaudio "github.com/hajimehoshi/ebiten/v2/audio"
+
 	"redust/assets"
+	"redust/audio"
 	"redust/engine"
 	"redust/render"
 	"redust/scripts"
@@ -38,6 +41,15 @@ func run() error {
 			return fmt.Errorf("read BootFile header: %w", err)
 		}
 		log.Printf("BootFile APPL header: entries=%d pages=%d size=%d", header.CountB, header.CountA>>7, header.FileSize)
+	}
+	soundBank, err := audio.OpenSoundBank(workspace, "DATA/UNILIB.SND")
+	if err != nil {
+		return fmt.Errorf("open startup sound bank: %w", err)
+	}
+	defer func() { _ = soundBank.Close() }()
+	audioContext := ebitenaudio.NewContext(44100)
+	if *debug {
+		log.Printf("sound-bank=DATA/UNILIB.SND samples=%d", len(soundBank.Names()))
 	}
 	stage, err := workspace.OpenStage("DATA/NEW.FLT")
 	if err != nil {
@@ -166,6 +178,15 @@ func run() error {
 				handlerName = string(handler.Name[1:])
 			}
 			log.Printf("mouse scene=%s point=%d,%d hit=%t handler=%s", stage.Scenes[currentScene].Name[1:], int16(point>>16), int16(point), hit, handlerName)
+			if !hit {
+				regions, err := stage.SceneHandlers(currentScene)
+				if err != nil {
+					return render.IndexedFrame{}, false, fmt.Errorf("read scene %d handler table: %w", currentScene, err)
+				}
+				for _, region := range regions {
+					log.Printf("handler scene=%s name=%s rect=%d,%d,%d,%d script=%d", stage.Scenes[currentScene].Name[1:], region.Name[1:], region.Left, region.Top, region.Right, region.Bottom, region.ScriptResource)
+				}
+			}
 		}
 		if !hit {
 			return render.IndexedFrame{}, false, nil
@@ -190,6 +211,13 @@ func run() error {
 			return render.IndexedFrame{}, false, fmt.Errorf("run button script resource %d: %w", handler.ScriptResource, err)
 		}
 		if !found {
+			if *debug {
+				recordKinds := make([]uint16, len(program.Records))
+				for i, record := range program.Records {
+					recordKinds[i] = record.Kind
+				}
+				log.Printf("button script resource=%d record-kinds=%v", handler.ScriptResource, recordKinds)
+			}
 			return render.IndexedFrame{}, false, nil
 		}
 		target := action.FlatTarget
@@ -235,8 +263,12 @@ func run() error {
 			if err != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("start %s transition: %w", effectName, err)
 			}
+			if err := soundBank.Play(audioContext, "pageturn"); err != nil {
+				return render.IndexedFrame{}, false, fmt.Errorf("play page-turn sound: %w", err)
+			}
 			if *debug {
 				log.Printf("visualeffect=%s duration=%d", effectName, action.Duration)
+				log.Printf("sound=pageturn")
 			}
 			return transition.CurrentFrame(), true, nil
 		}
@@ -246,9 +278,13 @@ func run() error {
 		}
 		return nextFrame, true, nil
 	})
+	soundCloseErr := soundBank.Close()
 	closeErr := stage.Close()
 	if runErr != nil {
 		return runErr
+	}
+	if soundCloseErr != nil {
+		return fmt.Errorf("close startup sound bank: %w", soundCloseErr)
 	}
 	if closeErr != nil {
 		return fmt.Errorf("close initial stage: %w", closeErr)

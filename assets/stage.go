@@ -118,43 +118,56 @@ func (s *Stage) AcquireResource(index uint32) (*ResourceLease, error) {
 	return s.cache.Acquire(index)
 }
 
-func (s *Stage) HitTestSceneHandler(index int, point uint32) (SceneHandler, bool, error) {
+func (s *Stage) SceneHandlers(index int) ([]SceneHandler, error) {
 	if s == nil || s.cache == nil {
-		return SceneHandler{}, false, fmt.Errorf("stage archive is unavailable")
+		return nil, fmt.Errorf("stage archive is unavailable")
 	}
 	if index < 0 || index >= len(s.Scenes) {
-		return SceneHandler{}, false, fmt.Errorf("stage scene index %d is out of range", index)
+		return nil, fmt.Errorf("stage scene index %d is out of range", index)
 	}
 	lease, err := s.cache.Acquire(s.Scenes[index].Fields[2])
 	if err != nil {
-		return SceneHandler{}, false, err
+		return nil, err
 	}
 	data, readErr := lease.Bytes()
 	closeErr := lease.Close()
 	if readErr != nil {
-		return SceneHandler{}, false, readErr
+		return nil, readErr
 	}
 	if closeErr != nil {
-		return SceneHandler{}, false, closeErr
+		return nil, closeErr
 	}
 	if len(data) < 4 {
-		return SceneHandler{}, false, fmt.Errorf("scene %d handler table is shorter than its count", index)
+		return nil, fmt.Errorf("scene %d handler table is shorter than its count", index)
 	}
 	count := int(binary.LittleEndian.Uint32(data[:4]))
 	if count > (len(data)-4)/32 {
-		return SceneHandler{}, false, fmt.Errorf("scene %d handler count %d exceeds its table", index, count)
+		return nil, fmt.Errorf("scene %d handler count %d exceeds its table", index, count)
 	}
-	x, y := int16(point>>16), int16(point)
-	for i := count - 1; i >= 0; i-- {
+	handlers := make([]SceneHandler, count)
+	for i := range handlers {
 		row := data[4+i*32 : 4+(i+1)*32]
-		if x < int16(binary.LittleEndian.Uint16(row[6:8])) || x >= int16(binary.LittleEndian.Uint16(row[10:12])) || y < int16(binary.LittleEndian.Uint16(row[4:6])) || y >= int16(binary.LittleEndian.Uint16(row[8:10])) {
-			continue
-		}
 		length := int(row[16])
 		if length+1 > 16 {
-			return SceneHandler{}, false, fmt.Errorf("scene %d handler row %d has a truncated name", index, i)
+			return nil, fmt.Errorf("scene %d handler row %d has a truncated name", index, i)
 		}
-		return SceneHandler{ID: binary.LittleEndian.Uint32(row[:4]), Top: int16(binary.LittleEndian.Uint16(row[4:6])), Left: int16(binary.LittleEndian.Uint16(row[6:8])), Bottom: int16(binary.LittleEndian.Uint16(row[8:10])), Right: int16(binary.LittleEndian.Uint16(row[10:12])), ScriptResource: binary.LittleEndian.Uint32(row[12:16]), Name: append([]byte(nil), row[16:17+length]...)}, true, nil
+		handlers[i] = SceneHandler{ID: binary.LittleEndian.Uint32(row[:4]), Top: int16(binary.LittleEndian.Uint16(row[4:6])), Left: int16(binary.LittleEndian.Uint16(row[6:8])), Bottom: int16(binary.LittleEndian.Uint16(row[8:10])), Right: int16(binary.LittleEndian.Uint16(row[10:12])), ScriptResource: binary.LittleEndian.Uint32(row[12:16]), Name: append([]byte(nil), row[16:17+length]...)}
+	}
+	return handlers, nil
+}
+
+func (s *Stage) HitTestSceneHandler(index int, point uint32) (SceneHandler, bool, error) {
+	handlers, err := s.SceneHandlers(index)
+	if err != nil {
+		return SceneHandler{}, false, err
+	}
+	x, y := int16(point>>16), int16(point)
+	for i := len(handlers) - 1; i >= 0; i-- {
+		handler := handlers[i]
+		if x < handler.Left || x >= handler.Right || y < handler.Top || y >= handler.Bottom {
+			continue
+		}
+		return handler, true, nil
 	}
 	return SceneHandler{}, false, nil
 }
