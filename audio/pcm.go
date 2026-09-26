@@ -16,14 +16,14 @@ type PCMFormat struct {
 }
 
 type NativeSoundMetadata struct {
-	SampleRate               uint32
-	Channels                 int16
-	AverageBytesPerSecond    int32
-	BytesPerChannelPerSecond int32
-	RateMultiplier           uint8
-	RateCode                 uint8
-	Flags                    [2]uint32
-	Name                     []byte
+	SampleRate        uint32
+	Channels          int16
+	Field24           int32
+	Field24PerChannel int32
+	RateMultiplier    uint8
+	RateCode          uint8
+	Flags             [2]uint32
+	Name              []byte
 }
 
 func ParseNativeSoundMetadata(resource, name []byte) (NativeSoundMetadata, error) {
@@ -49,8 +49,8 @@ func ParseNativeSoundMetadata(resource, name []byte) (NativeSoundMetadata, error
 	if len(name) == 0 || int(name[0])+1 > len(name) {
 		return NativeSoundMetadata{}, fmt.Errorf("native sound name is not a complete Pascal string")
 	}
-	average := int32(binary.LittleEndian.Uint32(resource[0x24:0x28]))
-	return NativeSoundMetadata{SampleRate: sampleRate, Channels: channels, AverageBytesPerSecond: average, BytesPerChannelPerSecond: average / int32(channels), RateMultiplier: multiplier, RateCode: rateCode, Flags: [2]uint32{1, 1}, Name: append([]byte(nil), name[:int(name[0])+1]...)}, nil
+	field24 := int32(binary.LittleEndian.Uint32(resource[0x24:0x28]))
+	return NativeSoundMetadata{SampleRate: sampleRate, Channels: channels, Field24: field24, Field24PerChannel: field24 / int32(channels), RateMultiplier: multiplier, RateCode: rateCode, Flags: [2]uint32{1, 1}, Name: append([]byte(nil), name[:int(name[0])+1]...)}, nil
 }
 
 func PCMFormatFromNative(rateMultiplier, bytesPerSample, channels int) (PCMFormat, error) {
