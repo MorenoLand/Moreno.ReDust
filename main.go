@@ -8,6 +8,8 @@ import (
 	"os"
 
 	"redust/assets"
+	"redust/engine"
+	"redust/render"
 )
 
 func run() error {
@@ -36,7 +38,40 @@ func run() error {
 		}
 		log.Printf("BootFile APPL header: entries=%d pages=%d size=%d", header.CountB, header.CountA>>7, header.FileSize)
 	}
-	return errors.New("BootFile loaded, but its verified script-to-scene startup path is still being translated")
+	stage, err := workspace.OpenStage("DATA/NEW.FLT")
+	if err != nil {
+		return fmt.Errorf("open initial stage: %w", err)
+	}
+	lease, err := stage.AcquireSceneFrameResource(0)
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("load initial stage scene 0: %w", err)
+	}
+	data, err := lease.Bytes()
+	if closeErr := lease.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("read initial stage frame resource: %w", err)
+	}
+	pixels, err := render.DecodeMoviePixels(data, nil)
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("decode initial stage scene 0: %w", err)
+	}
+	frame, err := render.StageFrame(stage, pixels.Pixels)
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("render initial stage scene 0: %w", err)
+	}
+	if *debug {
+		log.Printf("scene=%s/%s size=%dx%d resource=%d", stage.Name[1:], stage.Scenes[0].Name[1:], frame.Width, frame.Height, stage.Scenes[0].Fields[1])
+	}
+	if err := stage.Close(); err != nil {
+		return fmt.Errorf("close initial stage: %w", err)
+	}
+	return engine.Run(frame)
 }
 
 func main() {
