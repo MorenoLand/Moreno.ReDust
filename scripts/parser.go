@@ -1,6 +1,7 @@
 package scripts
 
 import (
+	"encoding/binary"
 	"fmt"
 	"strconv"
 )
@@ -68,6 +69,39 @@ func (p Program) Bytes() []byte {
 	}
 	copy(data[len(p.Records)*8:], p.StringPool)
 	return data
+}
+
+func ParseProgram(data []byte) (Program, error) {
+	if len(data) < 8 {
+		return Program{}, fmt.Errorf("script data is shorter than one record")
+	}
+	records := make([]Record, 0, len(data)/8)
+	poolOffset := -1
+	for offset := 0; offset+8 <= len(data); offset += 8 {
+		record := Record{Kind: binary.LittleEndian.Uint16(data[offset : offset+2]), Data: binary.LittleEndian.Uint32(data[offset+2 : offset+6]), Tail: binary.LittleEndian.Uint16(data[offset+6 : offset+8])}
+		records = append(records, record)
+		if record.Kind == 0 {
+			poolOffset = offset + 8
+			break
+		}
+	}
+	if poolOffset < 0 {
+		return Program{}, fmt.Errorf("script record stream has no terminator")
+	}
+	program := Program{Records: records, StringPool: append([]byte(nil), data[poolOffset:]...)}
+	for index, record := range records {
+		var err error
+		switch record.Kind {
+		case 3:
+			_, err = program.LiteralPascal(index)
+		case 5:
+			_, err = program.IdentifierPascal(index)
+		}
+		if err != nil {
+			return Program{}, fmt.Errorf("script record %d: %w", index, err)
+		}
+	}
+	return program, nil
 }
 
 type stringPool struct {
