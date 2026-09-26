@@ -59,10 +59,6 @@ func (r *ConditionRuntime) EvaluateValue(context any, program Program, recordInd
 	if r == nil || r.Expressions == nil {
 		return ExpressionValue{}, 0, 0, fmt.Errorf("expression state is unavailable")
 	}
-	frame, ok := context.(*ExecutionFrame)
-	if !ok || frame == nil {
-		return ExpressionValue{}, 0, 0, fmt.Errorf("execution frame is unavailable")
-	}
 	var local *VariableTable
 	if scope != nil {
 		var ok bool
@@ -75,17 +71,14 @@ func (r *ConditionRuntime) EvaluateValue(context any, program Program, recordInd
 	if strings == nil {
 		strings = r.Expressions.Strings
 	}
-	previousPC := r.Expressions.SetProgramCounter
 	previousStrings := r.Expressions.Strings
-	r.Expressions.SetProgramCounter = func(position int) { frame.ProgramCounter = position - frame.CodeStart }
 	if strings != nil {
 		r.Expressions.Strings = strings
 	}
 	defer func() {
-		r.Expressions.SetProgramCounter = previousPC
 		r.Expressions.Strings = previousStrings
 	}()
-	parser := ExpressionValueParser{Context: frame, Local: local, Global: r.Global, State: r.Expressions, Strings: strings, Services: r.Services}
+	parser := ExpressionValueParser{Context: context, Local: local, Global: r.Global, State: r.Expressions, Strings: strings, Services: r.Services}
 	value, consumed, status, err := r.Expressions.Evaluate(program, recordIndex, parser.Parse)
 	if err != nil {
 		return ExpressionValue{}, consumed, status, err
