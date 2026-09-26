@@ -93,7 +93,7 @@ func scanConditional(records []Record, start int, endIfReturnsAfter bool) (int32
 			}
 			depth--
 		case 4008:
-			if depth == 0 {
+			if depth == 0 && !endIfReturnsAfter {
 				return int32(i - start + 1), 0, nil
 			}
 		}
