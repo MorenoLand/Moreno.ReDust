@@ -109,7 +109,12 @@ func run() error {
 		stage.Close()
 		return fmt.Errorf("startup game set has no Scene G15 view")
 	}
-	backgroundResource, found, err := nightSet.BackgroundResourceForDirection(view, assets.SetDirectionNorth)
+	worldPoint, err := nightSet.StartPoint()
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("read startup game position: %w", err)
+	}
+	backgroundResource, found, err := nightSet.BackgroundResourceForDirection(view, worldPoint[2])
 	if err != nil || !found {
 		stage.Close()
 		if err != nil {
@@ -241,8 +246,58 @@ func run() error {
 	}
 	currentScene, currentPixels := 0, pixels
 	currentFrame := stageFrame
+	var pendingMovement assets.SceneMove
 	var transition *render.BarndoorEffect
 	runErr := engine.Run(playback.CurrentFrame(), func() (render.IndexedFrame, bool, error) {
+		if playback == nil && transition == nil && currentScene == 0 && pendingMovement != 0 {
+			movement := pendingMovement
+			pendingMovement = 0
+			nextPoint, transitionResource, found, err := nightSet.MovePoint(worldPoint, movement)
+			if err != nil {
+				return render.IndexedFrame{}, false, fmt.Errorf("move in NITE.SET: %w", err)
+			}
+			if !found {
+				if *debug {
+					log.Printf("level-move blocked movement=%d point=%v", movement, worldPoint)
+				}
+				return render.IndexedFrame{}, false, nil
+			}
+			_, frameResource, hasView, err := nightSet.MovePoint(nextPoint, assets.SceneMoveStraight)
+			if err != nil {
+				return render.IndexedFrame{}, false, fmt.Errorf("resolve NITE.SET view after movement: %w", err)
+			}
+			if !hasView {
+				frameResource = transitionResource
+			}
+			backgroundData, err := nightSet.Resource(frameResource)
+			if err != nil {
+				return render.IndexedFrame{}, false, fmt.Errorf("load NITE.SET background %d: %w", frameResource, err)
+			}
+			backgroundPixels, decodeErr := render.DecodeMoviePixels(backgroundData, nil)
+			if len(backgroundPixels.Pixels) == 0 {
+				return render.IndexedFrame{}, false, fmt.Errorf("decode NITE.SET background %d: %w", frameResource, decodeErr)
+			}
+			if decodeErr != nil && *debug {
+				log.Printf("level-resource=%d partial-frame: %v", frameResource, decodeErr)
+			}
+			nextBackground, err := render.StageFrame(&assets.Stage{Width: uint16(backgroundPixels.Width), Height: uint16(backgroundPixels.Height), PaletteRaw: nightSet.Palette()}, backgroundPixels.Pixels)
+			if err != nil {
+				return render.IndexedFrame{}, false, fmt.Errorf("render NITE.SET background %d: %w", frameResource, err)
+			}
+			overlay, err := render.StageFrame(stage, currentPixels.Pixels)
+			if err != nil {
+				return render.IndexedFrame{}, false, fmt.Errorf("render stage scene %d: %w", currentScene, err)
+			}
+			nextFrame, err := render.CompositeUnderlay(nextBackground, overlay)
+			if err != nil {
+				return render.IndexedFrame{}, false, fmt.Errorf("compose moved game background: %w", err)
+			}
+			worldPoint, backgroundFrame, stageFrame, currentFrame = nextPoint, nextBackground, nextFrame, nextFrame
+			if *debug {
+				log.Printf("level-move=%d point=%v transition-resource=%d frame-resource=%d", movement, worldPoint, transitionResource, frameResource)
+			}
+			return nextFrame, true, nil
+		}
 		if playback == nil {
 			if transition == nil {
 				return render.IndexedFrame{}, false, nil
@@ -332,6 +387,16 @@ func run() error {
 		return stageFrame, true, nil
 	}, func(key ebiten.Key) {
 		if playback == nil {
+			if currentScene == 0 && transition == nil {
+				switch key {
+				case ebiten.KeyArrowUp:
+					pendingMovement = assets.SceneMoveStraight
+				case ebiten.KeyArrowLeft:
+					pendingMovement = assets.SceneMoveLeft
+				case ebiten.KeyArrowRight:
+					pendingMovement = assets.SceneMoveRight
+				}
+			}
 			return
 		}
 		playback.Skip()
