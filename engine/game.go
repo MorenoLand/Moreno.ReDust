@@ -16,6 +16,7 @@ type Game struct {
 	screenWidth  int
 	screenHeight int
 	onUpdate     func() (render.IndexedFrame, bool, error)
+	keyDown      func(ebiten.Key)
 	mouseDown    func(uint32) (render.IndexedFrame, bool, error)
 }
 
@@ -28,6 +29,14 @@ func NewGame(frame render.IndexedFrame) (*Game, error) {
 }
 
 func (g *Game) Update() error {
+	if g.keyDown != nil {
+		for _, key := range []ebiten.Key{ebiten.KeyEscape, ebiten.KeyQ, ebiten.KeyPeriod} {
+			if inpututil.IsKeyJustPressed(key) {
+				g.keyDown(key)
+				break
+			}
+		}
+	}
 	if g.onUpdate != nil {
 		frame, changed, err := g.onUpdate()
 		if err != nil {
@@ -80,12 +89,12 @@ func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
 	return outsideWidth, outsideHeight
 }
 
-func Run(frame render.IndexedFrame, onUpdate func() (render.IndexedFrame, bool, error), mouseDown func(uint32) (render.IndexedFrame, bool, error)) error {
+func Run(frame render.IndexedFrame, onUpdate func() (render.IndexedFrame, bool, error), keyDown func(ebiten.Key), mouseDown func(uint32) (render.IndexedFrame, bool, error)) error {
 	game, err := NewGame(frame)
 	if err != nil {
 		return err
 	}
-	game.onUpdate, game.mouseDown = onUpdate, mouseDown
+	game.onUpdate, game.keyDown, game.mouseDown = onUpdate, keyDown, mouseDown
 	ebiten.SetWindowTitle("ReDust")
 	ebiten.SetWindowSize(game.width, game.height)
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)

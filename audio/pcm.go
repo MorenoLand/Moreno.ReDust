@@ -111,17 +111,71 @@ func NewPlayer(context *ebitenaudio.Context, input []byte, format PCMFormat) (*e
 	if context == nil {
 		return nil, fmt.Errorf("audio context is nil")
 	}
+	pcm, err := stereoPCMAtRate(input, format, context.SampleRate())
+	if err != nil {
+		return nil, err
+	}
+	return context.NewPlayerFromBytes(pcm), nil
+}
+
+func NewNativePlaylist(context *ebitenaudio.Context, tracks []NativeSound, events []int, loopIndex int) (*ebitenaudio.Player, error) {
+	if context == nil {
+		return nil, fmt.Errorf("audio context is nil")
+	}
+	if len(events) == 0 {
+		return nil, nil
+	}
+	if loopIndex < 0 || loopIndex >= len(events) {
+		return nil, fmt.Errorf("native audio loop index %d is outside %d events", loopIndex, len(events))
+	}
+	prepared := make([][]byte, len(tracks))
+	for index, track := range tracks {
+		var err error
+		prepared[index], err = stereoPCMAtRate(track.Samples, track.Format, context.SampleRate())
+		if err != nil {
+			return nil, fmt.Errorf("prepare native audio track %d: %w", index, err)
+		}
+	}
+	var prefix, loop bytes.Buffer
+	for index, event := range events {
+		if event < 0 || event >= len(prepared) {
+			return nil, fmt.Errorf("native audio event %d references track %d outside %d tracks", index, event, len(prepared))
+		}
+		segment := &loop
+		if index < loopIndex {
+			segment = &prefix
+		}
+		if _, err := segment.Write(prepared[event]); err != nil {
+			return nil, err
+		}
+	}
+	if loop.Len() == 0 {
+		return nil, fmt.Errorf("native audio loop is empty")
+	}
+	stream := io.MultiReader(bytes.NewReader(prefix.Bytes()), ebitenaudio.NewInfiniteLoop(bytes.NewReader(loop.Bytes()), int64(loop.Len())))
+	player, err := context.NewPlayer(stream)
+	if err != nil {
+		return nil, err
+	}
+	player.Play()
+	return player, nil
+}
+
+func stereoPCMAtRate(input []byte, format PCMFormat, targetRate int) ([]byte, error) {
+	if targetRate <= 0 {
+		return nil, fmt.Errorf("invalid target sample rate %d", targetRate)
+	}
 	pcm, err := ToStereoPCM16(input, format)
 	if err != nil {
 		return nil, err
 	}
-	if format.SampleRate != context.SampleRate() {
-		pcm, err = resampleStereoPCM16(pcm, format.SampleRate, context.SampleRate())
+	if format.SampleRate != targetRate {
+		pcm, err = resampleStereoPCM16(pcm, format.SampleRate, targetRate)
 		if err != nil {
 			return nil, err
 		}
 	}
-	return context.NewPlayerFromBytes(pcm), nil
+	return pcm, nil
 }
 
 func resampleStereoPCM16(input []byte, from, to int) ([]byte, error) {

@@ -133,9 +133,12 @@ func (b *SoundBank) Load(name string) (NativeSound, error) {
 	return NativeSound{Metadata: metadata, Samples: samples, Format: PCMFormat{SampleRate: int(metadata.SampleRate), Channels: 1, BitsPerSample: 8}}, nil
 }
 
-func (b *SoundBank) Play(context *ebitenaudio.Context, name string) error {
+func (b *SoundBank) Play(context *ebitenaudio.Context, name string, gain float64) error {
 	if context == nil {
 		return fmt.Errorf("audio context is nil")
+	}
+	if gain <= 0 {
+		return fmt.Errorf("sound gain %g is invalid", gain)
 	}
 	if b == nil || b.resources == nil {
 		return fmt.Errorf("sound bank is closed")
@@ -153,13 +156,54 @@ func (b *SoundBank) Play(context *ebitenaudio.Context, name string) error {
 	if err != nil {
 		return err
 	}
+	for i, sample := range sound.Samples {
+		value := int(float64(int(sample)-128) * gain)
+		if value > 127 {
+			value = 127
+		} else if value < -128 {
+			value = -128
+		}
+		sound.Samples[i] = byte(value + 128)
+	}
 	player, err := NewPlayer(context, sound.Samples, sound.Format)
 	if err != nil {
 		return err
 	}
+	player.SetVolume(1)
 	player.Play()
 	b.players = append(b.players, player)
 	return nil
+}
+
+func (b *SoundBank) ActivePlayers() int {
+	if b == nil {
+		return 0
+	}
+	active := 0
+	for _, player := range b.players {
+		if player.IsPlaying() {
+			active++
+		}
+	}
+	return active
+}
+
+func DecodeNativeSoundResource(resource []byte) (NativeSound, error) {
+	metadata, err := ParseNativeSoundMetadata(resource, []byte{0})
+	if err != nil {
+		return NativeSound{}, err
+	}
+	if metadata.Channels != 1 {
+		return NativeSound{}, fmt.Errorf("native sound resource has unsupported channel count %d", metadata.Channels)
+	}
+	if metadata.Field24PerChannel <= 0 {
+		return NativeSound{}, fmt.Errorf("native sound resource has invalid sample count %d", metadata.Field24PerChannel)
+	}
+	samples, err := DecodeNativeSound(resource, int(metadata.Field24PerChannel))
+	if err != nil {
+		return NativeSound{}, err
+	}
+	return NativeSound{Metadata: metadata, Samples: samples, Format: PCMFormat{SampleRate: int(metadata.SampleRate), Channels: 1, BitsPerSample: 8}}, nil
 }
 
 func DecodeNativeSound(resource []byte, sampleCount int) ([]byte, error) {

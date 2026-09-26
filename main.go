@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 
+	"github.com/hajimehoshi/ebiten/v2"
 	ebitenaudio "github.com/hajimehoshi/ebiten/v2/audio"
 
 	"redust/assets"
@@ -106,8 +107,50 @@ func run() error {
 		stage.Close()
 		return fmt.Errorf("start startup movie %s: %w", movieNames[movieIndex], err)
 	}
+	startMovieAudio := func(movie *render.Movie) (*ebitenaudio.Player, int, int, error) {
+		resources, loopIndex := movie.SoundtrackResources()
+		if len(resources) == 0 {
+			return nil, 0, loopIndex, nil
+		}
+		tracks, events, indices := make([]audio.NativeSound, 0), make([]int, 0, len(resources)), make(map[uint32]int)
+		for _, resource := range resources {
+			track, ok := indices[resource]
+			if !ok {
+				data, err := movie.Resource(resource)
+				if err != nil {
+					return nil, 0, 0, fmt.Errorf("read movie soundtrack resource %d: %w", resource, err)
+				}
+				sound, err := audio.DecodeNativeSoundResource(data)
+				if err != nil {
+					return nil, 0, 0, fmt.Errorf("decode movie soundtrack resource %d: %w", resource, err)
+				}
+				track = len(tracks)
+				indices[resource] = track
+				tracks = append(tracks, sound)
+			}
+			events = append(events, track)
+		}
+		player, err := audio.NewNativePlaylist(audioContext, tracks, events, loopIndex)
+		if err != nil {
+			return nil, 0, 0, fmt.Errorf("start movie soundtrack: %w", err)
+		}
+		return player, len(events), loopIndex, nil
+	}
+	movieAudio, movieAudioEvents, movieAudioLoop, err := startMovieAudio(movie)
+	if err != nil {
+		stage.Close()
+		return err
+	}
+	defer func() {
+		if movieAudio != nil {
+			_ = movieAudio.Close()
+		}
+	}()
 	if *debug {
 		log.Printf("movie=%s frames=%d", movieNames[movieIndex], movie.FrameCount())
+		if movieAudio != nil {
+			log.Printf("movie-audio=%s events=%d loop=%d playing=%t", movieNames[movieIndex], movieAudioEvents, movieAudioLoop, movieAudio.IsPlaying())
+		}
 	}
 	currentScene, currentPixels := 0, pixels
 	currentFrame := stageFrame
@@ -139,6 +182,12 @@ func run() error {
 		if *debug && movieWarningCount[movieIndex] > 0 {
 			log.Printf("movie=%s decode-warnings=%d first=%s", movieNames[movieIndex], movieWarningCount[movieIndex], movieWarningSample[movieIndex])
 		}
+		if movieAudio != nil {
+			if err := movieAudio.Close(); err != nil {
+				return render.IndexedFrame{}, false, fmt.Errorf("stop startup soundtrack %s: %w", movieNames[movieIndex], err)
+			}
+			movieAudio = nil
+		}
 		if err := movie.Close(); err != nil {
 			return render.IndexedFrame{}, false, fmt.Errorf("close startup movie %s: %w", movieNames[movieIndex], err)
 		}
@@ -153,8 +202,15 @@ func run() error {
 			if err != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("start startup movie %s: %w", movieNames[movieIndex], err)
 			}
+			movieAudio, movieAudioEvents, movieAudioLoop, err = startMovieAudio(movie)
+			if err != nil {
+				return render.IndexedFrame{}, false, err
+			}
 			if *debug {
 				log.Printf("movie=%s frames=%d", movieNames[movieIndex], movie.FrameCount())
+				if movieAudio != nil {
+					log.Printf("movie-audio=%s events=%d loop=%d playing=%t", movieNames[movieIndex], movieAudioEvents, movieAudioLoop, movieAudio.IsPlaying())
+				}
 			}
 			return playback.CurrentFrame(), true, nil
 		}
@@ -163,7 +219,28 @@ func run() error {
 		if *debug {
 			log.Printf("startup movies complete; scene=%s", stage.Scenes[currentScene].Name[1:])
 		}
+		if err := soundBank.Play(audioContext, "pageturn", 4); err != nil {
+			return render.IndexedFrame{}, false, fmt.Errorf("play intro transition sound: %w", err)
+		}
+		if *debug {
+			log.Printf("sound=pageturn active-players=%d", soundBank.ActivePlayers())
+		}
 		return stageFrame, true, nil
+	}, func(key ebiten.Key) {
+		if playback == nil {
+			return
+		}
+		playback.Skip()
+		if *debug {
+			keyName := "q"
+			switch key {
+			case ebiten.KeyEscape:
+				keyName = "escape"
+			case ebiten.KeyPeriod:
+				keyName = "period"
+			}
+			log.Printf("movie=%s skip-key=%s", movieNames[movieIndex], keyName)
+		}
 	}, func(point uint32) (render.IndexedFrame, bool, error) {
 		if playback != nil || transition != nil {
 			return render.IndexedFrame{}, false, nil
@@ -263,12 +340,12 @@ func run() error {
 			if err != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("start %s transition: %w", effectName, err)
 			}
-			if err := soundBank.Play(audioContext, "pageturn"); err != nil {
+			if err := soundBank.Play(audioContext, "pageturn", 4); err != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("play page-turn sound: %w", err)
 			}
 			if *debug {
 				log.Printf("visualeffect=%s duration=%d", effectName, action.Duration)
-				log.Printf("sound=pageturn")
+				log.Printf("sound=pageturn active-players=%d", soundBank.ActivePlayers())
 			}
 			return transition.CurrentFrame(), true, nil
 		}
