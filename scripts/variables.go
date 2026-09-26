@@ -185,6 +185,20 @@ func ResolveVariableList(program *Program, start int, table *VariableTable) (int
 	}
 }
 
+func ResolveVariableDeclaration(program *Program, start int, global, local *VariableTable) (int32, uint16, error) {
+	if program == nil || start < 0 || start >= len(program.Records) {
+		return -1, 0, fmt.Errorf("variable declaration index %d is out of range", start)
+	}
+	switch program.Records[start].Kind {
+	case 4002:
+		return ResolveVariableList(program, start, global)
+	case 4003:
+		return ResolveVariableList(program, start, local)
+	default:
+		return -1, 0, fmt.Errorf("record %d is not a variable declaration", start)
+	}
+}
+
 func RemoveVariableList(program *Program, start int, table *VariableTable) (int32, uint16, error) {
 	if program == nil || start < 0 || start >= len(program.Records) {
 		return -1, 0, fmt.Errorf("variable-list start index %d is out of range", start)
