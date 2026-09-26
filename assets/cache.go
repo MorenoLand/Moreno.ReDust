@@ -227,6 +227,27 @@ func (l *ResourceLease) Bytes() ([]byte, error) {
 	return append([]byte(nil), c.slots[l.slot].data...), nil
 }
 
+func (l *ResourceLease) Size() (uint32, error) {
+	if l == nil || l.cache == nil {
+		return 0, ErrResourceLeaseClosed
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.released {
+		return 0, ErrResourceLeaseClosed
+	}
+	c := l.cache
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return 0, ErrResourceCacheClosed
+	}
+	if l.slot < 0 || l.slot >= len(c.slots) {
+		return 0, ErrResourceNotCached
+	}
+	return uint32(len(c.slots[l.slot].data)), nil
+}
+
 func (l *ResourceLease) Close() error {
 	if l == nil || l.cache == nil {
 		return ErrResourceLeaseClosed
