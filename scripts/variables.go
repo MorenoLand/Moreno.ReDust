@@ -89,6 +89,44 @@ func (t *VariableTable) ReadValue(id uint16, strings *StringRegisters) (Record, 
 	return strings.Store(pascal)
 }
 
+func (t *VariableTable) WriteValue(id uint16, value ExpressionValue, strings *StringRegisters) (uint16, error) {
+	if t == nil || int(int16(id)) < 0 || int(id) >= len(t.slots) {
+		return 9, nil
+	}
+	slot := t.slots[id]
+	if slot.ValueType() == 3 {
+		pascal, err := t.readHeapString(int(int32(binary.LittleEndian.Uint32(slot[2:6]))))
+		if err != nil {
+			return 0, err
+		}
+		t.stringGarbage += len(pascal)
+	}
+	kind := binary.LittleEndian.Uint16(value[:2])
+	data := binary.LittleEndian.Uint32(value[2:6])
+	if kind == 3 {
+		if strings == nil {
+			return 0, fmt.Errorf("expression string registers are unavailable")
+		}
+		pascal, status, err := strings.Load(Record{Kind: 3, Data: data})
+		if err != nil || status != 0 {
+			return status, err
+		}
+		data, err = t.appendString(pascal)
+		if err != nil {
+			return 0, err
+		}
+	}
+	binary.LittleEndian.PutUint16(slot[:2], kind)
+	binary.LittleEndian.PutUint32(slot[2:6], data)
+	t.slots[id] = slot
+	if t.stringGarbage > 0x7ff {
+		if err := t.compactStrings(); err != nil {
+			return 0, err
+		}
+	}
+	return 0, nil
+}
+
 func (t *VariableTable) Remove(name []byte, cache *Record) (uint16, error) {
 	if len(name) == 0 || int(name[0])+1 != len(name) {
 		return 0, fmt.Errorf("malformed Pascal variable name")
@@ -203,6 +241,22 @@ func (t *VariableTable) readHeapString(offset int) ([]byte, error) {
 		return nil, fmt.Errorf("variable string at offset %d is truncated", offset)
 	}
 	return append([]byte(nil), t.stringHeap[offset:offset+length+1]...), nil
+}
+
+func (t *VariableTable) appendString(pascal []byte) (uint32, error) {
+	if len(pascal) == 0 || int(pascal[0])+1 != len(pascal) {
+		return 0, fmt.Errorf("malformed Pascal string")
+	}
+	if t.stringCapacity <= t.stringUsed+len(pascal) {
+		t.stringCapacity += len(pascal) + 0x800
+	}
+	if len(t.stringHeap) != t.stringUsed {
+		return 0, fmt.Errorf("variable string heap length %d differs from used size %d", len(t.stringHeap), t.stringUsed)
+	}
+	offset := uint32(t.stringUsed)
+	t.stringHeap = append(t.stringHeap, pascal...)
+	t.stringUsed += len(pascal)
+	return offset, nil
 }
 
 func (t *VariableTable) compactStrings() error {

@@ -12,8 +12,8 @@ type ExecutionFrame struct {
 }
 
 type CodeSession interface {
-	EvaluateExpression(start int) (branchOffset int32, status uint16)
-	DispatchStatement(start int) uint16
+	EvaluateExpression(start int) (branchOffset int32, status uint16, err error)
+	DispatchStatement(start int) (uint16, error)
 	Close()
 }
 
@@ -43,7 +43,10 @@ func ExecuteCodeBlock(frame *ExecutionFrame, factory CodeSessionFactory) (uint16
 	defer session.Close()
 	for {
 		frame.ProgramCounter = marker - frame.CodeStart
-		branchOffset, status := session.EvaluateExpression(marker)
+		branchOffset, status, err := session.EvaluateExpression(marker)
+		if err != nil {
+			return 0, err
+		}
 		if status != 0 {
 			return status, nil
 		}
@@ -52,7 +55,7 @@ func ExecuteCodeBlock(frame *ExecutionFrame, factory CodeSessionFactory) (uint16
 			if statement < 0 || statement >= len(frame.Records) {
 				return 0, fmt.Errorf("statement offset %d exceeds record stream", statement)
 			}
-			return session.DispatchStatement(statement), nil
+			return session.DispatchStatement(statement)
 		}
 		nextOffset, err := NextCodeOffset(frame.Records, marker)
 		if err != nil {

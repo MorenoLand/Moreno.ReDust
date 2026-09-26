@@ -2,7 +2,7 @@ package scripts
 
 import "fmt"
 
-type ExpressionValue [32]byte
+type ExpressionValue [8]byte
 
 type ConditionFrame struct {
 	Program       Program
@@ -15,9 +15,9 @@ type ConditionFrame struct {
 }
 
 type ConditionOperations interface {
-	ResolveVariable(scope any, identifier []byte, recordIndex int) (uint16, uint32)
-	EvaluateValue(context any, program Program, recordIndex int, scope any) (ExpressionValue, uint32, uint32)
-	AssignVariable(scope any, index uint16, value ExpressionValue) uint32
+	ResolveVariable(scope any, identifier []byte, recordIndex int, cache *Record) (uint16, uint32, error)
+	EvaluateValue(context any, program Program, recordIndex int, scope any) (ExpressionValue, uint32, uint32, error)
+	AssignVariable(scope any, index uint16, value ExpressionValue) (uint32, error)
 }
 
 func EvaluateCondition(frame ConditionFrame, operations ConditionOperations) (int32, uint16, error) {
@@ -63,15 +63,20 @@ func EvaluateCondition(frame ConditionFrame, operations ConditionOperations) (in
 		if variableRecord < 0 || variableRecord >= len(frame.Program.Records) {
 			return -1, 0, fmt.Errorf("variable record index %d is out of range", variableRecord)
 		}
-		index, operationStatus := operations.ResolveVariable(frame.VariableScope, name, variableRecord)
+		index, operationStatus, err := operations.ResolveVariable(frame.VariableScope, name, variableRecord, &frame.Program.Records[variableRecord])
+		if err != nil {
+			return -1, 0, err
+		}
 		if uint16(operationStatus) != 0 {
 			return -1, uint16(operationStatus), nil
 		}
 		if valueIndex < 0 || valueIndex >= len(frame.Arguments.Records) {
 			return -1, 0, fmt.Errorf("expression record index %d is out of range", valueIndex)
 		}
-		frame.Program.Records[variableRecord].Tail = index
-		value, consumed, operationStatus := operations.EvaluateValue(frame.Context, frame.Arguments, valueIndex, frame.ValueScope)
+		value, consumed, operationStatus, err := operations.EvaluateValue(frame.Context, frame.Arguments, valueIndex, frame.ValueScope)
+		if err != nil {
+			return -1, 0, err
+		}
 		if uint16(operationStatus) != 0 {
 			return -1, uint16(operationStatus), nil
 		}
@@ -79,7 +84,10 @@ func EvaluateCondition(frame ConditionFrame, operations ConditionOperations) (in
 			return -1, 0, fmt.Errorf("expression record offset %d exceeds the record stream", consumed)
 		}
 		valueIndex += int(consumed)
-		operationStatus = operations.AssignVariable(frame.VariableScope, index, value)
+		operationStatus, err = operations.AssignVariable(frame.VariableScope, index, value)
+		if err != nil {
+			return -1, 0, err
+		}
 		if uint16(operationStatus) != 0 {
 			return -1, uint16(operationStatus), nil
 		}
