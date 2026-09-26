@@ -144,6 +144,19 @@ func run() error {
 		log.Printf("level=set=NITE.SET view=%s ids=%d,%d direction=north frame-resource=%d size=%dx%d", view.Name[1:], view.SceneID, view.DirectionID, backgroundResource, backgroundFrame.Width, backgroundFrame.Height)
 	}
 	if *silent {
+		if *debug {
+			themeBank, err = audio.OpenSoundBank(workspace, "DATA/NIGHT.SND")
+			if err != nil {
+				stage.Close()
+				return fmt.Errorf("open headless theme bank: %w", err)
+			}
+			theme, err := themeBank.LoadTheme("town.snd")
+			if err != nil {
+				stage.Close()
+				return fmt.Errorf("decode headless town theme: %w", err)
+			}
+			log.Printf("theme-file=DATA/NIGHT.SND theme=%s events=%d voices=%d", theme.Name, len(theme.Events), len(theme.Tracks))
+		}
 		screenshotPath := filepath.Join(workspace.WorkDir, "redust-silent.png")
 		if err := render.WritePNG(screenshotPath, stageFrame); err != nil {
 			stage.Close()
