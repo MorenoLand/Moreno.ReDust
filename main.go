@@ -68,10 +68,28 @@ func run() error {
 	if *debug {
 		log.Printf("scene=%s/%s size=%dx%d resource=%d", stage.Name[1:], stage.Scenes[0].Name[1:], frame.Width, frame.Height, stage.Scenes[0].Fields[1])
 	}
-	if err := stage.Close(); err != nil {
-		return fmt.Errorf("close initial stage: %w", err)
+	runErr := engine.Run(frame, func(point uint32) error {
+		name, hit, err := stage.HitTestSceneHandler(0, point)
+		if err != nil {
+			return fmt.Errorf("hit test initial scene: %w", err)
+		}
+		if *debug {
+			handler := ""
+			if hit {
+				handler = string(name[1:])
+			}
+			log.Printf("mouse scene=%s point=%d,%d hit=%t handler=%s", stage.Scenes[0].Name[1:], int16(point>>16), int16(point), hit, handler)
+		}
+		return nil
+	})
+	closeErr := stage.Close()
+	if runErr != nil {
+		return runErr
 	}
-	return engine.Run(frame)
+	if closeErr != nil {
+		return fmt.Errorf("close initial stage: %w", closeErr)
+	}
+	return nil
 }
 
 func main() {

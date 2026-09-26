@@ -1,11 +1,15 @@
 package render
 
 import (
+	"encoding/binary"
 	"fmt"
 	"image"
 	"image/color"
+	"math"
 
 	"github.com/hajimehoshi/ebiten/v2"
+
+	"redust/assets"
 )
 
 type IndexedFrame struct {
@@ -26,6 +30,14 @@ type PaletteState struct {
 	entries [256]paletteEntry
 }
 
+var nativePaletteCurve = func() [256]uint8 {
+	var curve [256]uint8
+	for i := range curve {
+		curve[i] = uint8(math.Pow(float64(i)/255, 0.75) * 255)
+	}
+	return curve
+}()
+
 func (p *PaletteState) SetEntry(index int, red, green, blue uint8) error {
 	if p == nil {
 		return fmt.Errorf("palette state is nil")
@@ -42,6 +54,28 @@ func (p *PaletteState) SetEntry(index int, red, green, blue uint8) error {
 		entry.flags = 5
 	}
 	return nil
+}
+
+func (p *PaletteState) SetFixedEntry(index int, red, green, blue uint16) error {
+	if index == 0 {
+		red, green, blue = 0, 0, 0
+	} else if index == 255 {
+		red, green, blue = 0xffff, 0xffff, 0xffff
+	}
+	if err := p.SetEntry(index, nativePaletteChannel(red), nativePaletteChannel(green), nativePaletteChannel(blue)); err != nil {
+		return err
+	}
+	p.entries[index].fixed = [3]uint16{red, green, blue}
+	return nil
+}
+
+func nativePaletteChannel(value uint16) uint8 {
+	index, fraction := int(value>>8), int(value&0xff)
+	base := int(nativePaletteCurve[index])
+	if index == 255 {
+		return uint8(base)
+	}
+	return uint8(base + (int(nativePaletteCurve[index+1])-base)*fraction>>8)
 }
 
 func (p PaletteState) Colors() color.Palette {
@@ -73,4 +107,25 @@ func (f IndexedFrame) EbitenImage() (*ebiten.Image, error) {
 		return nil, err
 	}
 	return ebiten.NewImageFromImage(frame), nil
+}
+
+func StageFrame(stage *assets.Stage, pixels []byte) (IndexedFrame, error) {
+	if stage == nil {
+		return IndexedFrame{}, fmt.Errorf("stage is unavailable")
+	}
+	width, height := int(stage.Width), int(stage.Height)
+	if width <= 0 || height <= 0 || len(pixels) != width*height {
+		return IndexedFrame{}, fmt.Errorf("stage frame data does not match %dx%d", width, height)
+	}
+	if len(stage.PaletteRaw) != 0x800 {
+		return IndexedFrame{}, fmt.Errorf("stage palette has %d bytes, want 2048", len(stage.PaletteRaw))
+	}
+	var palette PaletteState
+	for index := range palette.entries {
+		offset := index * 8
+		if err := palette.SetFixedEntry(index, binary.LittleEndian.Uint16(stage.PaletteRaw[offset+2:offset+4]), binary.LittleEndian.Uint16(stage.PaletteRaw[offset+4:offset+6]), binary.LittleEndian.Uint16(stage.PaletteRaw[offset+6:offset+8])); err != nil {
+			return IndexedFrame{}, err
+		}
+	}
+	return IndexedFrame{Width: width, Height: height, Pixels: append([]byte(nil), pixels...), Palette: palette.Colors()}, nil
 }
