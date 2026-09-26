@@ -1,0 +1,10 @@
+.codex/
+Ghidra/
+*.gzf
+*.log
+/assets/*
+!/assets/README.md
+/bin/
+/build/
+!/assets/*.go
+*_test.go
