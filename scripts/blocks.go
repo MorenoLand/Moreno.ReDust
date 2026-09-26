@@ -52,6 +52,27 @@ func FindCodeMarker(records []Record) (int, bool) {
 	return 0, false
 }
 
+var ErrCodeNotFound = errors.New("script code name was not found")
+
+func FindCode(program Program, name string) (int, error) {
+	for index, record := range program.Records {
+		if record.Kind != 4001 {
+			continue
+		}
+		if index+1 >= len(program.Records) {
+			return -1, fmt.Errorf("code marker %d has no name record", index)
+		}
+		identifier, err := program.IdentifierPascal(index + 1)
+		if err != nil {
+			return -1, fmt.Errorf("code marker %d: %w", index, err)
+		}
+		if string(identifier[1:]) == name {
+			return index, nil
+		}
+	}
+	return -1, ErrCodeNotFound
+}
+
 var ErrInvalidCodeMarker = errors.New("record is not a code marker")
 
 func NextCodeOffset(records []Record, start int) (int32, error) {
