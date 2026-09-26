@@ -11,6 +11,7 @@ var ErrResourceNotCached = errors.New("APPL resource is not cached")
 var ErrResourceInUse = errors.New("APPL resources are still referenced")
 var ErrResourceReferenceUnderflow = errors.New("APPL resource reference count became negative")
 var ErrResourceLeaseClosed = errors.New("APPL resource lease is closed")
+var ErrResourceWritebackUnsupported = errors.New("modified APPL resources cannot be written back")
 
 var resourceClock struct {
 	mu    sync.Mutex
@@ -115,6 +116,39 @@ func (c *ResourceCache) Release(index uint32) error {
 		return ErrResourceNotCached
 	}
 	return c.releaseSlot(slot)
+}
+
+func (c *ResourceCache) Evict(index uint32) error {
+	if c == nil {
+		return ErrResourceCacheClosed
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return ErrResourceCacheClosed
+	}
+	slot := c.findSlot(index)
+	if slot < 0 {
+		return ErrResourceNotCached
+	}
+	if c.slots[slot].references != 0 {
+		return ErrResourceInUse
+	}
+	if c.slots[slot].flags != 0 {
+		return ErrResourceWritebackUnsupported
+	}
+	last := len(c.slots) - 1
+	c.slots[slot] = c.slots[last]
+	c.slots[last] = cachedResource{}
+	c.slots = c.slots[:last]
+	c.hasLast = false
+	if len(c.slots) < c.capacity-20 {
+		c.capacity -= 20
+		slots := make([]cachedResource, len(c.slots), c.capacity)
+		copy(slots, c.slots)
+		c.slots = slots
+	}
+	return nil
 }
 
 func (c *ResourceCache) releaseSlot(slot int) error {
