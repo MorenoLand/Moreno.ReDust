@@ -1,6 +1,9 @@
 package scripts
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 var ErrUnterminatedBlock = errors.New("script block ended before its closing parenthesis")
 
@@ -58,4 +61,73 @@ func NextCodeOffset(records []Record, start int) (int32, error) {
 	}
 	records[start].Data = ^uint32(0)
 	return -1, nil
+}
+
+func FindConditionalBranch(records []Record, start int) (int32, uint16, error) {
+	return scanConditional(records, start, false)
+}
+
+func FindConditionalEnd(records []Record, start int) (int32, uint16, error) {
+	return scanConditional(records, start, true)
+}
+
+func scanConditional(records []Record, start int, endIfReturnsAfter bool) (int32, uint16, error) {
+	if start < 0 || start >= len(records) {
+		return -1, 0, fmt.Errorf("conditional start index %d is out of range", start)
+	}
+	var depth int16
+	for i := start; i < len(records); i++ {
+		switch records[i].Kind {
+		case 0:
+			return -1, 0x1b, nil
+		case 4004:
+			return -1, 0x1d, nil
+		case 4006:
+			depth++
+		case 4007:
+			if depth == 0 {
+				if endIfReturnsAfter {
+					return int32(i - start + 1), 0, nil
+				}
+				return -1, 0, nil
+			}
+			depth--
+		case 4008:
+			if depth == 0 {
+				return int32(i - start + 1), 0, nil
+			}
+		}
+	}
+	return -1, 0, fmt.Errorf("conditional block ended before its sentinel")
+}
+
+func FindNestedTerminator(records []Record, start int, open, close uint16) (int32, uint16, error) {
+	if start < 0 || start >= len(records) {
+		return -1, 0, fmt.Errorf("structured block start index %d is out of range", start)
+	}
+	var depth int16
+	for i := start; i < len(records); i++ {
+		switch records[i].Kind {
+		case 0:
+			return -1, 0x1b, nil
+		case 4004:
+			return -1, 0x1f, nil
+		case open:
+			depth++
+		case close:
+			if depth == 0 {
+				return int32(i - start + 1), 0, nil
+			}
+			depth--
+		}
+	}
+	return -1, 0, fmt.Errorf("structured block ended before its sentinel")
+}
+
+func SkipFalseConditionalBlock(records []Record, start int) (int32, uint16, error) {
+	offset, status, err := FindConditionalBranch(records, start)
+	if err != nil || status != 0 || offset >= 0 {
+		return offset, status, err
+	}
+	return FindConditionalEnd(records, start)
 }
