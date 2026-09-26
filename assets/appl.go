@@ -119,6 +119,18 @@ func (c *Container) ReadEntry(index uint32) ([]byte, error) {
 	return data, nil
 }
 
+func zeroNativeBuffer(data []byte) {
+	for i := range data {
+		data[i] = 0
+	}
+}
+
+func alignNativeRecordSize(size int32) int32 {
+	adjusted := size + 0x47
+	adjusted += (adjusted >> 31) & 0x3f
+	return (adjusted >> 6) << 6
+}
+
 func (c *Container) entryOffset(index uint32) (uint32, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
