@@ -8,3 +8,4 @@ Ghidra/
 /build/
 !/assets/*.go
 *_test.go
+SESSION*/

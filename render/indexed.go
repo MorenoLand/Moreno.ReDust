@@ -113,19 +113,51 @@ func StageFrame(stage *assets.Stage, pixels []byte) (IndexedFrame, error) {
 	if stage == nil {
 		return IndexedFrame{}, fmt.Errorf("stage is unavailable")
 	}
-	width, height := int(stage.Width), int(stage.Height)
+	return indexedFrame(int(stage.Width), int(stage.Height), pixels, stage.PaletteRaw)
+}
+
+func indexedFrame(width, height int, pixels, paletteRaw []byte) (IndexedFrame, error) {
 	if width <= 0 || height <= 0 || len(pixels) != width*height {
-		return IndexedFrame{}, fmt.Errorf("stage frame data does not match %dx%d", width, height)
+		return IndexedFrame{}, fmt.Errorf("indexed frame data does not match %dx%d", width, height)
 	}
-	if len(stage.PaletteRaw) != 0x800 {
-		return IndexedFrame{}, fmt.Errorf("stage palette has %d bytes, want 2048", len(stage.PaletteRaw))
+	palette, err := paletteStateFromRaw(paletteRaw)
+	if err != nil {
+		return IndexedFrame{}, err
+	}
+	return IndexedFrame{Width: width, Height: height, Pixels: append([]byte(nil), pixels...), Palette: palette.Colors()}, nil
+}
+
+func paletteStateFromRaw(paletteRaw []byte) (PaletteState, error) {
+	if len(paletteRaw) != 0x800 {
+		return PaletteState{}, fmt.Errorf("indexed palette has %d bytes, want 2048", len(paletteRaw))
 	}
 	var palette PaletteState
 	for index := range palette.entries {
 		offset := index * 8
-		if err := palette.SetFixedEntry(index, binary.LittleEndian.Uint16(stage.PaletteRaw[offset+2:offset+4]), binary.LittleEndian.Uint16(stage.PaletteRaw[offset+4:offset+6]), binary.LittleEndian.Uint16(stage.PaletteRaw[offset+6:offset+8])); err != nil {
-			return IndexedFrame{}, err
+		if err := palette.SetFixedEntry(index, binary.LittleEndian.Uint16(paletteRaw[offset+2:offset+4]), binary.LittleEndian.Uint16(paletteRaw[offset+4:offset+6]), binary.LittleEndian.Uint16(paletteRaw[offset+6:offset+8])); err != nil {
+			return PaletteState{}, err
 		}
 	}
-	return IndexedFrame{Width: width, Height: height, Pixels: append([]byte(nil), pixels...), Palette: palette.Colors()}, nil
+	return palette, nil
+}
+
+func interpolatePalette(from, to PaletteState, step, duration int) PaletteState {
+	if duration < 1 {
+		duration = 1
+	}
+	if step < 0 {
+		step = 0
+	} else if step > duration {
+		step = duration
+	}
+	var palette PaletteState
+	for index := range palette.entries {
+		var components [3]uint16
+		for channel := range components {
+			start, end := int64(from.entries[index].fixed[channel]), int64(to.entries[index].fixed[channel])
+			components[channel] = uint16(start + (end-start)*int64(step)/int64(duration))
+		}
+		_ = palette.SetFixedEntry(index, components[0], components[1], components[2])
+	}
+	return palette
 }

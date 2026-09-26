@@ -20,6 +20,21 @@ type CodeSession interface {
 type CodeSessionFactory func() (CodeSession, error)
 
 var ErrNoCodeSession = errors.New("code session factory returned no session")
+var ErrNoVariableDeclarationDispatcher = errors.New("variable declaration dispatcher is unavailable")
+var ErrEscapeInterruptInputUnavailable = errors.New("escape interrupt input is unavailable")
+var ErrNoStatementResultDispatcher = errors.New("statement result dispatcher is unavailable")
+
+type VariableDeclarationSession interface {
+	DispatchVariableDeclaration(start int) (recordsConsumed int32, status uint16, err error)
+}
+
+type StatementInterruptSession interface {
+	StatementInterrupt() (status uint16, err error)
+}
+
+type StatementResultSession interface {
+	DispatchStatementResult(start int) (recordsConsumed int32, status uint16, err error)
+}
 
 var namedControlBoundaries = [...]string{
 	"opencast", "openactor", "closecast", "closeactor", "openflat", "openstage", "closeflat", "closestage",
@@ -198,7 +213,75 @@ func ExecuteCodeBlock(frame *ExecutionFrame, factory CodeSessionFactory) (uint16
 			if statement < 0 || statement >= len(frame.Records) {
 				return 0, fmt.Errorf("statement offset %d exceeds record stream", statement)
 			}
-			return session.DispatchStatement(statement)
+			if frame.Records[statement].Kind == 4002 || frame.Records[statement].Kind == 4003 {
+				declarations, ok := session.(VariableDeclarationSession)
+				if !ok {
+					return 0, ErrNoVariableDeclarationDispatcher
+				}
+				consumed, status, err := declarations.DispatchVariableDeclaration(statement)
+				if err != nil || status != 0 {
+					return status, err
+				}
+				next := statement + int(consumed)
+				if next < 0 || next >= len(frame.Records) || frame.Records[next].Kind != 6 {
+					return 0x1b, nil
+				}
+				for next < len(frame.Records) && frame.Records[next].Kind == 6 {
+					next++
+				}
+				frame.ProgramCounter = next - frame.CodeStart
+				interrupts, ok := session.(StatementInterruptSession)
+				if !ok {
+					return 0, ErrEscapeInterruptInputUnavailable
+				}
+				status, err = interrupts.StatementInterrupt()
+				if err != nil || status != 0 {
+					return status, err
+				}
+				if next >= len(frame.Records) {
+					return 4, nil
+				}
+				marker = next
+				continue
+			}
+			if results, ok := session.(StatementResultSession); ok {
+				consumed, status, err := results.DispatchStatementResult(statement)
+				if err != nil || status != 0 {
+					return status, err
+				}
+				next := statement + int(consumed)
+				if next < 0 || next >= len(frame.Records) || frame.Records[next].Kind != 6 {
+					return 0x1b, nil
+				}
+				for next < len(frame.Records) && frame.Records[next].Kind == 6 {
+					next++
+				}
+				frame.ProgramCounter = next - frame.CodeStart
+				interrupts, ok := session.(StatementInterruptSession)
+				if !ok {
+					return 0, ErrEscapeInterruptInputUnavailable
+				}
+				status, err = interrupts.StatementInterrupt()
+				if err != nil || status != 0 {
+					return status, err
+				}
+				if next >= len(frame.Records) {
+					return 4, nil
+				}
+				marker = next
+				continue
+			}
+			status, err = session.DispatchStatement(statement)
+			if err != nil || status != 0 {
+				return status, err
+			}
+			if interrupts, ok := session.(StatementInterruptSession); ok {
+				status, err = interrupts.StatementInterrupt()
+				if err != nil || status != 0 {
+					return status, err
+				}
+			}
+			return status, nil
 		}
 		nextOffset, err := NextCodeOffset(frame.Records, marker)
 		if err != nil {

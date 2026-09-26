@@ -33,6 +33,33 @@ func (s *ConditionCodeSession) DispatchStatement(start int) (uint16, error) {
 	return s.Dispatch(start)
 }
 
+func (s *ConditionCodeSession) DispatchVariableDeclaration(start int) (int32, uint16, error) {
+	if s == nil || s.Runtime == nil {
+		return -1, 0, ErrNoVariableDeclarationDispatcher
+	}
+	if start < 0 || start >= len(s.Frame.Program.Records) {
+		return -1, 0, fmt.Errorf("variable declaration index %d is out of range", start)
+	}
+	local, ok := s.Frame.VariableScope.(*VariableTable)
+	if s.Frame.VariableScope != nil && !ok {
+		return -1, 0, fmt.Errorf("variable declaration scope has type %T", s.Frame.VariableScope)
+	}
+	if s.Frame.Program.Records[start].Kind == 4002 && s.Runtime.Global == nil {
+		return -1, 0, fmt.Errorf("global variable table is unavailable")
+	}
+	if s.Frame.Program.Records[start].Kind == 4003 && local == nil {
+		return -1, 0, fmt.Errorf("local variable table is unavailable")
+	}
+	return ResolveVariableDeclaration(&s.Frame.Program, start, s.Runtime.Global, local)
+}
+
+func (s *ConditionCodeSession) StatementInterrupt() (uint16, error) {
+	if s == nil || s.Runtime == nil {
+		return 0, ErrEscapeInterruptInputUnavailable
+	}
+	return s.Runtime.StatementInterrupt()
+}
+
 func (s *ConditionCodeSession) Close() {
 	if s != nil && s.CloseFrame != nil {
 		s.CloseFrame()
@@ -40,10 +67,51 @@ func (s *ConditionCodeSession) Close() {
 }
 
 type ConditionRuntime struct {
-	Expressions *ExpressionState
-	Strings     *StringRegisters
-	Global      *VariableTable
-	Services    ExpressionAtomServices
+	Expressions            *ExpressionState
+	Strings                *StringRegisters
+	Global                 *VariableTable
+	EscapeInterruptEnabled uint16
+	EscapeKeyPressed       func() bool
+	Services               ExpressionAtomServices
+}
+
+func (r *ConditionRuntime) SetEscapeInterruptResult(value ExpressionValue) (uint16, error) {
+	if r == nil {
+		return 0, fmt.Errorf("condition runtime is unavailable")
+	}
+	if binary.LittleEndian.Uint16(value[:2]) != 2 {
+		return 0x0e, nil
+	}
+	r.EscapeInterruptEnabled = uint16(binary.LittleEndian.Uint32(value[2:6]))
+	return 0, nil
+}
+
+func (r *ConditionRuntime) EscapeInterruptValue() ExpressionValue {
+	var value ExpressionValue
+	if r != nil {
+		binary.LittleEndian.PutUint16(value[:2], 2)
+		binary.LittleEndian.PutUint32(value[2:6], uint32(r.EscapeInterruptEnabled))
+	}
+	return value
+}
+
+func (r *ConditionRuntime) ResetEscapeInterrupt() {
+	if r != nil {
+		r.EscapeInterruptEnabled = 0
+	}
+}
+
+func (r *ConditionRuntime) StatementInterrupt() (uint16, error) {
+	if r == nil || r.EscapeInterruptEnabled == 0 {
+		return 0, nil
+	}
+	if r.EscapeKeyPressed == nil {
+		return 0, ErrEscapeInterruptInputUnavailable
+	}
+	if r.EscapeKeyPressed() {
+		return 0x35, nil
+	}
+	return 0, nil
 }
 
 func (r *ConditionRuntime) ResolveVariable(scope any, name []byte, recordIndex int, cache *Record) (uint16, uint32, error) {

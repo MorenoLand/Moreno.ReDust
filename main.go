@@ -69,8 +69,83 @@ func run() error {
 	if *debug {
 		log.Printf("scene=%s/%s size=%dx%d resource=%d", stage.Name[1:], stage.Scenes[0].Name[1:], frame.Width, frame.Height, stage.Scenes[0].Fields[1])
 	}
+	stageFrame := frame
+	movieNames := []string{"MOVIES/INTRO.MOV", "MOVIES/INTRO2.MOV"}
+	movieIndex := 0
+	movieWarningCount := make([]int, len(movieNames))
+	movieWarningSample := make([]string, len(movieNames))
+	movie, err := render.OpenMovie(workspace, movieNames[movieIndex])
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("open startup movie %s: %w", movieNames[movieIndex], err)
+	}
+	defer func() {
+		if movie != nil {
+			_ = movie.Close()
+		}
+	}()
+	blackFrame, err := render.BlackFrame(frame.Width, frame.Height)
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("create startup movie frame: %w", err)
+	}
+	playback, err := render.NewMoviePlayback(movie, blackFrame)
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("start startup movie %s: %w", movieNames[movieIndex], err)
+	}
+	if *debug {
+		log.Printf("movie=%s frames=%d", movieNames[movieIndex], movie.FrameCount())
+	}
 	currentScene, currentPixels := 0, pixels
-	runErr := engine.Run(frame, func(point uint32) (render.IndexedFrame, bool, error) {
+	runErr := engine.Run(playback.CurrentFrame(), func() (render.IndexedFrame, bool, error) {
+		if playback == nil {
+			return render.IndexedFrame{}, false, nil
+		}
+		movieFrame, changed, done, err := playback.Update()
+		if err != nil {
+			return render.IndexedFrame{}, false, fmt.Errorf("advance startup movie %s: %w", movieNames[movieIndex], err)
+		}
+		if warning := playback.TakeDecodeWarning(); warning != nil {
+			movieWarningCount[movieIndex]++
+			if movieWarningSample[movieIndex] == "" {
+				movieWarningSample[movieIndex] = warning.Error()
+			}
+		}
+		if !done {
+			return movieFrame, changed, nil
+		}
+		if *debug && movieWarningCount[movieIndex] > 0 {
+			log.Printf("movie=%s decode-warnings=%d first=%s", movieNames[movieIndex], movieWarningCount[movieIndex], movieWarningSample[movieIndex])
+		}
+		if err := movie.Close(); err != nil {
+			return render.IndexedFrame{}, false, fmt.Errorf("close startup movie %s: %w", movieNames[movieIndex], err)
+		}
+		movie = nil
+		if movieIndex+1 < len(movieNames) {
+			movieIndex++
+			movie, err = render.OpenMovie(workspace, movieNames[movieIndex])
+			if err != nil {
+				return render.IndexedFrame{}, false, fmt.Errorf("open startup movie %s: %w", movieNames[movieIndex], err)
+			}
+			playback, err = render.NewMoviePlayback(movie, movieFrame)
+			if err != nil {
+				return render.IndexedFrame{}, false, fmt.Errorf("start startup movie %s: %w", movieNames[movieIndex], err)
+			}
+			if *debug {
+				log.Printf("movie=%s frames=%d", movieNames[movieIndex], movie.FrameCount())
+			}
+			return playback.CurrentFrame(), true, nil
+		}
+		playback = nil
+		if *debug {
+			log.Printf("startup movies complete; scene=%s", stage.Scenes[currentScene].Name[1:])
+		}
+		return stageFrame, true, nil
+	}, func(point uint32) (render.IndexedFrame, bool, error) {
+		if playback != nil {
+			return render.IndexedFrame{}, false, nil
+		}
 		handler, hit, err := stage.HitTestSceneHandler(currentScene, point)
 		if err != nil {
 			return render.IndexedFrame{}, false, fmt.Errorf("hit test scene %d: %w", currentScene, err)

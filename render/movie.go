@@ -14,13 +14,36 @@ const movieDescriptorSize = 0x50
 type MovieFrameDescriptor struct {
 	Mode          uint16
 	State         uint16
+	Duration      int32
 	ResourceIndex uint32
+	Rect          [4]int16
 	Raw           [movieDescriptorSize]byte
 }
 
 type Movie struct {
-	resources *assets.ResourceCache
-	frames    []MovieFrameDescriptor
+	resources  *assets.ResourceCache
+	frames     []MovieFrameDescriptor
+	paletteRaw []byte
+	defaultTick uint32
+}
+
+type MoviePlayback struct {
+	movie        *Movie
+	width        int
+	height       int
+	frame        int
+	elapsed      int
+	duration     int
+	mode         uint16
+	dibPixels    []byte
+	screenPixels []byte
+	palette      PaletteState
+	moviePalette PaletteState
+	blackPalette PaletteState
+	fadeFrom     PaletteState
+	fadeTo       PaletteState
+	done         bool
+	warning      error
 }
 
 type MoviePixels struct {
@@ -70,14 +93,14 @@ func OpenMovie(workspace assets.Workspace, name string) (*Movie, error) {
 	for index := range frames {
 		offset := movieDescriptorOffset + index*movieDescriptorSize
 		raw := data[offset : offset+movieDescriptorSize]
-		frames[index] = MovieFrameDescriptor{Mode: binary.LittleEndian.Uint16(raw[6:8]), State: binary.LittleEndian.Uint16(raw[8:10]), ResourceIndex: binary.LittleEndian.Uint32(raw[0x1c:0x20])}
+		frames[index] = MovieFrameDescriptor{Mode: binary.LittleEndian.Uint16(raw[6:8]), State: binary.LittleEndian.Uint16(raw[8:10]), Duration: int32(binary.LittleEndian.Uint32(raw[2:6])), ResourceIndex: binary.LittleEndian.Uint32(raw[0x1c:0x20]), Rect: [4]int16{int16(binary.LittleEndian.Uint16(raw[0x28:0x2a])), int16(binary.LittleEndian.Uint16(raw[0x2a:0x2c])), int16(binary.LittleEndian.Uint16(raw[0x2c:0x2e])), int16(binary.LittleEndian.Uint16(raw[0x2e:0x30]))}}
 		copy(frames[index].Raw[:], raw)
 		if frames[index].ResourceIndex >= header.CountB {
 			resources.Close()
 			return nil, fmt.Errorf("movie frame %d references resource %d outside %d entries", index, frames[index].ResourceIndex, header.CountB)
 		}
 	}
-	return &Movie{resources: resources, frames: frames}, nil
+	return &Movie{resources: resources, frames: frames, paletteRaw: append([]byte(nil), data[0x3e:0x83e]...), defaultTick: binary.LittleEndian.Uint32(data[0x26:0x2a])}, nil
 }
 
 func (m *Movie) FrameCount() int {
@@ -95,6 +118,21 @@ func (m *Movie) Frame(index int) (MovieFrameDescriptor, error) {
 		return MovieFrameDescriptor{}, fmt.Errorf("movie frame %d is out of range", index)
 	}
 	return m.frames[index], nil
+}
+
+func (m *Movie) FrameDuration(index int) (int, error) {
+	frame, err := m.Frame(index)
+	if err != nil {
+		return 0, err
+	}
+	duration := int(frame.Duration)
+	if duration < int(m.defaultTick) {
+		duration = int(m.defaultTick)
+	}
+	if duration < 1 {
+		duration = 1
+	}
+	return duration, nil
 }
 
 func (m *Movie) Resource(index uint32) ([]byte, error) {
@@ -126,6 +164,140 @@ func (m *Movie) DecodeFrame(index int, previous []byte) (MoviePixels, error) {
 		return MoviePixels{}, err
 	}
 	return DecodeMoviePixels(data, previous)
+}
+
+func (m *Movie) IndexedFrame(pixels MoviePixels) (IndexedFrame, error) {
+	if m == nil || len(m.paletteRaw) != 0x800 {
+		return IndexedFrame{}, fmt.Errorf("movie palette is unavailable")
+	}
+	return indexedFrame(pixels.Width, pixels.Height, pixels.Pixels, m.paletteRaw)
+}
+
+func BlackFrame(width, height int) (IndexedFrame, error) {
+	if width <= 0 || height <= 0 {
+		return IndexedFrame{}, fmt.Errorf("invalid frame dimensions %dx%d", width, height)
+	}
+	palette := blackPaletteState()
+	return IndexedFrame{Width: width, Height: height, Pixels: make([]byte, width*height), Palette: palette.Colors()}, nil
+}
+
+func NewMoviePlayback(movie *Movie, base IndexedFrame) (*MoviePlayback, error) {
+	if movie == nil || movie.resources == nil || base.Width <= 0 || base.Height <= 0 || len(base.Pixels) != base.Width*base.Height {
+		return nil, fmt.Errorf("movie playback input is incomplete")
+	}
+	moviePalette, err := paletteStateFromRaw(movie.paletteRaw)
+	if err != nil {
+		return nil, err
+	}
+	blackPalette := blackPaletteState()
+	playback := &MoviePlayback{movie: movie, width: base.Width, height: base.Height, screenPixels: append([]byte(nil), base.Pixels...), palette: blackPalette, blackPalette: blackPalette, moviePalette: moviePalette}
+	if err := playback.loadFrame(0); err != nil {
+		return nil, err
+	}
+	return playback, nil
+}
+
+func blackPaletteState() PaletteState {
+	var palette PaletteState
+	for index := range palette.entries {
+		_ = palette.SetFixedEntry(index, 0, 0, 0)
+	}
+	return palette
+}
+
+func (p *MoviePlayback) CurrentFrame() IndexedFrame {
+	if p == nil {
+		return IndexedFrame{}
+	}
+	return IndexedFrame{Width: p.width, Height: p.height, Pixels: p.screenPixels, Palette: p.palette.Colors()}
+}
+
+func (p *MoviePlayback) Done() bool { return p == nil || p.done }
+
+func (p *MoviePlayback) TakeDecodeWarning() error {
+	if p == nil {
+		return nil
+	}
+	err := p.warning
+	p.warning = nil
+	return err
+}
+
+func (p *MoviePlayback) Update() (IndexedFrame, bool, bool, error) {
+	if p == nil || p.movie == nil {
+		return IndexedFrame{}, false, true, fmt.Errorf("movie playback is unavailable")
+	}
+	if p.done {
+		return p.CurrentFrame(), false, true, nil
+	}
+	changed := false
+	if p.mode == 17 || p.mode == 18 {
+		p.palette = interpolatePalette(p.fadeFrom, p.fadeTo, p.elapsed, p.duration-1)
+		changed = true
+	}
+	p.elapsed++
+	if p.elapsed < p.duration {
+		return p.CurrentFrame(), changed, false, nil
+	}
+	if p.frame+1 >= p.movie.FrameCount() {
+		p.done = true
+		return p.CurrentFrame(), true, true, nil
+	}
+	if err := p.loadFrame(p.frame + 1); err != nil {
+		return p.CurrentFrame(), changed, false, err
+	}
+	return p.CurrentFrame(), true, false, nil
+}
+
+func (p *MoviePlayback) loadFrame(index int) error {
+	descriptor, err := p.movie.Frame(index)
+	if err != nil {
+		return err
+	}
+	if descriptor.Mode != 16 && descriptor.Mode != 17 && descriptor.Mode != 18 {
+		return fmt.Errorf("movie frame %d uses unimplemented mode %d", index, descriptor.Mode)
+	}
+	duration, err := p.movie.FrameDuration(index)
+	if err != nil {
+		return err
+	}
+	pixels, decodeErr := p.movie.DecodeFrame(index, p.dibPixels)
+	if len(pixels.Pixels) == 0 {
+		return decodeErr
+	}
+	p.dibPixels = pixels.Pixels
+	if decodeErr != nil {
+		p.warning = decodeErr
+	}
+	top, left, bottom, right := int(descriptor.Rect[0]), int(descriptor.Rect[1]), int(descriptor.Rect[2]), int(descriptor.Rect[3])
+	if top < 0 {
+		top = 0
+	}
+	if left < 0 {
+		left = 0
+	}
+	if bottom > p.height {
+		bottom = p.height
+	}
+	if right > p.width {
+		right = p.width
+	}
+	if bottom > top && right > left {
+		for y := top; y < bottom && y < pixels.Height; y++ {
+			source := y*pixels.Pitch + left
+			destination := y*p.width + left
+			copy(p.screenPixels[destination:destination+right-left], pixels.Pixels[source:source+right-left])
+		}
+	}
+	p.frame, p.elapsed, p.duration, p.mode = index, 0, duration, descriptor.Mode
+	if descriptor.Mode == 17 {
+		p.fadeFrom, p.fadeTo = p.palette, p.blackPalette
+	} else if descriptor.Mode == 18 {
+		p.fadeFrom, p.fadeTo = p.palette, p.moviePalette
+	} else {
+		p.palette = p.moviePalette
+	}
+	return nil
 }
 
 func DecodeMoviePixels(data, previous []byte) (MoviePixels, error) {
