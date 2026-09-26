@@ -131,3 +131,108 @@ func SkipFalseConditionalBlock(records []Record, start int) (int32, uint16, erro
 	}
 	return FindConditionalEnd(records, start)
 }
+
+func CaseBodyOffset(records []Record, start int) (int32, uint16, error) {
+	if start < 0 || start >= len(records) {
+		return -1, 0, fmt.Errorf("case-body start index %d is out of range", start)
+	}
+	program := Program{Records: records}
+	current := start
+	for {
+		if kindAt(program, current) != 6 {
+			return -1, 0x1b, nil
+		}
+		cursor := current
+		for kindAt(program, cursor) == 6 {
+			cursor++
+		}
+		if cursor >= len(records) {
+			return -1, 0, fmt.Errorf("case-body scan left the record stream")
+		}
+		if records[cursor].Kind != 4011 {
+			return int32(current - start), 0, nil
+		}
+		for {
+			cursor++
+			if cursor >= len(records) {
+				return -1, 0, fmt.Errorf("case label ended before its line marker")
+			}
+			if records[cursor].Kind == 0 {
+				return -1, 0x1b, nil
+			}
+			current = cursor
+			if records[cursor].Kind == 6 {
+				break
+			}
+		}
+	}
+}
+
+func FindSwitchCase(program Program, start int, expected Record, state *ExpressionState, parse ExpressionAtomParser, strings *StringRegisters) (int32, uint16, error) {
+	if start < 0 || start >= len(program.Records) {
+		return -1, 0, fmt.Errorf("switch start index %d is out of range", start)
+	}
+	var expectedText []byte
+	if expected.Kind == 3 {
+		if strings == nil {
+			return -1, 0, fmt.Errorf("switch string registers are unavailable")
+		}
+		var status uint16
+		var err error
+		expectedText, status, err = strings.Load(expected)
+		if err != nil || status != 0 {
+			return -1, status, err
+		}
+	}
+	var depth int16
+	for current := start; current < len(program.Records); current++ {
+		switch program.Records[current].Kind {
+		case 0:
+			return -1, 0x1b, nil
+		case 4004:
+			return -1, 0x1f, nil
+		case 4009:
+			depth++
+		case 4010:
+			if depth == 0 {
+				return -1, 0, nil
+			}
+			depth--
+		case 4011:
+			if depth != 0 {
+				continue
+			}
+			if state == nil || parse == nil {
+				return -1, 0, fmt.Errorf("switch expression runtime is unavailable")
+			}
+			value, consumed, status, err := state.Evaluate(program, current+1, parse)
+			if err != nil || uint16(status) != 0 {
+				return -1, uint16(status), err
+			}
+			if value.Kind != expected.Kind {
+				return -1, 14, nil
+			}
+			matched := false
+			switch value.Kind {
+			case 4:
+				matched = value.Data == expected.Data
+			case 3:
+				caseText, stringStatus, err := strings.Load(value)
+				if err != nil || stringStatus != 0 {
+					return -1, stringStatus, err
+				}
+				matched = equalPascalString(caseText, expectedText)
+			}
+			afterExpression := current + 1 + int(consumed)
+			if matched {
+				bodyOffset, bodyStatus, err := CaseBodyOffset(program.Records, afterExpression)
+				if err != nil || bodyStatus != 0 {
+					return -1, bodyStatus, err
+				}
+				return int32(afterExpression-start) + bodyOffset, 0, nil
+			}
+			current = afterExpression
+		}
+	}
+	return -1, 0, fmt.Errorf("switch block ended before its sentinel")
+}
