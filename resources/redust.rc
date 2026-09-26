@@ -1,0 +1,2 @@
+#define IDI_REDUST 1
+IDI_REDUST ICON "resources/redust.ico"

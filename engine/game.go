@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"image"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
@@ -95,6 +96,11 @@ func Run(frame render.IndexedFrame, onUpdate func() (render.IndexedFrame, bool, 
 		return err
 	}
 	game.onUpdate, game.keyDown, game.mouseDown = onUpdate, keyDown, mouseDown
+	icon, err := render.AppIcon()
+	if err != nil {
+		return fmt.Errorf("load ReDust window icon: %w", err)
+	}
+	ebiten.SetWindowIcon([]image.Image{icon})
 	ebiten.SetWindowTitle("ReDust")
 	ebiten.SetWindowSize(game.width, game.height)
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
