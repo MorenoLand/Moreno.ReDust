@@ -4,9 +4,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"image"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	ebitenaudio "github.com/hajimehoshi/ebiten/v2/audio"
@@ -155,10 +157,44 @@ func run() error {
 		stage.Close()
 		return fmt.Errorf("read startup game position: %w", err)
 	}
+	gameClock := 3
 	townActors, err := extraCast.ResolveLocations(nightSet, "town")
 	if err != nil {
 		stage.Close()
 		return fmt.Errorf("resolve startup town actors: %w", err)
+	}
+	leroyPosition, hasLeroy, err := nightSet.ResolveLocation("town.leroy1")
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("resolve G15 Leroy position: %w", err)
+	}
+	loadWorldActors := func(point [3]int16) ([]render.WorldActorSprite, error) {
+		actors := make([]render.WorldActorSprite, 0, 1)
+		for _, actor := range gangCast.Actors {
+			if !strings.EqualFold(actor.Name, "leroy") {
+				continue
+			}
+			if !hasLeroy {
+				return nil, fmt.Errorf("NITE.SET has no town.leroy1 coordinate")
+			}
+			actor.Position, actor.Located = leroyPosition, true
+			sprite, err := render.LoadCastActorFrame(workspace, gangCast, actor, "stand", 0, 1100, render.NativeActorViewAngle(leroyPosition, point, 0))
+			if err != nil {
+				return nil, fmt.Errorf("load G15 actor %s: %w", actor.Name, err)
+			}
+			actors = append(actors, sprite)
+		}
+		for _, actor := range townActors {
+			if gameClock != 3 || !strings.EqualFold(actor.Name, "dog") {
+				continue
+			}
+			sprite, err := render.LoadCastActorFrame(workspace, extraCast, actor, "stand", 0, 880, render.NativeActorViewAngle(actor.Position, point, 32))
+			if err != nil {
+				return nil, fmt.Errorf("load G15 actor %s: %w", actor.Name, err)
+			}
+			actors = append(actors, sprite)
+		}
+		return actors, nil
 	}
 	if *debug {
 		log.Printf("cast-location-records=set=NITE.SET selector=town count=%d", len(townActors))
@@ -192,13 +228,26 @@ func run() error {
 		stage.Close()
 		return fmt.Errorf("render startup game background: %w", err)
 	}
-	stageFrame, err := render.CompositeUnderlay(backgroundFrame, frame)
+	worldActors, err := loadWorldActors(worldPoint)
 	if err != nil {
 		stage.Close()
-		return fmt.Errorf("compose startup game background: %w", err)
+		return err
+	}
+	worldBackground, projectedActors, err := render.CompositeWorldActors(backgroundFrame, worldPoint, worldActors)
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("render G15 actors: %w", err)
+	}
+	stageFrame, err := render.CompositeUnderlay(worldBackground, frame)
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("compose startup game scene: %w", err)
 	}
 	if *debug {
 		log.Printf("level=set=NITE.SET view=%s ids=%d,%d direction=north frame-resource=%d size=%dx%d", view.Name[1:], view.SceneID, view.DirectionID, backgroundResource, backgroundFrame.Width, backgroundFrame.Height)
+		for _, actor := range projectedActors {
+			log.Printf("world-actor=%s depth=%d bounds=%d,%d,%d,%d", actor.Name, actor.Depth, actor.Bounds.Min.X, actor.Bounds.Min.Y, actor.Bounds.Max.X, actor.Bounds.Max.Y)
+		}
 	}
 	if *silent {
 		if *debug {
@@ -298,6 +347,37 @@ func run() error {
 	}
 	currentScene, currentPixels := 0, pixels
 	currentFrame := stageFrame
+	startSceneMovie := func(name string) error {
+		if movieAudio != nil {
+			if err := movieAudio.Close(); err != nil {
+				return fmt.Errorf("stop current movie soundtrack: %w", err)
+			}
+			movieAudio = nil
+		}
+		if movie != nil {
+			if err := movie.Close(); err != nil {
+				return fmt.Errorf("close current movie: %w", err)
+			}
+		}
+		movieNames, movieIndex = []string{name}, 0
+		movieWarningCount, movieWarningSample = []int{0}, []string{""}
+		movie, err = render.OpenMovie(workspace, name)
+		if err != nil {
+			return fmt.Errorf("open scene movie %s: %w", name, err)
+		}
+		playback, err = render.NewMoviePlayback(movie, currentFrame)
+		if err != nil {
+			return fmt.Errorf("start scene movie %s: %w", name, err)
+		}
+		movieAudio, movieAudioEvents, movieAudioLoop, err = startMovieAudio(movie)
+		if err != nil {
+			return err
+		}
+		if *debug {
+			log.Printf("movie=%s frames=%d source=SET object-click", name, movie.FrameCount())
+		}
+		return nil
+	}
 	var pendingMovement assets.SceneMove
 	var transition *render.BarndoorEffect
 	runErr := engine.Run(playback.CurrentFrame(), func() (render.IndexedFrame, bool, error) {
@@ -336,17 +416,29 @@ func run() error {
 			if err != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("render NITE.SET background %d: %w", frameResource, err)
 			}
+			nextActors, err := loadWorldActors(nextPoint)
+			if err != nil {
+				return render.IndexedFrame{}, false, err
+			}
+			nextWorldBackground, nextProjectedActors, err := render.CompositeWorldActors(nextBackground, nextPoint, nextActors)
+			if err != nil {
+				return render.IndexedFrame{}, false, fmt.Errorf("render NITE.SET actors: %w", err)
+			}
 			overlay, err := render.StageFrame(stage, currentPixels.Pixels)
 			if err != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("render stage scene %d: %w", currentScene, err)
 			}
-			nextFrame, err := render.CompositeUnderlay(nextBackground, overlay)
+			nextFrame, err := render.CompositeUnderlay(nextWorldBackground, overlay)
 			if err != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("compose moved game background: %w", err)
 			}
 			worldPoint, backgroundFrame, stageFrame, currentFrame = nextPoint, nextBackground, nextFrame, nextFrame
+			worldActors, projectedActors = nextActors, nextProjectedActors
 			if *debug {
 				log.Printf("level-move=%d point=%v transition-resource=%d frame-resource=%d", movement, worldPoint, transitionResource, frameResource)
+				for _, actor := range projectedActors {
+					log.Printf("world-actor=%s depth=%d bounds=%d,%d,%d,%d", actor.Name, actor.Depth, actor.Bounds.Min.X, actor.Bounds.Min.Y, actor.Bounds.Max.X, actor.Bounds.Max.Y)
+				}
 			}
 			return nextFrame, true, nil
 		}
@@ -499,6 +591,20 @@ func run() error {
 				}
 			}
 		}
+		if !hit && currentScene == 0 {
+			if action, found := scripts.NiteNorthObjectAction(worldPoint[2], point, gameClock); found {
+				if *debug {
+					log.Printf("world-object=%s movie=%s", action.Object, action.Movie)
+				}
+				if err := startSceneMovie(action.Movie); err != nil {
+					return render.IndexedFrame{}, false, err
+				}
+				return currentFrame, true, nil
+			}
+			if actorName, found := render.HitTestWorldActors(projectedActors, image.Pt(int(int16(point>>16)), int(int16(point)))); found && *debug {
+				log.Printf("world-actor-hit=%s", actorName)
+			}
+		}
 		if !hit {
 			return render.IndexedFrame{}, false, nil
 		}
@@ -559,7 +665,12 @@ func run() error {
 			return render.IndexedFrame{}, false, fmt.Errorf("render stage scene %d: %w", target, err)
 		}
 		if target == 0 {
-			nextFrame, err = render.CompositeUnderlay(backgroundFrame, nextFrame)
+			worldBackground, visibleActors, actorErr := render.CompositeWorldActors(backgroundFrame, worldPoint, worldActors)
+			if actorErr != nil {
+				return render.IndexedFrame{}, false, fmt.Errorf("render returned NITE actors: %w", actorErr)
+			}
+			projectedActors = visibleActors
+			nextFrame, err = render.CompositeUnderlay(worldBackground, nextFrame)
 			if err != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("compose startup game background: %w", err)
 			}

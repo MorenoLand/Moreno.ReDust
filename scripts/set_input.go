@@ -1,0 +1,28 @@
+package scripts
+
+type SetObjectAction struct {
+	Object string
+	Movie  string
+}
+
+func NiteNorthObjectAction(direction int16, point uint32, clock int) (SetObjectAction, bool) {
+	if direction != 1 {
+		return SetObjectAction{}, false
+	}
+	x, y := int16(point>>16), int16(point)
+	if x > 2 && y > 108 && x < 127 && y < 194 {
+		movie := "MOVIES/WARNING.MOV"
+		if clock == 3 {
+			movie = "MOVIES/NITEWARN.MOV"
+		}
+		return SetObjectAction{Object: "rules", Movie: movie}, true
+	}
+	if x > 374 && y > 127 && x < 509 && y < 178 {
+		movie := "MOVIES/FIREARM.MOV"
+		if clock == 3 {
+			movie = "MOVIES/NITEFIRE.MOV"
+		}
+		return SetObjectAction{Object: "fire", Movie: movie}, true
+	}
+	return SetObjectAction{}, false
+}
