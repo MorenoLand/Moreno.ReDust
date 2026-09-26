@@ -19,7 +19,7 @@ func ClassifyDispatch(opcode uint16) DispatchRoute {
 		return Route004137B0
 	case opcode > 15999 && opcode < 0x3eb7:
 		return Route004137B0Then00424890
-	case opcode == 0x0fa2:
+	case opcode == 0x0fa2 || opcode == 0x0fa3:
 		return Route0041D680
 	case opcode == 0x0fbd:
 		return Route0041D6F0
