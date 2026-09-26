@@ -13,6 +13,7 @@ import (
 const nativeSoundTableOffset = 0xb2
 const nativeSoundRowSize = 0x18
 const nativeSoundHeaderSize = 0x28
+const nativeOneShotChannels = 2
 
 type nativeSoundEntry struct {
 	resource uint32
@@ -143,15 +144,9 @@ func (b *SoundBank) Play(context *ebitenaudio.Context, name string, gain float64
 	if b == nil || b.resources == nil {
 		return fmt.Errorf("sound bank is closed")
 	}
-	active := b.players[:0]
-	for _, player := range b.players {
-		if player.IsPlaying() {
-			active = append(active, player)
-		} else if err := player.Close(); err != nil {
-			return err
-		}
+	if err := b.reapPlayers(); err != nil {
+		return err
 	}
-	b.players = active
 	sound, err := b.Load(name)
 	if err != nil {
 		return err
@@ -172,6 +167,46 @@ func (b *SoundBank) Play(context *ebitenaudio.Context, name string, gain float64
 	player.SetVolume(1)
 	player.Play()
 	b.players = append(b.players, player)
+	return nil
+}
+
+func (b *SoundBank) PlayAtVolume(context *ebitenaudio.Context, name string, volume uint8) (bool, error) {
+	if context == nil {
+		return false, fmt.Errorf("audio context is nil")
+	}
+	if b == nil || b.resources == nil {
+		return false, fmt.Errorf("sound bank is closed")
+	}
+	if err := b.reapPlayers(); err != nil {
+		return false, err
+	}
+	if len(b.players) >= nativeOneShotChannels {
+		return false, nil
+	}
+	sound, err := b.Load(name)
+	if err != nil {
+		return false, err
+	}
+	player, err := NewPlayer(context, sound.Samples, sound.Format)
+	if err != nil {
+		return false, err
+	}
+	player.SetVolume(float64(volume) / 255)
+	player.Play()
+	b.players = append(b.players, player)
+	return true, nil
+}
+
+func (b *SoundBank) reapPlayers() error {
+	active := b.players[:0]
+	for _, player := range b.players {
+		if player.IsPlaying() {
+			active = append(active, player)
+		} else if err := player.Close(); err != nil {
+			return err
+		}
+	}
+	b.players = active
 	return nil
 }
 

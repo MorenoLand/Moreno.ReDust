@@ -17,6 +17,17 @@ type NativeTheme struct {
 	Events []int
 }
 
+func (t NativeTheme) FirstVoiceName() string {
+	if len(t.Events) == 0 || t.Events[0] < 0 || t.Events[0] >= len(t.Tracks) {
+		return ""
+	}
+	name := t.Tracks[t.Events[0]].Metadata.Name
+	if len(name) == 0 || int(name[0])+1 != len(name) {
+		return ""
+	}
+	return string(name[1:])
+}
+
 func (b *SoundBank) LoadTheme(name string) (NativeTheme, error) {
 	if b == nil || b.resources == nil {
 		return NativeTheme{}, fmt.Errorf("sound bank is closed")

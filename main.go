@@ -61,6 +61,35 @@ func run() error {
 	var themeBank *audio.SoundBank
 	var themePlayer *ebitenaudio.Player
 	var audioContext *ebitenaudio.Context
+	var nativeLoops scripts.LoopScheduler
+	var nativeRandom scripts.NativeRandom
+	var currentThemeName string
+	runNativeScheduler := func() error {
+		status, err := nativeLoops.Pass(func(loop scripts.ScriptLoop) (uint16, error) {
+			if loop.Callback != "nightfxs" {
+				return 0, nil
+			}
+			cue, found := scripts.NightWildlifeCue(currentThemeName, &nativeRandom)
+			if found {
+				played, err := themeBank.PlayAtVolume(audioContext, cue.Name, 255)
+				if err != nil {
+					return 0, fmt.Errorf("play NITE wildlife cue %s: %w", cue.Name, err)
+				}
+				if *debug {
+					log.Printf("ambient-cue=%s pan=%d played=%t", cue.Name, cue.Pan, played)
+				}
+			}
+			loop.Remaining = 2
+			return nativeLoops.Register(loop), nil
+		})
+		if err != nil {
+			return err
+		}
+		if status != 0 {
+			return fmt.Errorf("native scene scheduler returned status %#x", status)
+		}
+		return nil
+	}
 	if !*silent {
 		soundBank, err = audio.OpenSoundBank(workspace, "DATA/UNILIB.SND")
 		if err != nil {
@@ -132,9 +161,9 @@ func run() error {
 		return fmt.Errorf("resolve startup town actors: %w", err)
 	}
 	if *debug {
-		log.Printf("actor-locations=set=NITE.SET selector=town resolved=%d", len(townActors))
+		log.Printf("cast-location-records=set=NITE.SET selector=town count=%d", len(townActors))
 		for _, actor := range townActors {
-			log.Printf("actor-location name=%s point=%v script=%s", actor.Name, actor.Position, actor.Script)
+			log.Printf("cast-location name=%s point=%v script=%s", actor.Name, actor.Position, actor.Script)
 		}
 	}
 	backgroundResource, found, err := nightSet.BackgroundResourceForDirection(view, worldPoint[2])
@@ -397,8 +426,16 @@ func run() error {
 			if err != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("start startup town theme: %w", err)
 			}
+			currentThemeName = theme.FirstVoiceName()
+			tick := scripts.NativeTickMilliseconds()
+			nativeRandom = scripts.NewNativeRandom(scripts.NativeRandomSeed(tick))
+			if currentThemeName == "nightwind3" {
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 1, Owner: "scene g14", Callback: "nightfxs", Remaining: 2}); status != 0 {
+					return render.IndexedFrame{}, false, fmt.Errorf("register NITE nightfxs loop returned status %#x", status)
+				}
+			}
 			if *debug {
-				log.Printf("track-file=DATA/NIGHT.SND theme=%s events=%d voices=%d playing=%t", theme.Name, len(theme.Events), len(theme.Tracks), themePlayer.IsPlaying())
+				log.Printf("track-file=DATA/NIGHT.SND theme=%s events=%d voices=%d channel-name=%s playing=%t", theme.Name, len(theme.Events), len(theme.Tracks), currentThemeName, themePlayer.IsPlaying())
 			}
 		}
 		if err := soundBank.Play(audioContext, "pageturn", 4); err != nil {
@@ -529,6 +566,9 @@ func run() error {
 		}
 		currentScene, currentPixels = target, nextPixels
 		if action.VisualEffect != 0 {
+			if err := runNativeScheduler(); err != nil {
+				return render.IndexedFrame{}, false, err
+			}
 			effectName := ""
 			switch action.VisualEffect {
 			case scripts.LookupOpcode("barndooropen"):

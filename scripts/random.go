@@ -6,8 +6,10 @@ type NativeRandom struct {
 }
 
 func NativeRandomSeed(tick uint32) uint32 {
-	return tick * 3 / 50
+	return NativeFrameUnits(tick)
 }
+
+func NativeFrameUnits(tick uint32) uint32 { return tick * 3 / 50 }
 
 func NewNativeRandom(seed uint32) NativeRandom {
 	random := NativeRandom{}
