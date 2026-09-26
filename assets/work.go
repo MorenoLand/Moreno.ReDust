@@ -19,6 +19,14 @@ type Workspace struct {
 	open      func(string) (AssetFile, int64, error)
 }
 
+func webAssetPath(locationPath, name string) string {
+	base := locationPath
+	if !strings.HasSuffix(base, "/") && path.Ext(path.Base(base)) != "" {
+		base = path.Dir(base)
+	}
+	return path.Join(base, "assets", name)
+}
+
 func (w Workspace) OpenAsset(name string) (AssetFile, int64, error) {
 	if w.open == nil {
 		return nil, 0, fmt.Errorf("workspace is not initialized")

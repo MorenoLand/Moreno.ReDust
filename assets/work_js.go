@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"path"
 	"syscall/js"
 )
 
@@ -24,7 +23,7 @@ func NewWorkspace(work string) (Workspace, error) {
 		if err != nil {
 			return nil, 0, err
 		}
-		base.Path = path.Join(path.Dir(base.Path), "assets", name)
+		base.Path = webAssetPath(base.Path, name)
 		base.RawQuery = ""
 		base.Fragment = ""
 		response, err := http.Get(base.String())
