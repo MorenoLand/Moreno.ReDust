@@ -72,6 +72,18 @@ func (w Workspace) OpenResourceCache(name string) (*ResourceCache, error) {
 	return cache, err
 }
 
+func (c *ResourceCache) Header() (Header, error) {
+	if c == nil {
+		return Header{}, ErrResourceCacheClosed
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return Header{}, ErrResourceCacheClosed
+	}
+	return c.container.Header(), nil
+}
+
 func (c *ResourceCache) Acquire(index uint32) (*ResourceLease, error) {
 	if c == nil {
 		return nil, ErrResourceCacheClosed

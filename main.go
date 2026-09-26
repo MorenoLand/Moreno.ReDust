@@ -21,7 +21,7 @@ func run() error {
 	if *debug {
 		log.Printf("work=%s assets=%s", workspace.WorkDir, workspace.AssetRoot)
 	}
-	boot, err := workspace.OpenContainer("BootFile")
+	boot, err := workspace.OpenResourceCache("BootFile")
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("user game files are required under %s; BootFile was not found: %w", workspace.AssetRoot, err)
@@ -30,7 +30,10 @@ func run() error {
 	}
 	defer boot.Close()
 	if *debug {
-		header := boot.Header()
+		header, err := boot.Header()
+		if err != nil {
+			return fmt.Errorf("read BootFile header: %w", err)
+		}
 		log.Printf("BootFile APPL header: entries=%d pages=%d size=%d", header.CountB, header.CountA>>7, header.FileSize)
 	}
 	return errors.New("BootFile loaded, but its verified script-to-scene startup path is still being translated")
