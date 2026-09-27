@@ -238,7 +238,7 @@ func run() error {
 			actors = append(actors, sprite)
 		}
 		for _, actor := range townActors {
-			if gameClock != 3 || !strings.EqualFold(actor.Name, "dog") {
+			if gameDay != 1 || !strings.EqualFold(actor.Name, "dog") {
 				continue
 			}
 			sprite, err := render.LoadCastActorFrame(workspace, extraCast, actor, actorPoses["dog"], 0, 880, render.NativeActorViewAngle(actor.Position, point, actorHeadings["dog"]), 32)
@@ -970,6 +970,8 @@ func run() error {
 				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "leroy", Callback: "leroyidle", Remaining: 20}); status != 0 {
 					return render.IndexedFrame{}, false, fmt.Errorf("register Leroy idle loop returned status %#x", status)
 				}
+			}
+			if gameDay == 1 {
 				step, found := scripts.DogIdleStep("doright", &nativeRandom)
 				if found {
 					actorPoses["dog"] = step.Pose
@@ -1183,15 +1185,7 @@ func run() error {
 							}
 							return currentFrame, true, nil
 						}
-						currentDegree, found := render.NativeCurrentDegree(worldPoint[2])
-						if !found {
-							return render.IndexedFrame{}, false, fmt.Errorf("NITE.SET orientation %d has no native currentdeg", worldPoint[2])
-						}
-						vector, found := render.NativeDirectionVector(currentDegree, 32)
-						if !found {
-							return render.IndexedFrame{}, false, fmt.Errorf("NITE.SET currentdeg %d has no native cardinal vector", currentDegree)
-						}
-						destination := [3]int16{playerPosition[0] + vector[0], playerPosition[1] + vector[1], 0}
+						destination := [3]int16{playerPosition[0], playerPosition[1], 0}
 						routeHeading := render.NativeActorHeadingToPoint(leroyPosition, destination)
 						leroyReturnPosition = leroyPosition
 						walk := scripts.NewNativeActorWalkJob(leroyPosition, destination, routeHeading, leroyWalkRate)
