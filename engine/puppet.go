@@ -62,7 +62,6 @@ func (d *PuppetDialogue) Start(background render.IndexedFrame, frame uint32) (re
 	if err != nil {
 		return render.IndexedFrame{}, err
 	}
-	canvas.Fill(0)
 	d.canvas = canvas
 	if err := d.startLine(frame); err != nil {
 		return render.IndexedFrame{}, err
@@ -105,6 +104,7 @@ func (d *PuppetDialogue) Update(frame uint32) (render.IndexedFrame, bool, error)
 		}
 		if changed {
 			d.canvas.SetClip(clip)
+			d.canvas.RestoreBase(clip)
 			if err := d.drawCue(d.cues[sample]); err != nil {
 				return render.IndexedFrame{}, false, err
 			}
@@ -168,6 +168,7 @@ func (d *PuppetDialogue) startLine(frame uint32) error {
 	}
 	d.cues, d.startFrame, d.currentCue = cues, frame, -1
 	d.setBaseClip()
+	d.canvas.RestoreBase(d.baseClip)
 	if err := d.drawCue(cues[0]); err != nil {
 		return err
 	}
@@ -218,7 +219,7 @@ func (d *PuppetDialogue) setBaseClip() {
 }
 
 func (d *PuppetDialogue) drawCue(cue render.PuppetCueRow) error {
-	return d.puppet.DrawCue(d.canvas, cue)
+	return d.puppet.DrawCueOverScene(d.canvas, cue)
 }
 
 func (d *PuppetDialogue) closeVoice() error {

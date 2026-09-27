@@ -48,6 +48,7 @@ type PuppetCueRow struct {
 
 type PuppetCanvas struct {
 	frame IndexedFrame
+	base  IndexedFrame
 	clip  image.Rectangle
 }
 
@@ -209,6 +210,14 @@ func (p *Puppet) CueTimeline(resource uint32) ([]PuppetCueRow, error) {
 }
 
 func (p *Puppet) DrawCue(canvas *PuppetCanvas, cue PuppetCueRow) error {
+	return p.drawCue(canvas, cue, false)
+}
+
+func (p *Puppet) DrawCueOverScene(canvas *PuppetCanvas, cue PuppetCueRow) error {
+	return p.drawCue(canvas, cue, true)
+}
+
+func (p *Puppet) drawCue(canvas *PuppetCanvas, cue PuppetCueRow, sceneBackground bool) error {
 	if p == nil || p.cache == nil {
 		return fmt.Errorf("puppet is closed")
 	}
@@ -218,18 +227,67 @@ func (p *Puppet) DrawCue(canvas *PuppetCanvas, cue PuppetCueRow) error {
 	for slot, cueSlot := range cue.Slots {
 		if cueSlot.Frame < 0 {
 			if slot == 0 {
-				canvas.Clear(0)
+				if sceneBackground {
+					canvas.RestoreBase(canvas.clip)
+				} else {
+					canvas.Clear(0)
+				}
 			}
 			continue
 		}
 		if int(cueSlot.Frame) >= p.FrameCount(slot) {
 			return fmt.Errorf("puppet cue slot %d frame %d is outside %d frames", slot, cueSlot.Frame, p.FrameCount(slot))
 		}
-		if err := p.Draw(canvas, slot, int(cueSlot.Frame), cueSlot.Position); err != nil {
+		frame, err := p.Frame(slot, int(cueSlot.Frame))
+		if err != nil {
+			return fmt.Errorf("load puppet cue slot %d frame %d: %w", slot, cueSlot.Frame, err)
+		}
+		if sceneBackground && slot == 0 && isPuppetMatteFrame(frame) {
+			continue
+		}
+		if err := canvas.Draw(frame, cueSlot.Position); err != nil {
 			return fmt.Errorf("draw puppet cue slot %d frame %d: %w", slot, cueSlot.Frame, err)
 		}
 	}
 	return nil
+}
+
+func isPuppetMatteFrame(frame PuppetFrame) bool {
+	if frame.Width != 512 || frame.Height != puppetViewportHeight || len(frame.Rows) != frame.Height {
+		return false
+	}
+	matte, found := byte(0), false
+	for y, row := range frame.Rows {
+		width, position := 0, 0
+		for width < frame.Width {
+			if position >= len(row) {
+				return false
+			}
+			command := row[position]
+			position++
+			run, operation := int(command>>2), command&3
+			if run < 1 || run > frame.Width-width {
+				return false
+			}
+			if y == 0 {
+				if operation != 2 || position >= len(row) {
+					return false
+				}
+				if found && row[position] != matte {
+					return false
+				}
+				matte, found = row[position], true
+				position++
+			} else if operation != 0 {
+				return false
+			}
+			width += run
+		}
+		if position != len(row) {
+			return false
+		}
+	}
+	return found
 }
 
 func (p *Puppet) ChoiceFrame(background IndexedFrame, panelResource uint32, choices []string) (IndexedFrame, error) {
@@ -327,17 +385,45 @@ func NewPuppetCanvas(background IndexedFrame) (*PuppetCanvas, error) {
 	if background.rgba != nil && len(background.Palette) != 256 {
 		return nil, fmt.Errorf("puppet background palette has %d entries, want 256", len(background.Palette))
 	}
-	frame := background
-	frame.Pixels = append([]byte(nil), background.Pixels...)
+	base := background
+	base.Pixels = append([]byte(nil), background.Pixels...)
 	if background.rgba != nil {
-		frame.rgba = clonePuppetRGBA(background.rgba)
+		base.rgba = clonePuppetRGBA(background.rgba)
 	}
-	return &PuppetCanvas{frame: frame, clip: image.Rect(0, 0, frame.Width, frame.Height)}, nil
+	frame := base
+	frame.Pixels = append([]byte(nil), base.Pixels...)
+	if base.rgba != nil {
+		frame.rgba = clonePuppetRGBA(base.rgba)
+	}
+	return &PuppetCanvas{frame: frame, base: base, clip: image.Rect(0, 0, frame.Width, frame.Height)}, nil
 }
 
 func (c *PuppetCanvas) SetClip(clip image.Rectangle) {
 	if c != nil {
 		c.clip = image.Rect(0, 0, c.frame.Width, c.frame.Height).Intersect(clip)
+	}
+}
+
+func (c *PuppetCanvas) RestoreBase(region image.Rectangle) {
+	if c == nil {
+		return
+	}
+	region = c.clip.Intersect(region).Intersect(image.Rect(0, 0, c.frame.Width, c.frame.Height))
+	for y := region.Min.Y; y < region.Max.Y; y++ {
+		start, end := y*c.frame.Width+region.Min.X, y*c.frame.Width+region.Max.X
+		copy(c.frame.Pixels[start:end], c.base.Pixels[start:end])
+		if c.frame.rgba != nil {
+			for x := region.Min.X; x < region.Max.X; x++ {
+				if c.base.rgba != nil {
+					source, destination := c.base.rgba.PixOffset(x, y), c.frame.rgba.PixOffset(x, y)
+					copy(c.frame.rgba.Pix[destination:destination+4], c.base.rgba.Pix[source:source+4])
+				} else if len(c.base.Palette) == 256 {
+					value := color.RGBAModel.Convert(c.base.Palette[c.base.Pixels[y*c.frame.Width+x]]).(color.RGBA)
+					index := c.frame.rgba.PixOffset(x, y)
+					c.frame.rgba.Pix[index], c.frame.rgba.Pix[index+1], c.frame.rgba.Pix[index+2], c.frame.rgba.Pix[index+3] = value.R, value.G, value.B, value.A
+				}
+			}
+		}
 	}
 }
 

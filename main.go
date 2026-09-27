@@ -494,7 +494,24 @@ func run() error {
 		if err := openLeroyPuppet(); err != nil {
 			return fmt.Errorf("open Leroy dialogue: %w", err)
 		}
-		leroyConversationBase = currentFrame
+		dialogueActors := make([]render.WorldActorSprite, 0, len(worldActors))
+		for _, actor := range worldActors {
+			if !strings.EqualFold(actor.Name, "leroy") {
+				dialogueActors = append(dialogueActors, actor)
+			}
+		}
+		dialogueBackground, _, err := render.CompositeWorldActors(backgroundFrame, worldPoint, dialogueActors)
+		if err != nil {
+			return fmt.Errorf("hide Leroy world sprite for dialogue: %w", err)
+		}
+		dialoguePanel, err := render.StageFrame(stage, currentPixels.Pixels)
+		if err != nil {
+			return fmt.Errorf("render dialogue panel: %w", err)
+		}
+		leroyConversationBase, err = composeMainPanel(dialogueBackground, dialoguePanel)
+		if err != nil {
+			return fmt.Errorf("compose Leroy dialogue background: %w", err)
+		}
 		palette, err := leroyPuppet.Palette()
 		if err != nil {
 			return fmt.Errorf("load Leroy PUP CLUT: %w", err)
@@ -1019,6 +1036,9 @@ func run() error {
 		point := mouseEvent.Point
 		if playback != nil || transition != nil {
 			return render.IndexedFrame{}, false, nil
+		}
+		if leroyInteractionStage != leroyInteractionIdle && leroyInteractionStage != leroyInteractionPuppetChoices {
+			return currentFrame, false, nil
 		}
 		if leroyInteractionStage == leroyInteractionPuppetChoices {
 			if mouseEvent.Button != ebiten.MouseButtonLeft {
