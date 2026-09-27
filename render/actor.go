@@ -311,6 +311,7 @@ func decodeWorldActorFrame(frame PuppetFrame) ([]byte, []bool, error) {
 		return nil, nil, fmt.Errorf("invalid frame dimensions %dx%d", frame.Width, frame.Height)
 	}
 	pixels, mask := make([]byte, frame.Width*frame.Height), make([]bool, frame.Width*frame.Height)
+	previous := make([]byte, frame.Width)
 	for y, row := range frame.Rows {
 		x, position := 0, 0
 		for x < frame.Width {
@@ -335,12 +336,14 @@ func decodeWorldActorFrame(frame PuppetFrame) ([]byte, []bool, error) {
 				return nil, nil, fmt.Errorf("scanline %d literal run exceeds data", y)
 			}
 			for i := 0; i < run; i++ {
-				index := y*frame.Width + x + i
+				index, sourceX := y*frame.Width+x+i, x+i
 				switch operation {
+				case 0:
+					pixels[index], mask[index] = previous[sourceX], true
 				case 2:
-					pixels[index], mask[index] = repeated, true
+					pixels[index], mask[index], previous[sourceX] = repeated, true, repeated
 				case 3:
-					pixels[index], mask[index] = row[position+i], true
+					pixels[index], mask[index], previous[sourceX] = row[position+i], true, row[position+i]
 				}
 			}
 			if operation == 3 {
