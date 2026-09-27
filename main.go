@@ -291,6 +291,7 @@ func run() error {
 	var ringInInventory bool
 	var boneDragging bool
 	var boneDragLast image.Point
+	var dog2PhaseAfterHelp bool
 	defer func() {
 		if leroyDialogue != nil {
 			_ = leroyDialogue.Close()
@@ -638,6 +639,68 @@ func run() error {
 		}
 		return nil
 	}
+	resumeHelpIdle := func() error {
+		camera := render.NativeActorCameraPosition(worldPoint)
+		player := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
+		dogVisible := false
+		for _, actor := range worldActors {
+			if strings.EqualFold(actor.Name, "dog") && actor.Visible {
+				dogVisible = true
+				break
+			}
+		}
+		step, found := scripts.HelpIdleStep("helpidle", scripts.NativeActorDistance2D(helpActorPosition, player) < 384, dogVisible, gameDay, helpPhase)
+		if !found {
+			return fmt.Errorf("unknown Help idle callback")
+		}
+		actorPoses["help"], helpTurnActive = step.Pose, false
+		if step.ClearAttention {
+			helpAttention = 0
+		}
+		if step.Attention != 0 {
+			helpAttention = step.Attention
+		}
+		if step.TurnToCamera {
+			actorTurnTargets["help"] = render.NativeActorHeadingToPoint(helpActorPosition, player)
+			helpTurnActive = actorHeadings["help"] != actorTurnTargets["help"]
+		}
+		nativeLoops.Stop(2, "help")
+		if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "help", Callback: step.Callback, Remaining: step.Remaining}); status != 0 {
+			return fmt.Errorf("register Help idle loop returned status %#x", status)
+		}
+		if *debug {
+			log.Printf("actor=help idle=return point=%v pose=%s callback=%s ticks=%d heading=%d target=%d attention=%d", helpActorPosition, step.Pose, step.Callback, step.Remaining, actorHeadings["help"], actorTurnTargets["help"], helpAttention)
+		}
+		return nil
+	}
+	beginHelpPuppetTalk := func() (bool, error) {
+		if !helpVisible || gameDay == 5 || helpInteractionStage != helpInteractionIdle {
+			return false, nil
+		}
+		camera := render.NativeActorCameraPosition(worldPoint)
+		playerPosition := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
+		distance := scripts.NativeActorDistance2D(helpActorPosition, playerPosition)
+		if distance >= 384 {
+			return false, nil
+		}
+		if !scripts.NativeWalktopuppetAxisAligned(helpActorPosition, playerPosition) {
+			if *debug {
+				log.Printf("actor=help walktopuppet=blocked-axis-alignment actor=%v player=%v", helpActorPosition, playerPosition)
+			}
+			return false, nil
+		}
+		destination := [3]int16{playerPosition[0], playerPosition[1], 0}
+		routeHeading := render.NativeActorHeadingToPoint(helpActorPosition, destination)
+		helpReturnPosition = helpActorPosition
+		walk := scripts.NewNativeActorWalkJob(helpActorPosition, destination, routeHeading, helpWalkRate)
+		helpWalk, helpInteractionStage = &walk, helpInteractionMoving
+		helpTurnActive, actorPoses["help"] = false, "stand"
+		nativeLoops.Stop(2, "help")
+		if *debug {
+			log.Printf("actor=help walktopuppet distance=%d destination=%v heading=%d puppet=HELP1.PUP", distance, destination, routeHeading)
+		}
+		return true, nil
+	}
 	openLeroyPuppet := func() error {
 		if leroyPuppet != nil {
 			return nil
@@ -973,12 +1036,23 @@ func run() error {
 		helpDelayReady, helpInitialPage = false, false
 		return startHelpPage(scripts.HelpPuppetEntryPage(helpPhase, dogVisibleState))
 	}
+	completeHelpReturn := func() error {
+		actorPoses["help"] = "stand"
+		helpActorValue++
+		helpInteractionStage = helpInteractionIdle
+		if dog2PhaseAfterHelp {
+			gamePhase, dog2PhaseAfterHelp = 2, false
+			if *debug {
+				log.Printf("actor=dog offerobject=complete phase=%d", gamePhase)
+			}
+		}
+		return resumeHelpIdle()
+	}
 	returnHelpToStar := func() error {
 		if helpActorPosition == helpReturnPosition {
-			actorPoses["help"], helpTurnActive = "stand", false
-			helpActorValue++
-			helpInteractionStage = helpInteractionIdle
-			nativeLoops.Stop(2, "help")
+			if err := completeHelpReturn(); err != nil {
+				return err
+			}
 			return refreshWorldScene()
 		}
 		heading := render.NativeActorHeadingToPoint(helpActorPosition, helpReturnPosition)
@@ -1204,10 +1278,9 @@ func run() error {
 						helpInteractionStage = helpInteractionPuppetPending
 					}
 				} else if helpInteractionStage == helpInteractionReturning {
-					actorPoses["help"], helpTurnActive = "stand", false
-					helpActorValue++
-					helpInteractionStage = helpInteractionIdle
-					nativeLoops.Stop(2, "help")
+					if err := completeHelpReturn(); err != nil {
+						return false, fmt.Errorf("resume Help idle callback: %w", err)
+					}
 					displayChanged = true
 				}
 			}
@@ -1367,7 +1440,15 @@ func run() error {
 	var pendingMovement assets.SceneMove
 	var pendingSceneMovie string
 	var dogMovieNeedsHelp bool
-	var dog2OfferPending bool
+	const (
+		dog2OfferIdle uint8 = iota
+		dog2OfferMovie
+		dog2OfferDelayBeforeEast
+		dog2OfferWaitEast
+		dog2OfferDelayAfterEast
+	)
+	dog2OfferStage := dog2OfferIdle
+	var dog2OfferUntil uint32
 	var transition *render.BarndoorEffect
 	runErr := engine.Run(playback.CurrentFrame(), func() (render.IndexedFrame, bool, error) {
 		if playback == nil && transition == nil && pendingSceneMovie != "" {
@@ -1384,6 +1465,43 @@ func run() error {
 				return render.IndexedFrame{}, false, err
 			}
 			if changed {
+				return currentFrame, true, nil
+			}
+		}
+		if playback == nil && transition == nil {
+			now := scripts.NativeFrameUnits(scripts.NativeTickMilliseconds())
+			if dog2OfferStage == dog2OfferDelayBeforeEast && now >= dog2OfferUntil {
+				dog2OfferStage, pendingMovement = dog2OfferWaitEast, assets.SceneMoveRight
+				if *debug {
+					log.Printf("actor=dog offerobject=turn direction=east movement=right")
+				}
+			}
+			if dog2OfferStage == dog2OfferWaitEast && pendingMovement == 0 && worldPoint[2] == assets.SetDirectionEast {
+				dog2OfferStage, dog2OfferUntil = dog2OfferDelayAfterEast, now+60
+				if *debug {
+					log.Printf("actor=dog offerobject=east wait=60")
+				}
+			}
+			if dog2OfferStage == dog2OfferDelayAfterEast && now >= dog2OfferUntil {
+				if err := setupHelpActor(); err != nil {
+					return render.IndexedFrame{}, false, fmt.Errorf("setup Help after DOG2.MOV: %w", err)
+				}
+				if err := refreshWorldScene(); err != nil {
+					return render.IndexedFrame{}, false, fmt.Errorf("show Help after DOG2.MOV: %w", err)
+				}
+				started, err := beginHelpPuppetTalk()
+				if err != nil {
+					return render.IndexedFrame{}, false, fmt.Errorf("run Help mousedown after DOG2.MOV: %w", err)
+				}
+				dog2OfferStage = dog2OfferIdle
+				if started {
+					dog2PhaseAfterHelp = true
+				} else {
+					gamePhase = 2
+				}
+				if *debug {
+					log.Printf("actor=dog offerobject=help-mousedown started=%t phase-pending=%t", started, dog2PhaseAfterHelp)
+				}
 				return currentFrame, true, nil
 			}
 		}
@@ -1519,10 +1637,11 @@ func run() error {
 			}
 			return currentFrame, true, nil
 		}
-		if dog2OfferPending {
-			dog2OfferPending, gamePhase = false, 2
+		if dog2OfferStage == dog2OfferMovie {
+			dog2OfferStage = dog2OfferDelayBeforeEast
+			dog2OfferUntil = scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) + 60
 			if *debug {
-				log.Printf("story=dog-bone phase=%d dog-visible=%t", gamePhase, dogVisibleState)
+				log.Printf("actor=dog offerobject=movie-complete wait=east frames=60")
 			}
 			return currentFrame, true, nil
 		}
@@ -1776,30 +1895,12 @@ func run() error {
 					}
 					return currentFrame, false, nil
 				}
-				if strings.EqualFold(actorName, "Help") && strings.EqualFold(string(view.Name[1:]), "Scene G15") && gameDay != 5 && helpInteractionStage == helpInteractionIdle {
-					camera := render.NativeActorCameraPosition(worldPoint)
-					playerPosition := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
-					distance := scripts.NativeActorDistance2D(helpActorPosition, playerPosition)
-					if distance < 384 {
-						if !scripts.NativeWalktopuppetAxisAligned(helpActorPosition, playerPosition) {
-							if *debug {
-								log.Printf("actor=help walktopuppet=blocked-axis-alignment actor=%v player=%v", helpActorPosition, playerPosition)
-							}
-							return currentFrame, false, nil
-						}
-						destination := [3]int16{playerPosition[0], playerPosition[1], 0}
-						routeHeading := render.NativeActorHeadingToPoint(helpActorPosition, destination)
-						helpReturnPosition = helpActorPosition
-						walk := scripts.NewNativeActorWalkJob(helpActorPosition, destination, routeHeading, helpWalkRate)
-						helpWalk, helpInteractionStage = &walk, helpInteractionMoving
-						helpTurnActive, actorPoses["help"] = false, "stand"
-						nativeLoops.Stop(2, "help")
-						if *debug {
-							log.Printf("actor=help walktopuppet distance=%d destination=%v heading=%d puppet=HELP1.PUP", distance, destination, routeHeading)
-						}
-						return currentFrame, true, nil
+				if strings.EqualFold(actorName, "Help") {
+					started, err := beginHelpPuppetTalk()
+					if err != nil {
+						return render.IndexedFrame{}, false, err
 					}
-					return currentFrame, false, nil
+					return currentFrame, started, nil
 				}
 				if sceneName, handlesClick := scripts.CastActorMouseDownScene(actorName); handlesClick {
 					nextView, found := nightSet.FindView(sceneName)
@@ -2043,7 +2144,7 @@ func run() error {
 				actorName, hit := render.HitTestWorldActors(projectedActors, point)
 				if hit && strings.EqualFold(actorName, "dog") && boneInInventory && boneOwner == "stranger" && gameDay != 5 {
 					boneInInventory, boneOwner, boneWorldProp.Visible = false, "none", false
-					dogVisibleState, dog2OfferPending = false, true
+					dogVisibleState, dog2OfferStage = false, dog2OfferMovie
 					nativeLoops.Stop(2, "dog")
 					if _, err := setWorldView("Scene G12", assets.SetDirectionNorth); err != nil {
 						return render.IndexedFrame{}, false, fmt.Errorf("prepare Dog offer scene: %w", err)
