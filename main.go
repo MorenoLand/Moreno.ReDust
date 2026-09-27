@@ -131,7 +131,10 @@ func run() error {
 		stage.Close()
 		return fmt.Errorf("read startup game position: %w", err)
 	}
-	gameClock, gameDay := 3, 1
+	gameClock, gameDay := scripts.NativeAdvanceClockFields(2, 1, 0)
+	if *debug {
+		log.Printf("game-time=day:%d clock:%d phase:0 source=NEW.FLT/advanceday", gameDay, gameClock)
+	}
 	propArchive, err := workspace.OpenPropArchive("DATA/HOUSE.PRP")
 	if err != nil {
 		stage.Close()
