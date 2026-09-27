@@ -1,8 +1,17 @@
 package scripts
 
+import "redust/assets"
+
 type SetObjectAction struct {
 	Object string
 	Movie  string
+}
+
+func NiteDogGateMovie(direction int16, day int, dogVisible bool) (string, bool) {
+	if direction != assets.SetDirectionNorth || day != 1 || !dogVisible {
+		return "", false
+	}
+	return "MOVIES/DOG1.MOV", true
 }
 
 func NiteNorthObjectAction(direction int16, point uint32, clock int) (SetObjectAction, bool) {

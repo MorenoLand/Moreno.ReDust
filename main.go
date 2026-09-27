@@ -805,8 +805,17 @@ func run() error {
 		return nil
 	}
 	var pendingMovement assets.SceneMove
+	var pendingSceneMovie string
 	var transition *render.BarndoorEffect
 	runErr := engine.Run(playback.CurrentFrame(), func() (render.IndexedFrame, bool, error) {
+		if playback == nil && transition == nil && pendingSceneMovie != "" {
+			name := pendingSceneMovie
+			pendingSceneMovie = ""
+			if err := startSceneMovie(name); err != nil {
+				return render.IndexedFrame{}, false, err
+			}
+			return playback.CurrentFrame(), true, nil
+		}
 		if playback == nil && transition == nil {
 			changed, err := runNativeScheduler(false)
 			if err != nil {
@@ -1000,10 +1009,28 @@ func run() error {
 			}
 			return
 		}
+		if pendingSceneMovie != "" {
+			return
+		}
 		if playback == nil {
 			if currentScene == 0 && transition == nil {
 				switch key {
 				case ebiten.KeyArrowUp:
+					dogVisible := false
+					for _, actor := range worldActors {
+						if strings.EqualFold(actor.Name, "dog") && actor.Visible {
+							dogVisible = true
+							break
+						}
+					}
+					if name, blocked := scripts.NiteDogGateMovie(worldPoint[2], gameDay, dogVisible); blocked {
+						pendingMovement = 0
+						pendingSceneMovie = name
+						if *debug {
+							log.Printf("event=NITE.SET/key-down dog-gate point=%v movie=%s", worldPoint, name)
+						}
+						return
+					}
 					pendingMovement = assets.SceneMoveStraight
 				case ebiten.KeyArrowLeft:
 					pendingMovement = assets.SceneMoveLeft
