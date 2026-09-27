@@ -443,7 +443,11 @@ func run() error {
 			return fmt.Errorf("open Leroy dialogue: %w", err)
 		}
 		leroyConversationBase = currentFrame
-		leroyConversationBase.Palette = backgroundFrame.Palette
+		palette, err := leroyPuppet.Palette()
+		if err != nil {
+			return fmt.Errorf("load Leroy PUP CLUT: %w", err)
+		}
+		leroyConversationBase.Palette = palette
 		frame, err := leroyDialogue.Start(leroyConversationBase, scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
 		if err != nil {
 			return fmt.Errorf("start Leroy bysign dialogue: %w", err)
@@ -486,8 +490,10 @@ func run() error {
 		if len(leroyActiveChoices) == 0 {
 			return fmt.Errorf("Leroy bysign reached its event wait with no enabled choices")
 		}
-		leroyChoiceBase, leroyChoicePressActive = currentFrame, false
-		leroyChoicePressIndex, leroyChoiceOutline = -1, -1
+		if leroyInteractionStage != leroyInteractionPuppetChoices {
+			leroyChoiceBase, leroyChoicePressActive = currentFrame, false
+			leroyChoicePressIndex, leroyChoiceOutline = -1, -1
+		}
 		if err := drawLeroyChoices(-1); err != nil {
 			return err
 		}

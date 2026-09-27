@@ -9,7 +9,7 @@ import (
 	"sync"
 
 	"golang.org/x/image/font"
-	"golang.org/x/image/font/gofont/goregular"
+	"golang.org/x/image/font/gofont/gobold"
 	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
 )
@@ -33,10 +33,9 @@ func DrawNativeSubtitle(frame IndexedFrame, text string) (IndexedFrame, error) {
 	draw.Draw(rgba, rgba.Bounds(), background, image.Point{}, draw.Src)
 	lines := nativeSubtitleLines(text, face)
 	white := image.NewUniform(color.RGBA{R: 255, G: 255, B: 255, A: 255})
-	baseline := face.Metrics().Ascent.Ceil()
 	drawer := font.Drawer{Dst: rgba, Src: white, Face: face}
 	for index, line := range lines {
-		drawer.Dot = fixed.P(8, 240+baseline+16*index)
+		drawer.Dot = fixed.P(8, 240+16*index)
 		drawer.DrawString(line)
 	}
 	frame.rgba = rgba
@@ -44,6 +43,9 @@ func DrawNativeSubtitle(frame IndexedFrame, text string) (IndexedFrame, error) {
 }
 
 func DrawNativePuppetChoices(frame IndexedFrame, choices []string) (IndexedFrame, error) {
+	if len(frame.Palette) <= 0xfa {
+		return IndexedFrame{}, fmt.Errorf("puppet choice text palette has %d entries, want at least 251", len(frame.Palette))
+	}
 	face, err := nativeSubtitleFace()
 	if err != nil {
 		return IndexedFrame{}, err
@@ -54,10 +56,10 @@ func DrawNativePuppetChoices(frame IndexedFrame, choices []string) (IndexedFrame
 	}
 	rgba := image.NewRGBA(background.Bounds())
 	draw.Draw(rgba, rgba.Bounds(), background, image.Point{}, draw.Src)
-	white := image.NewUniform(color.RGBA{R: 255, G: 255, B: 255, A: 255})
-	drawer := font.Drawer{Dst: rgba, Src: white, Face: face}
+	textColor := image.NewUniform(frame.Palette[0xfa])
+	drawer := font.Drawer{Dst: rgba, Src: textColor, Face: face}
 	for index, choice := range choices {
-		drawer.Dot = fixed.P(8, 280+24*index+face.Metrics().Ascent.Ceil())
+		drawer.Dot = fixed.P(8, 280+24*index)
 		drawer.DrawString(choice)
 	}
 	frame.rgba = rgba
@@ -93,7 +95,7 @@ func DrawNativePuppetChoiceBevel(frame IndexedFrame, index int) (IndexedFrame, e
 
 func nativeSubtitleFace() (font.Face, error) {
 	nativeSubtitleFont.once.Do(func() {
-		parsed, err := opentype.Parse(goregular.TTF)
+		parsed, err := opentype.Parse(gobold.TTF)
 		if err != nil {
 			nativeSubtitleFont.err = err
 			return

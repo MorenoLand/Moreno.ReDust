@@ -14,8 +14,13 @@ const puppetFrameSlotSize = 0x106
 const puppetFrameTableHeaderSize = 0x16
 const puppetFrameResourceListOffset = 0x1c
 const puppetFrameWidthLimit = 512
+const puppetViewportHeight = 264
 const puppetCueRowSize = 0x52
 const puppetCueSlotOffset = 0x10
+const puppetPaletteOffset = 0x3a
+const puppetPaletteEntrySize = 8
+
+var puppetRasterBase [puppetFrameWidthLimit]byte
 
 type PuppetFrame struct {
 	Width  int
@@ -148,6 +153,23 @@ func (p *Puppet) Resource(index uint32) ([]byte, error) {
 	return data, err
 }
 
+func (p *Puppet) Palette() (color.Palette, error) {
+	data, err := p.Resource(0)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) < puppetPaletteOffset+256*puppetPaletteEntrySize {
+		return nil, fmt.Errorf("puppet resource 0 has %d bytes, want at least %d for its CLUT", len(data), puppetPaletteOffset+256*puppetPaletteEntrySize)
+	}
+	palette := make(color.Palette, 256)
+	for index := range palette {
+		offset := puppetPaletteOffset + index*puppetPaletteEntrySize
+		palette[index] = color.RGBA{R: data[offset+3], G: data[offset+5], B: data[offset+7], A: 255}
+	}
+	palette[0], palette[255] = color.RGBA{A: 255}, color.RGBA{R: 255, G: 255, B: 255, A: 255}
+	return palette, nil
+}
+
 func (p *Puppet) CueTimeline(resource uint32) ([]PuppetCueRow, error) {
 	if p == nil || p.cache == nil {
 		return nil, fmt.Errorf("puppet is closed")
@@ -196,7 +218,7 @@ func (p *Puppet) DrawCue(canvas *PuppetCanvas, cue PuppetCueRow) error {
 	for slot, cueSlot := range cue.Slots {
 		if cueSlot.Frame < 0 {
 			if slot == 0 {
-				canvas.Fill(0)
+				canvas.Clear(0)
 			}
 			continue
 		}
@@ -315,6 +337,16 @@ func (c *PuppetCanvas) Fill(index byte) {
 	}
 }
 
+func (c *PuppetCanvas) Clear(index byte) {
+	if c == nil {
+		return
+	}
+	clip := c.clip
+	c.SetClip(image.Rect(0, 0, c.frame.Width, min(c.frame.Height, puppetViewportHeight)))
+	c.Fill(index)
+	c.SetClip(clip)
+}
+
 func clonePuppetRGBA(source *image.RGBA) *image.RGBA {
 	copy := image.NewRGBA(source.Bounds())
 	copy.Pix = append(copy.Pix[:0], source.Pix...)
@@ -326,17 +358,43 @@ func (c *PuppetCanvas) Draw(frame PuppetFrame, anchor image.Point) error {
 		return fmt.Errorf("puppet canvas is unavailable")
 	}
 	top := image.Pt(anchor.X-frame.Origin.X, anchor.Y-frame.Origin.Y)
-	for sourceY, encoded := range frame.Rows {
-		if err := c.drawPuppetRow(frame.Width, encoded, top.X, top.Y+sourceY); err != nil {
+	firstVisibleRow := 0
+	if top.Y < c.clip.Min.Y {
+		firstVisibleRow = min(c.clip.Min.Y-top.Y, len(frame.Rows))
+	}
+	for sourceY := 0; sourceY < firstVisibleRow; sourceY++ {
+		if err := c.drawPuppetRow(frame.Width, frame.Rows[sourceY], top.X, top.Y+sourceY, puppetRasterBase[:]); err != nil {
+			return fmt.Errorf("draw puppet scanline %d: %w", sourceY, err)
+		}
+	}
+	for sourceY := firstVisibleRow; sourceY < len(frame.Rows); sourceY++ {
+		y := top.Y + sourceY
+		if y >= c.clip.Max.Y || y >= c.frame.Height {
+			break
+		}
+		source := puppetRasterBase[:]
+		if sourceY > firstVisibleRow {
+			source = make([]byte, frame.Width)
+			for x := range source {
+				previousX := top.X + x
+				if previousX >= 0 && previousX < c.frame.Width {
+					source[x] = c.frame.Pixels[(y-1)*c.frame.Width+previousX]
+				}
+			}
+		}
+		if err := c.drawPuppetRow(frame.Width, frame.Rows[sourceY], top.X, y, source); err != nil {
 			return fmt.Errorf("draw puppet scanline %d: %w", sourceY, err)
 		}
 	}
 	return nil
 }
 
-func (c *PuppetCanvas) drawPuppetRow(width int, encoded []byte, left, y int) error {
+func (c *PuppetCanvas) drawPuppetRow(width int, encoded []byte, left, y int, source []byte) error {
 	if width < 1 {
 		return fmt.Errorf("scanline width %d is invalid", width)
+	}
+	if len(source) < width {
+		return fmt.Errorf("scanline source has %d pixels, want %d", len(source), width)
 	}
 	x, position := 0, 0
 	for x < width {
@@ -363,22 +421,25 @@ func (c *PuppetCanvas) drawPuppetRow(width int, encoded []byte, left, y int) err
 		}
 		for i := 0; i < run; i++ {
 			destinationX := left + x + i
-			if destinationX < 0 || destinationX >= c.frame.Width || y < 0 || y >= c.frame.Height || !image.Pt(destinationX, y).In(c.clip) {
-				continue
-			}
-			destination := y*c.frame.Width + destinationX
-			point := image.Pt(destinationX, y)
+			var value byte
 			switch operation {
 			case 0:
-				c.frame.Pixels[destination] = 0
-				c.setRGBA(point, 0)
+				value = source[x+i]
 			case 1:
+				continue
 			case 2:
-				c.frame.Pixels[destination] = repeated
-				c.setRGBA(point, repeated)
+				value = repeated
 			case 3:
-				c.frame.Pixels[destination] = encoded[position+i]
-				c.setRGBA(point, encoded[position+i])
+				value = encoded[position+i]
+			}
+			if y < c.clip.Min.Y && (operation == 2 || operation == 3) {
+				puppetRasterBase[x+i] = value
+			}
+			point := image.Pt(destinationX, y)
+			if destinationX >= 0 && destinationX < c.frame.Width && y >= 0 && y < c.frame.Height && point.In(c.clip) {
+				destination := y*c.frame.Width + destinationX
+				c.frame.Pixels[destination] = value
+				c.setRGBA(point, value)
 			}
 		}
 		if operation == 3 {
