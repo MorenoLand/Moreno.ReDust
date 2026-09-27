@@ -153,9 +153,33 @@ func run() error {
 		leroyInteractionMoving
 		leroyInteractionFacing
 		leroyInteractionPuppetPending
+		leroyInteractionPuppetSpeaking
+		leroyInteractionPuppetChoices
+		leroyInteractionReturning
 	)
 	leroyPhase, leroyInteractionStage := int16(0), leroyInteractionIdle
 	var leroyWalk *scripts.NativeActorWalkJob
+	var leroyReturnPosition [3]int16
+	var leroyPuppet *render.Puppet
+	var leroyPuppetTable assets.PuppetSpeechTable
+	var leroyDialogue *engine.PuppetDialogue
+	var leroyChoices, leroyActiveChoices []scripts.PuppetChoice
+	var leroyChoiceAnswered = map[int32]bool{}
+	var leroyChoicePressActive bool
+	var leroyChoicePressEvent int32
+	leroyChoicePressIndex, leroyChoiceOutline := -1, -1
+	var leroyDialogueRepeats, leroyDialogueReturns, leroyDialogueSetsPhase bool
+	var leroySkipDialogue bool
+	var leroyConversationBase render.IndexedFrame
+	var leroyChoiceBase render.IndexedFrame
+	defer func() {
+		if leroyDialogue != nil {
+			_ = leroyDialogue.Close()
+		}
+		if leroyPuppet != nil {
+			_ = leroyPuppet.Close()
+		}
+	}()
 	loadWorldActors := func(point [3]int16) ([]render.WorldActorSprite, error) {
 		actors := make([]render.WorldActorSprite, 0, 1)
 		for _, actor := range gangCast.Actors {
@@ -359,9 +383,175 @@ func run() error {
 		stageFrame, currentFrame = nextFrame, nextFrame
 		return nil
 	}
-	runNativeScheduler := func() (bool, error) {
+	openLeroyPuppet := func() error {
+		if leroyPuppet != nil {
+			return nil
+		}
+		puppet, err := render.OpenPuppet(workspace, "PUPPETS/LEROY.PUP")
+		if err != nil {
+			return err
+		}
+		cache, err := workspace.OpenResourceCache("PUPPETS/LEROY.PUP")
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		defer cache.Close()
+		lease, err := cache.Acquire(88)
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		scriptData, err := lease.Bytes()
+		if closeErr := lease.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		program, err := scripts.ParseProgram(scriptData)
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		calls, err := scripts.PuppetSpeechCalls(program, "bysign", scripts.LookupOpcode("puppetclear"))
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		choices, err := scripts.PuppetBevelChoices(program, "bysign")
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		table, err := workspace.OpenPuppetSpeechTable("PUPPETS/LEROY.PUP")
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		dialogue, err := engine.NewPuppetDialogue(puppet, table.Entries, calls, audioContext)
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		leroyPuppet, leroyPuppetTable, leroyDialogue, leroyChoices = puppet, table, dialogue, choices
+		return nil
+	}
+	startLeroyBySign := func() error {
+		if err := openLeroyPuppet(); err != nil {
+			return fmt.Errorf("open Leroy dialogue: %w", err)
+		}
+		leroyConversationBase = currentFrame
+		leroyConversationBase.Palette = backgroundFrame.Palette
+		frame, err := leroyDialogue.Start(leroyConversationBase, scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
+		if err != nil {
+			return fmt.Errorf("start Leroy bysign dialogue: %w", err)
+		}
+		currentFrame, stageFrame = frame, frame
+		leroyDialogueRepeats, leroyDialogueReturns, leroyDialogueSetsPhase = true, false, false
+		leroyInteractionStage = leroyInteractionPuppetSpeaking
+		if *debug {
+			log.Printf("puppet=leroy script=bysign lines=%d choices=%d", 3, len(leroyChoices))
+		}
+		return nil
+	}
+	drawLeroyChoices := func(outline int) error {
+		labels := make([]string, len(leroyActiveChoices))
+		for index, choice := range leroyActiveChoices {
+			labels[index] = choice.Text
+		}
+		choiceBackground := leroyChoiceBase
+		frame, err := leroyPuppet.ChoiceFrame(choiceBackground, leroyPuppetTable.PanelResource, labels)
+		if err != nil {
+			return fmt.Errorf("render Leroy choice panel: %w", err)
+		}
+		if outline >= 0 {
+			frame, err = render.DrawNativePuppetChoiceBevel(frame, outline)
+			if err != nil {
+				return fmt.Errorf("render Leroy choice bevel: %w", err)
+			}
+		}
+		currentFrame, stageFrame = frame, frame
+		leroyChoiceOutline = outline
+		return nil
+	}
+	showLeroyChoices := func() error {
+		leroyActiveChoices = leroyActiveChoices[:0]
+		for _, choice := range leroyChoices {
+			if !leroyChoiceAnswered[choice.EventID] {
+				leroyActiveChoices = append(leroyActiveChoices, choice)
+			}
+		}
+		if len(leroyActiveChoices) == 0 {
+			return fmt.Errorf("Leroy bysign reached its event wait with no enabled choices")
+		}
+		leroyChoiceBase, leroyChoicePressActive = currentFrame, false
+		leroyChoicePressIndex, leroyChoiceOutline = -1, -1
+		if err := drawLeroyChoices(-1); err != nil {
+			return err
+		}
+		leroyInteractionStage = leroyInteractionPuppetChoices
+		return nil
+	}
+	returnLeroyToStar := func() error {
+		if leroyPosition == leroyReturnPosition {
+			leroyInteractionStage = leroyInteractionIdle
+			return nil
+		}
+		heading := render.NativeActorHeadingToPoint(leroyPosition, leroyReturnPosition)
+		walk := scripts.NewNativeActorWalkJob(leroyPosition, leroyReturnPosition, heading, leroyWalkRate)
+		leroyWalk, leroyInteractionStage = &walk, leroyInteractionReturning
+		return nil
+	}
+	startLeroyResponse := func(event int32) error {
+		calls, found := scripts.LeroyBySignResponseCalls(event)
+		if !found {
+			return fmt.Errorf("Leroy bysign returned unsupported event %d", event)
+		}
+		if err := leroyDialogue.Close(); err != nil {
+			return err
+		}
+		dialogue, err := engine.NewPuppetDialogue(leroyPuppet, leroyPuppetTable.Entries, calls, audioContext)
+		if err != nil {
+			return err
+		}
+		leroyDialogue = dialogue
+		frame, err := leroyDialogue.Start(leroyConversationBase, scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
+		if err != nil {
+			return err
+		}
+		currentFrame, stageFrame = frame, frame
+		leroyChoiceAnswered[event] = true
+		switch event {
+		case 101:
+			leroyDialogueRepeats, leroyDialogueReturns = gameDay != 1, gameDay == 1
+		case 102:
+			leroyDialogueRepeats, leroyDialogueReturns = true, false
+		case 103, 104:
+			leroyDialogueRepeats, leroyDialogueReturns, leroyDialogueSetsPhase = false, true, true
+		}
+		leroyInteractionStage = leroyInteractionPuppetSpeaking
+		if *debug {
+			log.Printf("puppet=leroy event=%d response-lines=%d", event, len(calls))
+		}
+		return nil
+	}
+	finishLeroyDialogue := func() error {
+		if leroyDialogueSetsPhase {
+			leroyPhase = 1
+		}
+		if leroyDialogueRepeats {
+			return showLeroyChoices()
+		}
+		if leroyDialogueReturns {
+			return returnLeroyToStar()
+		}
+		return showLeroyChoices()
+	}
+	runNativeScheduler := func(serviceAmbient bool) (bool, error) {
 		displayChanged := false
-		status, err := nativeLoops.Pass(func(loop scripts.ScriptLoop) (uint16, error) {
+		status, err := nativeLoops.PassWhere(func(loop scripts.ScriptLoop) (uint16, error) {
 			switch loop.Callback {
 			case "toidle", "leroyidle":
 				dx, dy, dz := int(leroyPosition[0])-int(worldPoint[0]), int(leroyPosition[1])-int(worldPoint[1]), int(leroyPosition[2])-int(worldPoint[2])
@@ -407,14 +597,14 @@ func run() error {
 				return 0, fmt.Errorf("unknown native loop callback %q", loop.Callback)
 			}
 			return nativeLoops.Register(loop), nil
-		})
+		}, func(loop scripts.ScriptLoop) bool { return (loop.Callback == "nightfxs") == serviceAmbient })
 		if err != nil {
 			return false, err
 		}
 		if status != 0 {
 			return false, fmt.Errorf("native scene scheduler returned status %#x", status)
 		}
-		if actorTurnActive {
+		if !serviceAmbient && actorTurnActive {
 			actorHeadings["leroy"] = scripts.NativeTurnStep(actorHeadings["leroy"], actorTurnTargets["leroy"], leroyTurnRate)
 			actorTurnActive = actorHeadings["leroy"] != actorTurnTargets["leroy"]
 			displayChanged = displayChanged || currentScene == 0
@@ -449,6 +639,8 @@ func run() error {
 					if !actorTurnActive {
 						leroyInteractionStage = leroyInteractionPuppetPending
 					}
+				} else if leroyInteractionStage == leroyInteractionReturning {
+					leroyInteractionStage = leroyInteractionIdle
 				}
 			}
 		}
@@ -456,6 +648,56 @@ func run() error {
 			if err := refreshWorldScene(); err != nil {
 				return false, err
 			}
+		}
+		if leroyInteractionStage == leroyInteractionPuppetPending {
+			if err := startLeroyBySign(); err != nil {
+				return false, err
+			}
+			return true, nil
+		}
+		if leroyInteractionStage == leroyInteractionPuppetSpeaking {
+			if leroyDialogue == nil {
+				return false, fmt.Errorf("Leroy dialogue state is missing its puppet player")
+			}
+			frameTick := scripts.NativeFrameUnits(scripts.NativeTickMilliseconds())
+			var frame render.IndexedFrame
+			var changed bool
+			var err error
+			if leroySkipDialogue {
+				frame, changed, err = leroyDialogue.Skip()
+				leroySkipDialogue = false
+			} else {
+				frame, changed, err = leroyDialogue.Update(frameTick)
+			}
+			if err != nil {
+				return false, fmt.Errorf("advance Leroy dialogue: %w", err)
+			}
+			if changed {
+				currentFrame, stageFrame = frame, frame
+				if !leroyDialogue.Active() {
+					if err := finishLeroyDialogue(); err != nil {
+						return false, fmt.Errorf("finish Leroy dialogue: %w", err)
+					}
+				}
+				return true, nil
+			}
+			if displayChanged {
+				frame, err = leroyDialogue.Frame()
+				if err != nil {
+					return false, fmt.Errorf("refresh Leroy dialogue frame: %w", err)
+				}
+				currentFrame, stageFrame = frame, frame
+				return true, nil
+			}
+		}
+		if displayChanged && leroyInteractionStage == leroyInteractionPuppetChoices {
+			if err := showLeroyChoices(); err != nil {
+				return false, fmt.Errorf("refresh Leroy choice panel: %w", err)
+			}
+			return true, nil
+		}
+		if leroyInteractionStage == leroyInteractionReturning && leroyWalk == nil {
+			leroyInteractionStage = leroyInteractionIdle
 		}
 		return displayChanged, nil
 	}
@@ -494,7 +736,7 @@ func run() error {
 	var transition *render.BarndoorEffect
 	runErr := engine.Run(playback.CurrentFrame(), func() (render.IndexedFrame, bool, error) {
 		if playback == nil && transition == nil {
-			changed, err := runNativeScheduler()
+			changed, err := runNativeScheduler(false)
 			if err != nil {
 				return render.IndexedFrame{}, false, err
 			}
@@ -515,9 +757,10 @@ func run() error {
 				}
 				return render.IndexedFrame{}, false, nil
 			}
-			_, frameResource, hasView, err := nightSet.MovePoint(nextPoint, assets.SceneMoveStraight)
+			viewPoint := assets.SetView{DirectionID: uint16(nextPoint[0]), SceneID: uint16(nextPoint[1])}
+			frameResource, hasView, err := nightSet.BackgroundResourceForDirection(viewPoint, nextPoint[2])
 			if err != nil {
-				return render.IndexedFrame{}, false, fmt.Errorf("resolve NITE.SET view after movement: %w", err)
+				return render.IndexedFrame{}, false, fmt.Errorf("resolve NITE.SET directional background after movement: %w", err)
 			}
 			if !hasView {
 				frameResource = transitionResource
@@ -671,6 +914,20 @@ func run() error {
 		}
 		return stageFrame, true, nil
 	}, func(key ebiten.Key) {
+		if leroyInteractionStage == leroyInteractionPuppetSpeaking {
+			if key == ebiten.KeySpace || key == ebiten.KeyEscape || key == ebiten.KeyQ || key == ebiten.KeyPeriod {
+				leroySkipDialogue = true
+			}
+			return
+		}
+		if leroyInteractionStage == leroyInteractionPuppetChoices {
+			if key == ebiten.KeyEscape || key == ebiten.KeyQ || key == ebiten.KeyPeriod {
+				if err := returnLeroyToStar(); err != nil && *debug {
+					log.Printf("cancel Leroy choice: %v", err)
+				}
+			}
+			return
+		}
 		if playback == nil {
 			if currentScene == 0 && transition == nil {
 				switch key {
@@ -700,9 +957,27 @@ func run() error {
 			}
 			log.Printf("movie=%s skip-key=%s", movieNames[movieIndex], keyName)
 		}
-	}, func(point uint32) (render.IndexedFrame, bool, error) {
+	}, func(mouseEvent engine.MouseEvent) (render.IndexedFrame, bool, error) {
+		point := mouseEvent.Point
 		if playback != nil || transition != nil {
 			return render.IndexedFrame{}, false, nil
+		}
+		if leroyInteractionStage == leroyInteractionPuppetChoices {
+			if mouseEvent.Button != ebiten.MouseButtonLeft {
+				return currentFrame, false, nil
+			}
+			event, found := scripts.NativePuppetChoiceAt(point, leroyActiveChoices)
+			if !found {
+				return currentFrame, false, nil
+			}
+			leroyChoicePressActive, leroyChoicePressEvent = true, event
+			for index, choice := range leroyActiveChoices {
+				if choice.EventID == event {
+					leroyChoicePressIndex = index
+					break
+				}
+			}
+			return currentFrame, false, nil
 		}
 		handler, hit, err := stage.HitTestSceneHandler(currentScene, point)
 		if err != nil {
@@ -816,6 +1091,7 @@ func run() error {
 						}
 						destination := [3]int16{playerPosition[0] + vector[0], playerPosition[1] + vector[1], 0}
 						routeHeading := render.NativeActorHeadingToPoint(leroyPosition, destination)
+						leroyReturnPosition = leroyPosition
 						walk := scripts.NewNativeActorWalkJob(leroyPosition, destination, routeHeading, leroyWalkRate)
 						leroyWalk, actorTurnActive, leroyInteractionStage = &walk, false, leroyInteractionMoving
 						actorPoses["leroy"] = "stand"
@@ -900,6 +1176,9 @@ func run() error {
 		}
 		currentScene, currentPixels = target, nextPixels
 		if action.VisualEffect != 0 {
+			if _, err := runNativeScheduler(true); err != nil {
+				return render.IndexedFrame{}, false, err
+			}
 			effectName := ""
 			switch action.VisualEffect {
 			case scripts.LookupOpcode("barndooropen"):
@@ -928,6 +1207,43 @@ func run() error {
 			log.Printf("scene transition=%s resource=%d", stage.Scenes[target].Name[1:], stage.Scenes[target].Fields[1])
 		}
 		return nextFrame, true, nil
+	}, func(state engine.MouseState) (render.IndexedFrame, bool, error) {
+		if leroyInteractionStage != leroyInteractionPuppetChoices || !leroyChoicePressActive {
+			return currentFrame, false, nil
+		}
+		event, found := scripts.NativePuppetChoiceAt(state.Point, leroyActiveChoices)
+		outline := -1
+		if found && event == leroyChoicePressEvent {
+			outline = leroyChoicePressIndex
+		}
+		if state.LeftDown {
+			if outline == leroyChoiceOutline {
+				return currentFrame, false, nil
+			}
+			if err := drawLeroyChoices(outline); err != nil {
+				return render.IndexedFrame{}, false, err
+			}
+			return currentFrame, true, nil
+		}
+		if state.LeftReleased {
+			selected := outline >= 0 && outline == leroyChoicePressIndex
+			selectedEvent := leroyChoicePressEvent
+			leroyChoicePressActive, leroyChoicePressIndex = false, -1
+			if selected {
+				if err := startLeroyResponse(selectedEvent); err != nil {
+					return render.IndexedFrame{}, false, fmt.Errorf("run Leroy choice %d: %w", selectedEvent, err)
+				}
+				return currentFrame, true, nil
+			}
+			if leroyChoiceOutline >= 0 {
+				if err := drawLeroyChoices(-1); err != nil {
+					return render.IndexedFrame{}, false, err
+				}
+				return currentFrame, true, nil
+			}
+			return currentFrame, false, nil
+		}
+		return currentFrame, false, nil
 	})
 	soundCloseErr := soundBank.Close()
 	closeErr := stage.Close()

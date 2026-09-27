@@ -34,6 +34,10 @@ func (s *LoopScheduler) Register(loop ScriptLoop) uint16 {
 }
 
 func (s *LoopScheduler) Pass(dispatch LoopDispatch) (uint16, error) {
+	return s.PassWhere(dispatch, nil)
+}
+
+func (s *LoopScheduler) PassWhere(dispatch LoopDispatch, service func(ScriptLoop) bool) (uint16, error) {
 	if s == nil {
 		return 0, fmt.Errorf("loop scheduler is unavailable")
 	}
@@ -41,7 +45,7 @@ func (s *LoopScheduler) Pass(dispatch LoopDispatch) (uint16, error) {
 		return 0, fmt.Errorf("loop scheduler dispatcher is unavailable")
 	}
 	for i, slot := range s.slots {
-		if slot == nil || slot.Paused {
+		if slot == nil || slot.Paused || service != nil && !service(*slot) {
 			continue
 		}
 		slot.Remaining--
