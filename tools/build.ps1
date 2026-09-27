@@ -42,11 +42,19 @@ if ($Target -in @('all','wasm')) {
 	try {
 		$env:GOOS='js'
 		$env:GOARCH='wasm'
-		& go build -o (Join-Path $webPath 'redust.wasm') .
+		& go build -trimpath -ldflags='-s -w' -o (Join-Path $webPath 'redust.wasm') .
 		if ($LASTEXITCODE -ne 0) { throw "WebAssembly build failed with exit code $LASTEXITCODE" }
 	} finally {
 		if ($null -eq $previousGoOS) { Remove-Item Env:GOOS -ErrorAction SilentlyContinue } else { $env:GOOS=$previousGoOS }
 		if ($null -eq $previousGoARCH) { Remove-Item Env:GOARCH -ErrorAction SilentlyContinue } else { $env:GOARCH=$previousGoARCH }
 	}
+	$wasmFile=Join-Path $webPath 'redust.wasm'
+	$compressedWasmFile=Join-Path $webPath 'redust.wasm.gz'
+	$wasmStream=[System.IO.File]::OpenRead($wasmFile)
+	$compressedStream=[System.IO.File]::Create($compressedWasmFile)
+	try {
+		$gzipStream=[System.IO.Compression.GZipStream]::new($compressedStream,[System.IO.Compression.CompressionLevel]::Optimal)
+		try { $wasmStream.CopyTo($gzipStream) } finally { $gzipStream.Dispose() }
+	} finally { $wasmStream.Dispose(); $compressedStream.Dispose() }
 	Write-Host 'Built WebAssembly bundle: bin/web'
 }

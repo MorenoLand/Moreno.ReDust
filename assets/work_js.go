@@ -3,20 +3,17 @@
 package assets
 
 import (
-	"bytes"
-	"fmt"
-	"io"
 	"net/http"
 	"net/url"
+	"sync"
 	"syscall/js"
 )
 
-type memoryAsset struct{ *bytes.Reader }
-
-func (memoryAsset) Close() error { return nil }
-
 func NewWorkspace(work string) (Workspace, error) {
 	_ = work
+	var cacheMu sync.Mutex
+	rangeFiles := make(map[string]*rangeAsset)
+	rangeChunks := newRangeChunkCache(32 << 20)
 	open := func(name string) (AssetFile, int64, error) {
 		location := js.Global().Get("location").Get("href").String()
 		base, err := url.Parse(location)
@@ -26,19 +23,28 @@ func NewWorkspace(work string) (Workspace, error) {
 		base.Path = webAssetPath(base.Path, name)
 		base.RawQuery = ""
 		base.Fragment = ""
-		response, err := http.Get(base.String())
+		location = base.String()
+		cacheMu.Lock()
+		cached := rangeFiles[location]
+		cacheMu.Unlock()
+		if cached != nil {
+			return cached, cached.size, nil
+		}
+		asset, size, err := openHTTPRangeAsset(location, http.DefaultClient, rangeChunks)
 		if err != nil {
 			return nil, 0, err
 		}
-		defer response.Body.Close()
-		if response.StatusCode != http.StatusOK {
-			return nil, 0, fmt.Errorf("fetch asset %q: %s", name, response.Status)
+		if asset.ranged {
+			cacheMu.Lock()
+			if cached = rangeFiles[location]; cached == nil {
+				rangeFiles[location] = asset
+			} else {
+				asset = cached
+				size = cached.size
+			}
+			cacheMu.Unlock()
 		}
-		data, err := io.ReadAll(response.Body)
-		if err != nil {
-			return nil, 0, err
-		}
-		return memoryAsset{bytes.NewReader(data)}, int64(len(data)), nil
+		return asset, size, nil
 	}
 	return Workspace{WorkDir: ".", AssetRoot: "assets", open: open, registry: ProcessResourceCacheRegistry()}, nil
 }

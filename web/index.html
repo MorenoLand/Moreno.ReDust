@@ -11,7 +11,23 @@
 <script src="wasm_exec.js"></script>
 <script>
 const go = new Go();
-WebAssembly.instantiateStreaming(fetch("redust.wasm"), go.importObject).then(result => go.run(result.instance));
+async function loadReDust() {
+	if (typeof DecompressionStream !== "undefined") {
+		try {
+			const response = await fetch("redust.wasm.gz");
+			if (response.ok) {
+				const stream = response.headers.get("Content-Encoding")?.includes("gzip") ? response.body : response.body.pipeThrough(new DecompressionStream("gzip"));
+				const wasm = new Response(stream, { headers: { "Content-Type": "application/wasm" } });
+				const result = await WebAssembly.instantiateStreaming(wasm, go.importObject);
+				go.run(result.instance);
+				return;
+			}
+		} catch (_) {}
+	}
+	const result = await WebAssembly.instantiateStreaming(fetch("redust.wasm"), go.importObject);
+	go.run(result.instance);
+}
+loadReDust();
 </script>
 </body>
 </html>
