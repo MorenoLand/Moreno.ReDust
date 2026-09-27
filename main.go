@@ -143,6 +143,7 @@ func run() error {
 		return fmt.Errorf("resolve G15 Leroy position: %w", err)
 	}
 	actorPoses := map[string]string{"leroy": "stand", "dog": "stand"}
+	actorHeadings := map[string]int16{"leroy": 0, "dog": 32}
 	loadWorldActors := func(point [3]int16) ([]render.WorldActorSprite, error) {
 		actors := make([]render.WorldActorSprite, 0, 1)
 		for _, actor := range gangCast.Actors {
@@ -153,7 +154,7 @@ func run() error {
 				return nil, fmt.Errorf("NITE.SET has no town.leroy1 coordinate")
 			}
 			actor.Position, actor.Located = leroyPosition, true
-			sprite, err := render.LoadCastActorFrame(workspace, gangCast, actor, actorPoses["leroy"], 0, 1100, render.NativeActorViewAngle(leroyPosition, point, 0))
+			sprite, err := render.LoadCastActorFrame(workspace, gangCast, actor, actorPoses["leroy"], 0, 1100, render.NativeActorViewAngle(leroyPosition, point, actorHeadings["leroy"]))
 			if err != nil {
 				return nil, fmt.Errorf("load G15 actor %s: %w", actor.Name, err)
 			}
@@ -163,7 +164,7 @@ func run() error {
 			if gameClock != 3 || !strings.EqualFold(actor.Name, "dog") {
 				continue
 			}
-			sprite, err := render.LoadCastActorFrame(workspace, extraCast, actor, actorPoses["dog"], 0, 880, render.NativeActorViewAngle(actor.Position, point, 32))
+			sprite, err := render.LoadCastActorFrame(workspace, extraCast, actor, actorPoses["dog"], 0, 880, render.NativeActorViewAngle(actor.Position, point, actorHeadings["dog"]))
 			if err != nil {
 				return nil, fmt.Errorf("load G15 actor %s: %w", actor.Name, err)
 			}
@@ -350,6 +351,23 @@ func run() error {
 		displayChanged := false
 		status, err := nativeLoops.Pass(func(loop scripts.ScriptLoop) (uint16, error) {
 			switch loop.Callback {
+			case "toidle", "leroyidle":
+				dx, dy, dz := int(leroyPosition[0])-int(worldPoint[0]), int(leroyPosition[1])-int(worldPoint[1]), int(leroyPosition[2])-int(worldPoint[2])
+				step, found := scripts.LeroyIdleStep(loop.Callback, dx*dx+dy*dy+dz*dz < 384*384, true, 0, &nativeRandom)
+				if !found {
+					return 0, fmt.Errorf("unknown Leroy idle callback %q", loop.Callback)
+				}
+				actorPoses["leroy"], loop.Callback, loop.Remaining = step.Pose, step.Callback, step.Remaining
+				if step.TurnToCamera {
+					actorHeadings["leroy"] = render.NativeActorHeadingToCamera(leroyPosition, worldPoint)
+				}
+				if step.TurnBy != 0 {
+					actorHeadings["leroy"] = int16((int(actorHeadings["leroy"]) + int(step.TurnBy) + 256) % 256)
+				}
+				displayChanged = displayChanged || currentScene == 0
+				if *debug {
+					log.Printf("actor=leroy pose=%s next=%s ticks=%d heading=%d", step.Pose, step.Callback, step.Remaining, actorHeadings["leroy"])
+				}
 			case "nightfxs":
 				cue, found := scripts.NightWildlifeCue(currentThemeName, &nativeRandom)
 				if found {
@@ -574,6 +592,9 @@ func run() error {
 			tick := scripts.NativeTickMilliseconds()
 			nativeRandom = scripts.NewNativeRandom(scripts.NativeRandomSeed(tick))
 			if gameClock == 3 {
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "leroy", Callback: "leroyidle", Remaining: 20}); status != 0 {
+					return render.IndexedFrame{}, false, fmt.Errorf("register Leroy idle loop returned status %#x", status)
+				}
 				step, found := scripts.DogIdleStep("doright", &nativeRandom)
 				if found {
 					actorPoses["dog"] = step.Pose

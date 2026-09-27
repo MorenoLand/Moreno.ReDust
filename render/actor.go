@@ -37,6 +37,16 @@ var nativeActorAtan = func() [512]uint8 {
 }()
 
 func NativeActorViewAngle(position [3]int16, point [3]int16, heading int16) int16 {
+	bearing := NativeActorHeadingToCamera(position, point)
+	return int16((int(heading) - int(bearing) + 256) % 256)
+}
+
+func NativeActorHeadingToCamera(position [3]int16, point [3]int16) int16 {
+	camera := NativeActorCameraPosition(point)
+	return nativeActorBearing(camera[0]-int(position[0]), camera[1]-int(position[1]))
+}
+
+func NativeActorCameraPosition(point [3]int16) [3]int {
 	forwardX, forwardY := 0, -1
 	switch point[2] {
 	case assets.SetDirectionSouth:
@@ -46,9 +56,8 @@ func NativeActorViewAngle(position [3]int16, point [3]int16, heading int16) int1
 	case assets.SetDirectionWest:
 		forwardX, forwardY = -1, 0
 	}
-	cameraX, cameraY := int(point[0])*256+128-64*forwardX, int(point[1])*256+128-64*forwardY
-	bearing := nativeActorBearing(cameraX-int(position[0]), cameraY-int(position[1]))
-	return int16((int(heading) - int(bearing) + 256) % 256)
+	centerX, centerY := int(point[0])*256+128, int(point[1])*256+128
+	return [3]int{centerX - 64*forwardX, centerY - 64*forwardY, 62}
 }
 
 func nativeActorBearing(dx, dy int) int16 {
@@ -218,8 +227,8 @@ func projectWorldActor(background IndexedFrame, point [3]int16, actor WorldActor
 	case assets.SetDirectionWest:
 		forwardX, forwardY = -1, 0
 	}
-	centerX, centerY := int(point[0])*256+128, int(point[1])*256+128
-	cameraX, cameraY, cameraZ := centerX-64*forwardX, centerY-64*forwardY, 62
+	camera := NativeActorCameraPosition(point)
+	cameraX, cameraY, cameraZ := camera[0], camera[1], camera[2]
 	deltaX, deltaY := int(actor.Position[0])-cameraX, int(actor.Position[1])-cameraY
 	depth := deltaX*forwardX + deltaY*forwardY
 	lateral := deltaX*(-forwardY) + deltaY*forwardX

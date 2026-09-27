@@ -148,9 +148,10 @@ func (w Workspace) CastPoseFrame(c Cast, actor CastActor, poseName string, frame
 		return CastPoseFrameInfo{}, false, fmt.Errorf("cast pose descriptor %d is shorter than its frame tables", descriptor)
 	}
 	sequenceCount := int(binary.LittleEndian.Uint16(data[0x70:0x72]))
-	if sequenceCount < 1 || frameIndex < 0 || frameIndex >= sequenceCount || 0x2e+frameIndex*2+2 > len(data) {
+	if sequenceCount < 1 || frameIndex < 0 || 0x2e+sequenceCount*2 > len(data) {
 		return CastPoseFrameInfo{}, false, fmt.Errorf("cast pose descriptor %d frame index %d is outside %d sequences", descriptor, frameIndex, sequenceCount)
 	}
+	frameIndex %= sequenceCount
 	sequence := int16(binary.LittleEndian.Uint16(data[0x2e+frameIndex*2:0x30+frameIndex*2])) - 1
 	variantCount := uint64(binary.LittleEndian.Uint32(data[0x72:0x76]))
 	if variantCount > uint64((len(data)-0x76)/0x2c) {
