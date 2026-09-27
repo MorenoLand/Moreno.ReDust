@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"image"
+	"image/color"
 
 	ebitenaudio "github.com/hajimehoshi/ebiten/v2/audio"
 
@@ -14,6 +15,7 @@ import (
 type PuppetDialogue struct {
 	puppet     *render.Puppet
 	context    *ebitenaudio.Context
+	palette    color.Palette
 	lines      []assets.PuppetSpeech
 	lineIndex  int
 	background render.IndexedFrame
@@ -42,13 +44,18 @@ func NewPuppetDialogue(puppet *render.Puppet, table []assets.PuppetSpeech, names
 		}
 		lines[index] = speech
 	}
-	return &PuppetDialogue{puppet: puppet, context: context, lines: lines}, nil
+	palette, err := puppet.Palette()
+	if err != nil {
+		return nil, fmt.Errorf("load puppet CLUT: %w", err)
+	}
+	return &PuppetDialogue{puppet: puppet, context: context, palette: palette, lines: lines}, nil
 }
 
 func (d *PuppetDialogue) Start(background render.IndexedFrame, frame uint32) (render.IndexedFrame, error) {
 	if d == nil || d.puppet == nil || d.active {
 		return render.IndexedFrame{}, fmt.Errorf("puppet dialogue cannot start in its current state")
 	}
+	background.Palette = d.palette
 	d.background, d.lineIndex, d.currentCue = background, 0, -1
 	d.setBaseClip()
 	canvas, err := d.newCanvas()
@@ -130,11 +137,6 @@ func (d *PuppetDialogue) Skip() (render.IndexedFrame, bool, error) {
 		return render.IndexedFrame{}, false, err
 	}
 	d.active = false
-	canvas, err := d.newCanvas()
-	if err != nil {
-		return render.IndexedFrame{}, false, err
-	}
-	d.canvas = canvas
 	image, err := d.frame()
 	return image, true, err
 }
@@ -209,11 +211,7 @@ func (d *PuppetDialogue) newCanvas() (*render.PuppetCanvas, error) {
 }
 
 func (d *PuppetDialogue) setBaseClip() {
-	height := 264
-	if d.lineIndex < len(d.lines) && len(d.lines[d.lineIndex].Subtitle) > 0 {
-		height = 224
-	}
-	d.baseClip = image.Rect(0, 0, d.background.Width, min(d.background.Height, height))
+	d.baseClip = image.Rect(0, 0, d.background.Width, min(d.background.Height, 264))
 	if d.canvas != nil {
 		d.canvas.SetClip(d.baseClip)
 	}

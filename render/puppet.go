@@ -233,6 +233,11 @@ func (p *Puppet) DrawCue(canvas *PuppetCanvas, cue PuppetCueRow) error {
 }
 
 func (p *Puppet) ChoiceFrame(background IndexedFrame, panelResource uint32, choices []string) (IndexedFrame, error) {
+	palette, err := p.Palette()
+	if err != nil {
+		return IndexedFrame{}, fmt.Errorf("load puppet CLUT: %w", err)
+	}
+	background.Palette = palette
 	canvas, err := NewPuppetCanvas(background)
 	if err != nil {
 		return IndexedFrame{}, err
