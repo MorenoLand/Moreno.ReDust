@@ -106,6 +106,7 @@ func (g *Game) pointerPoint() uint32 {
 }
 func (g *Game) Draw(screen *ebiten.Image) {
 	op := &ebiten.DrawImageOptions{}
+	op.Filter = ebiten.FilterNearest
 	op.GeoM.Scale(float64(screen.Bounds().Dx())/float64(g.width), float64(screen.Bounds().Dy())/float64(g.height))
 	screen.DrawImage(g.frame, op)
 }
@@ -132,6 +133,7 @@ func Run(frame render.IndexedFrame, onUpdate func() (render.IndexedFrame, bool, 
 	ebiten.SetWindowTitle("ReDust")
 	ebiten.SetWindowSize(game.width, game.height)
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
+	ebiten.SetScreenFilterEnabled(false)
 	if err := ebiten.RunGame(game); err != nil {
 		return fmt.Errorf("run Ebitengine: %w", err)
 	}
