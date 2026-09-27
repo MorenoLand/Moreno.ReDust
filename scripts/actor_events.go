@@ -37,6 +37,22 @@ func DogIdleStep(callback string, random *NativeRandom) (ActorIdleStep, bool) {
 	}
 }
 
+func HelpIdleStep(callback string, near, dogVisible bool, day int, phase int16) (ActorIdleStep, bool) {
+	if !strings.EqualFold(callback, "helpidle") {
+		return ActorIdleStep{}, false
+	}
+	step := ActorIdleStep{Pose: "stand", Callback: "helpidle", Remaining: 19}
+	if near {
+		step.TurnToCamera = true
+		if day == 1 && !dogVisible && phase < 3 {
+			step.Attention = 5
+		}
+	} else {
+		step.ClearAttention = true
+	}
+	return step, true
+}
+
 func LeroyIdleStep(callback string, near, starred bool, phase int16, random *NativeRandom) (ActorIdleStep, bool) {
 	switch strings.ToLower(callback) {
 	case "toidle":

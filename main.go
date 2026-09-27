@@ -183,12 +183,19 @@ func run() error {
 		stage.Close()
 		return fmt.Errorf("resolve G15 Leroy position: %w", err)
 	}
-	actorPoses := map[string]string{"leroy": "stand", "dog": "stand"}
-	actorHeadings := map[string]int16{"leroy": 0, "dog": 32}
-	actorTurnTargets := map[string]int16{"leroy": 0}
-	actorTurnActive := false
+	helpPosition, hasHelp, err := nightSet.ResolveLocation("town.help")
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("resolve G15 Help position: %w", err)
+	}
+	actorPoses := map[string]string{"leroy": "stand", "dog": "stand", "help": "stand"}
+	actorHeadings := map[string]int16{"leroy": 0, "dog": 32, "help": 0}
+	actorTurnTargets := map[string]int16{"leroy": 0, "help": 0}
+	actorTurnActive, helpTurnActive := false, false
+	helpVisible, helpPhase, helpAttention := false, int16(0), int32(0)
 	const leroyTurnRate int16 = 7
 	const leroyWalkRate int16 = 3
+	const helpTurnRate int16 = 7
 	const (
 		leroyInteractionIdle uint8 = iota
 		leroyInteractionMoving
@@ -222,20 +229,29 @@ func run() error {
 		}
 	}()
 	loadWorldActors := func(point [3]int16) ([]render.WorldActorSprite, error) {
-		actors := make([]render.WorldActorSprite, 0, 1)
+		actors := make([]render.WorldActorSprite, 0, 2)
 		for _, actor := range gangCast.Actors {
-			if !strings.EqualFold(actor.Name, "leroy") {
-				continue
+			if strings.EqualFold(actor.Name, "leroy") {
+				if !hasLeroy {
+					return nil, fmt.Errorf("NITE.SET has no town.leroy1 coordinate")
+				}
+				actor.Position, actor.Located = leroyPosition, true
+				sprite, err := render.LoadCastActorFrame(workspace, gangCast, actor, actorPoses["leroy"], 0, 1100, render.NativeActorViewAngle(leroyPosition, point, actorHeadings["leroy"]), 32)
+				if err != nil {
+					return nil, fmt.Errorf("load G15 actor %s: %w", actor.Name, err)
+				}
+				actors = append(actors, sprite)
+			} else if helpVisible && strings.EqualFold(actor.Name, "help") {
+				if !hasHelp {
+					return nil, fmt.Errorf("NITE.SET has no town.help coordinate")
+				}
+				actor.Position, actor.Located = helpPosition, true
+				sprite, err := render.LoadCastActorFrame(workspace, gangCast, actor, actorPoses["help"], 0, 1450, render.NativeActorViewAngle(helpPosition, point, actorHeadings["help"]), 32)
+				if err != nil {
+					return nil, fmt.Errorf("load G15 actor %s: %w", actor.Name, err)
+				}
+				actors = append(actors, sprite)
 			}
-			if !hasLeroy {
-				return nil, fmt.Errorf("NITE.SET has no town.leroy1 coordinate")
-			}
-			actor.Position, actor.Located = leroyPosition, true
-			sprite, err := render.LoadCastActorFrame(workspace, gangCast, actor, actorPoses["leroy"], 0, 1100, render.NativeActorViewAngle(leroyPosition, point, actorHeadings["leroy"]), 32)
-			if err != nil {
-				return nil, fmt.Errorf("load G15 actor %s: %w", actor.Name, err)
-			}
-			actors = append(actors, sprite)
 		}
 		for _, actor := range townActors {
 			if gameDay != 1 || !strings.EqualFold(actor.Name, "dog") {
@@ -433,6 +449,47 @@ func run() error {
 		}
 		worldActors, projectedActors = actors, projected
 		stageFrame, currentFrame = nextFrame, nextFrame
+		return nil
+	}
+	setupHelpActor := func() error {
+		if !hasHelp {
+			return fmt.Errorf("GANG.CST Help setup has no town.help coordinate")
+		}
+		if !helpVisible {
+			actorHeadings["help"] = 0
+		}
+		helpVisible, actorPoses["help"] = true, "stand"
+		nativeLoops.Stop(2, "help")
+		camera := render.NativeActorCameraPosition(worldPoint)
+		player := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
+		dogVisible := false
+		for _, actor := range worldActors {
+			if strings.EqualFold(actor.Name, "dog") && actor.Visible {
+				dogVisible = true
+				break
+			}
+		}
+		step, found := scripts.HelpIdleStep("helpidle", scripts.NativeActorDistance2D(helpPosition, player) < 384, dogVisible, gameDay, helpPhase)
+		if !found {
+			return fmt.Errorf("unknown Help idle callback")
+		}
+		actorPoses["help"] = step.Pose
+		if step.ClearAttention {
+			helpAttention = 0
+		}
+		if step.Attention != 0 {
+			helpAttention = step.Attention
+		}
+		if step.TurnToCamera {
+			actorTurnTargets["help"] = render.NativeActorHeadingToCamera(helpPosition, worldPoint)
+			helpTurnActive = actorHeadings["help"] != actorTurnTargets["help"]
+		}
+		if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "help", Callback: step.Callback, Remaining: step.Remaining}); status != 0 {
+			return fmt.Errorf("register Help idle loop returned status %#x", status)
+		}
+		if *debug {
+			log.Printf("actor=help setup=dog point=%v pose=%s callback=%s ticks=%d attention=%d", helpPosition, step.Pose, step.Callback, step.Remaining, helpAttention)
+		}
 		return nil
 	}
 	openLeroyPuppet := func() error {
@@ -665,6 +722,36 @@ func run() error {
 				if *debug {
 					log.Printf("actor=dog pose=%s next=%s ticks=%d", step.Pose, step.Callback, step.Remaining)
 				}
+			case "helpidle":
+				camera := render.NativeActorCameraPosition(worldPoint)
+				player := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
+				dogVisible := false
+				for _, actor := range worldActors {
+					if strings.EqualFold(actor.Name, "dog") && actor.Visible {
+						dogVisible = true
+						break
+					}
+				}
+				step, found := scripts.HelpIdleStep(loop.Callback, scripts.NativeActorDistance2D(helpPosition, player) < 384, dogVisible, gameDay, helpPhase)
+				if !found {
+					return 0, fmt.Errorf("unknown Help idle callback %q", loop.Callback)
+				}
+				previousPose := actorPoses["help"]
+				actorPoses["help"], loop.Callback, loop.Remaining = step.Pose, step.Callback, step.Remaining
+				if step.ClearAttention {
+					helpAttention = 0
+				}
+				if step.Attention != 0 {
+					helpAttention = step.Attention
+				}
+				if step.TurnToCamera {
+					actorTurnTargets["help"] = render.NativeActorHeadingToCamera(helpPosition, worldPoint)
+					helpTurnActive = actorHeadings["help"] != actorTurnTargets["help"]
+				}
+				displayChanged = displayChanged || currentScene == 0 && previousPose != step.Pose
+				if *debug {
+					log.Printf("actor=help pose=%s next=%s ticks=%d attention=%d", step.Pose, step.Callback, step.Remaining, helpAttention)
+				}
 			default:
 				return 0, fmt.Errorf("unknown native loop callback %q", loop.Callback)
 			}
@@ -688,6 +775,14 @@ func run() error {
 				if *debug {
 					log.Printf("actor=leroy interaction=puppet pending file=PUPPETS/LEROY.PUP")
 				}
+			}
+		}
+		if !serviceAmbient && helpTurnActive {
+			actorHeadings["help"] = scripts.NativeTurnStep(actorHeadings["help"], actorTurnTargets["help"], helpTurnRate)
+			helpTurnActive = actorHeadings["help"] != actorTurnTargets["help"]
+			displayChanged = displayChanged || currentScene == 0
+			if *debug {
+				log.Printf("actor=help turn heading=%d target=%d active=%t", actorHeadings["help"], actorTurnTargets["help"], helpTurnActive)
 			}
 		}
 		if leroyWalk != nil {
@@ -806,6 +901,7 @@ func run() error {
 	}
 	var pendingMovement assets.SceneMove
 	var pendingSceneMovie string
+	var dogMovieNeedsHelp bool
 	var transition *render.BarndoorEffect
 	runErr := engine.Run(playback.CurrentFrame(), func() (render.IndexedFrame, bool, error) {
 		if playback == nil && transition == nil && pendingSceneMovie != "" {
@@ -947,6 +1043,16 @@ func run() error {
 		}
 		playback = nil
 		currentFrame = stageFrame
+		if dogMovieNeedsHelp {
+			dogMovieNeedsHelp = false
+			if err := setupHelpActor(); err != nil {
+				return render.IndexedFrame{}, false, fmt.Errorf("setup Help after DOG1.MOV: %w", err)
+			}
+			if err := refreshWorldScene(); err != nil {
+				return render.IndexedFrame{}, false, fmt.Errorf("show Help after DOG1.MOV: %w", err)
+			}
+			return currentFrame, true, nil
+		}
 		if *debug {
 			log.Printf("startup movies complete; scene=%s", stage.Scenes[currentScene].Name[1:])
 		}
@@ -1028,6 +1134,7 @@ func run() error {
 					if name, blocked := scripts.NiteDogGateMovie(worldPoint[2], gameDay, dogVisible); blocked {
 						pendingMovement = 0
 						pendingSceneMovie = name
+						dogMovieNeedsHelp = true
 						if *debug {
 							log.Printf("event=NITE.SET/key-down dog-gate point=%v movie=%s", worldPoint, name)
 						}
