@@ -22,11 +22,15 @@ type WorldActorSprite struct {
 }
 
 type ProjectedWorldActor struct {
-	Name   string
-	Depth  int
-	Bounds image.Rectangle
-	pixels []byte
-	mask   []bool
+	Name                string
+	Depth               int
+	Bounds              image.Rectangle
+	pixels              []byte
+	mask                []bool
+	propHitMask         []bool
+	propHitSourceWidth  int
+	propHitSourceHeight int
+	propHitStride       int
 }
 
 var nativeActorAtan = func() [512]uint8 {
@@ -187,6 +191,10 @@ func LoadCastActorFrame(workspace assets.Workspace, cast assets.Cast, actor asse
 }
 
 func CompositeWorldActors(background IndexedFrame, point [3]int16, actors []WorldActorSprite) (IndexedFrame, []ProjectedWorldActor, error) {
+	return CompositeWorldActorsAndProps(background, point, "", actors, nil)
+}
+
+func CompositeWorldActorsAndProps(background IndexedFrame, point [3]int16, activeSet string, actors []WorldActorSprite, props []WorldPropSprite) (IndexedFrame, []ProjectedWorldActor, error) {
 	projected := make([]ProjectedWorldActor, 0, len(actors))
 	for _, actor := range actors {
 		if !actor.Visible {
@@ -198,6 +206,15 @@ func CompositeWorldActors(background IndexedFrame, point [3]int16, actors []Worl
 		}
 		if found {
 			projected = append(projected, projectedActor)
+		}
+	}
+	for _, prop := range props {
+		projectedProp, found, err := projectWorldProp(background, point, activeSet, prop)
+		if err != nil {
+			return IndexedFrame{}, nil, err
+		}
+		if found {
+			projected = append(projected, projectedProp)
 		}
 	}
 	if len(projected) == 0 {
@@ -238,6 +255,14 @@ func HitTestWorldActors(actors []ProjectedWorldActor, point image.Point) (string
 			continue
 		}
 		x, y := point.X-actor.Bounds.Min.X, point.Y-actor.Bounds.Min.Y
+		if actor.propHitMask != nil {
+			sourceX, sourceY := x*actor.propHitSourceWidth/actor.Bounds.Dx(), y*actor.propHitSourceHeight/actor.Bounds.Dy()
+			index := sourceX*actor.propHitStride + sourceY
+			if sourceX >= 0 && sourceX < actor.propHitSourceWidth && sourceY >= 0 && sourceY < actor.propHitSourceHeight && index >= 0 && index < len(actor.propHitMask) && actor.propHitMask[index] {
+				return actor.Name, true
+			}
+			continue
+		}
 		if actor.mask[y*actor.Bounds.Dx()+x] {
 			return actor.Name, true
 		}

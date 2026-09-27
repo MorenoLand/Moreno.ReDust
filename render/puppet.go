@@ -328,6 +328,22 @@ func CompositePuppetFrame(background IndexedFrame, frame PuppetFrame, anchor ima
 	return canvas.Frame(), nil
 }
 
+func HitTestPuppetFrame(frame PuppetFrame, anchor, point image.Point) (bool, error) {
+	if frame.Width < 1 || frame.Height < 1 {
+		return false, fmt.Errorf("invalid puppet frame dimensions %dx%d", frame.Width, frame.Height)
+	}
+	top := image.Pt(anchor.X-frame.Origin.X, anchor.Y-frame.Origin.Y)
+	x, y := point.X-top.X, point.Y-top.Y
+	if x < 0 || y < 0 || x >= frame.Width || y >= frame.Height {
+		return false, nil
+	}
+	_, mask, err := decodeWorldActorFrame(frame)
+	if err != nil {
+		return false, err
+	}
+	return mask[y*frame.Width+x], nil
+}
+
 func (p *Puppet) DrawResource(canvas *PuppetCanvas, resource uint32, anchor image.Point) error {
 	if canvas == nil {
 		return fmt.Errorf("puppet canvas is unavailable")

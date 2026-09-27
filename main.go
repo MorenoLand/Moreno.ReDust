@@ -132,6 +132,7 @@ func run() error {
 		return fmt.Errorf("read startup game position: %w", err)
 	}
 	gameClock, gameDay := scripts.NativeAdvanceClockFields(2, 1, 0)
+	gamePhase, dogVisibleState := int16(0), gameDay == 1
 	if *debug {
 		log.Printf("game-time=day:%d clock:%d phase:0 source=NEW.FLT/advanceday", gameDay, gameClock)
 	}
@@ -141,6 +142,36 @@ func run() error {
 		return fmt.Errorf("open prop archive: %w", err)
 	}
 	defer propArchive.Close()
+	inventoryArchive, err := workspace.OpenPropArchive("DATA/INVEN.PRP")
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("open inventory prop archive: %w", err)
+	}
+	defer inventoryArchive.Close()
+	bonePosition, hasBone, err := nightSet.ResolveLocation("town.bone")
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("resolve NITE.SET Bone position: %w", err)
+	}
+	if !hasBone {
+		stage.Close()
+		return fmt.Errorf("NITE.SET has no town.bone coordinate")
+	}
+	boneSmallView, err := inventoryArchive.View("Bone", "small")
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("resolve Bone small view: %w", err)
+	}
+	boneLargeView, err := inventoryArchive.View("Bone", "large")
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("resolve Bone large view: %w", err)
+	}
+	ringLargeView, err := inventoryArchive.View("Ring", "large")
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("resolve Ring large view: %w", err)
+	}
 	avatarView, err := propArchive.View("avatar", "gossip")
 	if err != nil {
 		stage.Close()
@@ -195,6 +226,7 @@ func run() error {
 	helpVisible, helpPhase, helpAttention := false, int16(0), int32(0)
 	const leroyTurnRate int16 = 7
 	const leroyWalkRate int16 = 3
+	const helpWalkRate int16 = 3
 	const helpTurnRate int16 = 7
 	const (
 		leroyInteractionIdle uint8 = iota
@@ -204,6 +236,16 @@ func run() error {
 		leroyInteractionPuppetSpeaking
 		leroyInteractionPuppetChoices
 		leroyInteractionReturning
+	)
+	const (
+		helpInteractionIdle uint8 = iota
+		helpInteractionMoving
+		helpInteractionFacing
+		helpInteractionPuppetPending
+		helpInteractionPuppetSpeaking
+		helpInteractionPuppetChoices
+		helpInteractionPuppetDelay
+		helpInteractionReturning
 	)
 	leroyPhase, leroyInteractionStage := int16(0), leroyInteractionIdle
 	var leroyWalk *scripts.NativeActorWalkJob
@@ -220,6 +262,35 @@ func run() error {
 	var leroySkipDialogue bool
 	var leroyConversationBase render.IndexedFrame
 	var leroyChoiceBase render.IndexedFrame
+	helpInteractionStage := helpInteractionIdle
+	helpActorPosition, helpReturnPosition := helpPosition, helpPosition
+	var helpWalk *scripts.NativeActorWalkJob
+	var helpPuppet *render.Puppet
+	var helpPuppetTable assets.PuppetSpeechTable
+	var helpPuppetProgram scripts.Program
+	var helpDialogue *engine.PuppetDialogue
+	var helpDialogueSkip bool
+	var helpConversationBase, helpChoiceBase render.IndexedFrame
+	var helpActiveChoices []scripts.PuppetChoice
+	var helpPage string
+	var helpChoicePressActive bool
+	var helpChoicePressEvent int32
+	helpChoicePressIndex, helpChoiceOutline := -1, -1
+	var helpSpeechStages []scripts.HelpSpeechStage
+	var helpSpeechStageIndex int
+	var helpPendingResult scripts.HelpChoiceResult
+	var helpDelayUntil uint32
+	var helpDelayReady bool
+	var helpActorValue int32
+	var helpInitialPage bool
+	boneWorldProp := render.WorldPropSprite{Name: "Bone", Set: "town", Position: bonePosition, Heading: 32, Scale: 1200, Archive: inventoryArchive, View: boneSmallView}
+	boneOwner := "none"
+	var boneInventoryFrame render.PuppetFrame
+	var boneInInventory bool
+	var ringInventoryFrame render.PuppetFrame
+	var ringInInventory bool
+	var boneDragging bool
+	var boneDragLast image.Point
 	defer func() {
 		if leroyDialogue != nil {
 			_ = leroyDialogue.Close()
@@ -227,9 +298,18 @@ func run() error {
 		if leroyPuppet != nil {
 			_ = leroyPuppet.Close()
 		}
+		if helpDialogue != nil {
+			_ = helpDialogue.Close()
+		}
+		if helpPuppet != nil {
+			_ = helpPuppet.Close()
+		}
 	}()
+	compositeWorld := func(background render.IndexedFrame, point [3]int16, actors []render.WorldActorSprite) (render.IndexedFrame, []render.ProjectedWorldActor, error) {
+		return render.CompositeWorldActorsAndProps(background, point, "town", actors, []render.WorldPropSprite{boneWorldProp})
+	}
 	loadWorldActors := func(point [3]int16) ([]render.WorldActorSprite, error) {
-		actors := make([]render.WorldActorSprite, 0, 2)
+		actors := make([]render.WorldActorSprite, 0, 3)
 		for _, actor := range gangCast.Actors {
 			if strings.EqualFold(actor.Name, "leroy") {
 				if !hasLeroy {
@@ -245,8 +325,8 @@ func run() error {
 				if !hasHelp {
 					return nil, fmt.Errorf("NITE.SET has no town.help coordinate")
 				}
-				actor.Position, actor.Located = helpPosition, true
-				sprite, err := render.LoadCastActorFrame(workspace, gangCast, actor, actorPoses["help"], 0, 1450, render.NativeActorViewAngle(helpPosition, point, actorHeadings["help"]), 32)
+				actor.Position, actor.Located = helpActorPosition, true
+				sprite, err := render.LoadCastActorFrame(workspace, gangCast, actor, actorPoses["help"], 0, 1450, render.NativeActorViewAngle(helpActorPosition, point, actorHeadings["help"]), 32)
 				if err != nil {
 					return nil, fmt.Errorf("load G15 actor %s: %w", actor.Name, err)
 				}
@@ -254,7 +334,7 @@ func run() error {
 			}
 		}
 		for _, actor := range townActors {
-			if gameDay != 1 || !strings.EqualFold(actor.Name, "dog") {
+			if !dogVisibleState || gameDay != 1 || !strings.EqualFold(actor.Name, "dog") {
 				continue
 			}
 			sprite, err := render.LoadCastActorFrame(workspace, extraCast, actor, actorPoses["dog"], 0, 880, render.NativeActorViewAngle(actor.Position, point, actorHeadings["dog"]), 32)
@@ -302,7 +382,7 @@ func run() error {
 		stage.Close()
 		return err
 	}
-	worldBackground, projectedActors, err := render.CompositeWorldActors(backgroundFrame, worldPoint, worldActors)
+	worldBackground, projectedActors, err := compositeWorld(backgroundFrame, worldPoint, worldActors)
 	if err != nil {
 		stage.Close()
 		return fmt.Errorf("render G15 actors: %w", err)
@@ -316,7 +396,17 @@ func run() error {
 		if gameClock == 3 {
 			degree = 0
 		}
-		return render.CompositePuppetFrame(frame, avatarFrames[degree], image.Pt(456, 328))
+		frame, err = render.CompositePuppetFrame(frame, avatarFrames[degree], image.Pt(456, 328))
+		if err != nil {
+			return render.IndexedFrame{}, err
+		}
+		if boneInInventory && !boneDragging {
+			return render.CompositePuppetFrame(frame, boneInventoryFrame, image.Pt(316, 320))
+		}
+		if ringInInventory && !boneDragging {
+			return render.CompositePuppetFrame(frame, ringInventoryFrame, image.Pt(316, 320))
+		}
+		return frame, nil
 	}
 	stageFrame, err := composeMainPanel(worldBackground, frame)
 	if err != nil {
@@ -435,7 +525,7 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		worldBackground, projected, err := render.CompositeWorldActors(backgroundFrame, worldPoint, actors)
+		worldBackground, projected, err := compositeWorld(backgroundFrame, worldPoint, actors)
 		if err != nil {
 			return fmt.Errorf("refresh NITE actors: %w", err)
 		}
@@ -451,10 +541,66 @@ func run() error {
 		stageFrame, currentFrame = nextFrame, nextFrame
 		return nil
 	}
+	setWorldView := func(sceneName string, direction int16) (render.IndexedFrame, error) {
+		nextView, found := nightSet.FindView(sceneName)
+		if !found {
+			return render.IndexedFrame{}, fmt.Errorf("NITE.SET has no view %q", sceneName)
+		}
+		nextPoint := [3]int16{int16(nextView.DirectionID), int16(nextView.SceneID), direction}
+		frameResource, found, err := nightSet.BackgroundResourceForDirection(nextView, direction)
+		if err != nil || !found {
+			if err != nil {
+				return render.IndexedFrame{}, fmt.Errorf("resolve %s background: %w", sceneName, err)
+			}
+			return render.IndexedFrame{}, fmt.Errorf("%s has no background for direction %d", sceneName, direction)
+		}
+		backgroundData, err := nightSet.Resource(frameResource)
+		if err != nil {
+			return render.IndexedFrame{}, fmt.Errorf("read %s background resource %d: %w", sceneName, frameResource, err)
+		}
+		backgroundPixels, decodeErr := render.DecodeMoviePixels(backgroundData, nil)
+		if len(backgroundPixels.Pixels) == 0 {
+			return render.IndexedFrame{}, fmt.Errorf("decode %s background resource %d: %w", sceneName, frameResource, decodeErr)
+		}
+		if decodeErr != nil && *debug {
+			log.Printf("scene=%s resource=%d partial-frame: %v", sceneName, frameResource, decodeErr)
+		}
+		nextBackground, err := render.StageFrame(&assets.Stage{Width: uint16(backgroundPixels.Width), Height: uint16(backgroundPixels.Height), PaletteRaw: nightSet.Palette()}, backgroundPixels.Pixels)
+		if err != nil {
+			return render.IndexedFrame{}, fmt.Errorf("render %s background: %w", sceneName, err)
+		}
+		nextActors, err := loadWorldActors(nextPoint)
+		if err != nil {
+			return render.IndexedFrame{}, err
+		}
+		nextWorldBackground, nextProjectedActors, err := compositeWorld(nextBackground, nextPoint, nextActors)
+		if err != nil {
+			return render.IndexedFrame{}, fmt.Errorf("render %s actors: %w", sceneName, err)
+		}
+		panel, err := render.StageFrame(stage, currentPixels.Pixels)
+		if err != nil {
+			return render.IndexedFrame{}, fmt.Errorf("render mainpanel over %s: %w", sceneName, err)
+		}
+		nextFrame, err := composeMainPanel(nextWorldBackground, panel)
+		if err != nil {
+			return render.IndexedFrame{}, fmt.Errorf("compose %s scene: %w", sceneName, err)
+		}
+		view, worldPoint, backgroundFrame = nextView, nextPoint, nextBackground
+		worldActors, projectedActors = nextActors, nextProjectedActors
+		stageFrame, currentFrame = nextFrame, nextFrame
+		if *debug {
+			log.Printf("scene=%s direction=%d frame-resource=%d", view.Name[1:], worldPoint[2], frameResource)
+			for _, actor := range projectedActors {
+				log.Printf("world-actor=%s depth=%d bounds=%d,%d,%d,%d", actor.Name, actor.Depth, actor.Bounds.Min.X, actor.Bounds.Min.Y, actor.Bounds.Max.X, actor.Bounds.Max.Y)
+			}
+		}
+		return nextFrame, nil
+	}
 	setupHelpActor := func() error {
 		if !hasHelp {
 			return fmt.Errorf("GANG.CST Help setup has no town.help coordinate")
 		}
+		helpActorPosition = helpPosition
 		if !helpVisible {
 			actorHeadings["help"] = 0
 		}
@@ -469,7 +615,7 @@ func run() error {
 				break
 			}
 		}
-		step, found := scripts.HelpIdleStep("helpidle", scripts.NativeActorDistance2D(helpPosition, player) < 384, dogVisible, gameDay, helpPhase)
+		step, found := scripts.HelpIdleStep("helpidle", scripts.NativeActorDistance2D(helpActorPosition, player) < 384, dogVisible, gameDay, helpPhase)
 		if !found {
 			return fmt.Errorf("unknown Help idle callback")
 		}
@@ -488,7 +634,7 @@ func run() error {
 			return fmt.Errorf("register Help idle loop returned status %#x", status)
 		}
 		if *debug {
-			log.Printf("actor=help setup=dog point=%v pose=%s callback=%s ticks=%d attention=%d", helpPosition, step.Pose, step.Callback, step.Remaining, helpAttention)
+			log.Printf("actor=help setup=dog point=%v pose=%s callback=%s ticks=%d attention=%d", helpActorPosition, step.Pose, step.Callback, step.Remaining, helpAttention)
 		}
 		return nil
 	}
@@ -557,7 +703,7 @@ func run() error {
 				dialogueActors = append(dialogueActors, actor)
 			}
 		}
-		dialogueBackground, _, err := render.CompositeWorldActors(backgroundFrame, worldPoint, dialogueActors)
+		dialogueBackground, _, err := compositeWorld(backgroundFrame, worldPoint, dialogueActors)
 		if err != nil {
 			return fmt.Errorf("hide Leroy world sprite for dialogue: %w", err)
 		}
@@ -678,6 +824,226 @@ func run() error {
 		}
 		return showLeroyChoices()
 	}
+	openHelpPuppet := func() error {
+		if helpPuppet != nil {
+			return nil
+		}
+		puppet, err := render.OpenPuppet(workspace, "PUPPETS/HELP1.PUP")
+		if err != nil {
+			return err
+		}
+		cache, err := workspace.OpenResourceCache("PUPPETS/HELP1.PUP")
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		defer cache.Close()
+		lease, err := cache.Acquire(33)
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		scriptData, err := lease.Bytes()
+		if closeErr := lease.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		program, err := scripts.ParseProgram(scriptData)
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		table, err := workspace.OpenPuppetSpeechTable("PUPPETS/HELP1.PUP")
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		helpPuppet, helpPuppetTable, helpPuppetProgram = puppet, table, program
+		return nil
+	}
+	drawHelpChoices := func(outline int) error {
+		labels := make([]string, len(helpActiveChoices))
+		for index, choice := range helpActiveChoices {
+			labels[index] = choice.Text
+		}
+		frame, err := helpPuppet.ChoiceFrame(helpChoiceBase, helpPuppetTable.PanelResource, labels)
+		if err != nil {
+			return fmt.Errorf("render Help choice panel: %w", err)
+		}
+		if outline >= 0 {
+			frame, err = render.DrawNativePuppetChoiceBevel(frame, outline)
+			if err != nil {
+				return fmt.Errorf("render Help choice bevel: %w", err)
+			}
+		}
+		currentFrame, stageFrame = frame, frame
+		helpChoiceOutline = outline
+		return nil
+	}
+	showHelpChoices := func(page string) error {
+		choices, err := scripts.PuppetBevelChoices(helpPuppetProgram, page)
+		if err != nil {
+			return err
+		}
+		if len(choices) == 0 {
+			return fmt.Errorf("HELP1.PUP %s reached its event wait with no choices", page)
+		}
+		helpPage, helpActiveChoices = page, choices
+		helpChoiceBase, helpChoicePressActive = currentFrame, false
+		helpChoicePressIndex, helpChoiceOutline = -1, -1
+		if err := drawHelpChoices(-1); err != nil {
+			return err
+		}
+		helpInteractionStage = helpInteractionPuppetChoices
+		return nil
+	}
+	startHelpSpeechStage := func() error {
+		stage := helpSpeechStages[helpSpeechStageIndex]
+		if stage.DelayBefore > 0 && !helpDelayReady {
+			helpDelayUntil = scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) + stage.DelayBefore
+			helpInteractionStage = helpInteractionPuppetDelay
+			return nil
+		}
+		helpDelayReady = false
+		if helpDialogue != nil {
+			if err := helpDialogue.Close(); err != nil {
+				return err
+			}
+		}
+		dialogue, err := engine.NewPuppetDialogue(helpPuppet, helpPuppetTable.Entries, stage.Lines, audioContext)
+		if err != nil {
+			return err
+		}
+		helpDialogue = dialogue
+		frame, err := helpDialogue.Start(helpConversationBase, scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
+		if err != nil {
+			return err
+		}
+		currentFrame, stageFrame = frame, frame
+		helpInteractionStage = helpInteractionPuppetSpeaking
+		if *debug {
+			log.Printf("puppet=help page=%s lines=%d", helpPage, len(stage.Lines))
+		}
+		return nil
+	}
+	startHelpPage := func(page string) error {
+		lines, err := scripts.PuppetSpeechCalls(helpPuppetProgram, page, scripts.LookupOpcode("puppetclear"))
+		if err != nil {
+			return err
+		}
+		helpPage, helpInitialPage = page, true
+		if len(lines) == 0 {
+			helpInitialPage = false
+			return showHelpChoices(page)
+		}
+		helpSpeechStages, helpSpeechStageIndex = []scripts.HelpSpeechStage{{Lines: lines}}, 0
+		return startHelpSpeechStage()
+	}
+	startHelpPuppet := func() error {
+		if err := openHelpPuppet(); err != nil {
+			return fmt.Errorf("open Help dialogue: %w", err)
+		}
+		dialogueActors := make([]render.WorldActorSprite, 0, len(worldActors))
+		for _, actor := range worldActors {
+			if !strings.EqualFold(actor.Name, "Help") {
+				dialogueActors = append(dialogueActors, actor)
+			}
+		}
+		dialogueBackground, _, err := compositeWorld(backgroundFrame, worldPoint, dialogueActors)
+		if err != nil {
+			return fmt.Errorf("hide Help world sprite for dialogue: %w", err)
+		}
+		dialoguePanel, err := render.StageFrame(stage, currentPixels.Pixels)
+		if err != nil {
+			return fmt.Errorf("render Help dialogue panel: %w", err)
+		}
+		helpConversationBase, err = composeMainPanel(dialogueBackground, dialoguePanel)
+		if err != nil {
+			return fmt.Errorf("compose Help dialogue background: %w", err)
+		}
+		palette, err := helpPuppet.Palette()
+		if err != nil {
+			return fmt.Errorf("load Help PUP CLUT: %w", err)
+		}
+		helpConversationBase.Palette = palette
+		helpPendingResult = scripts.HelpChoiceResult{}
+		helpDelayReady, helpInitialPage = false, false
+		return startHelpPage(scripts.HelpPuppetEntryPage(helpPhase, dogVisibleState))
+	}
+	returnHelpToStar := func() error {
+		if helpActorPosition == helpReturnPosition {
+			actorPoses["help"], helpTurnActive = "stand", false
+			helpActorValue++
+			helpInteractionStage = helpInteractionIdle
+			nativeLoops.Stop(2, "help")
+			return refreshWorldScene()
+		}
+		heading := render.NativeActorHeadingToPoint(helpActorPosition, helpReturnPosition)
+		walk := scripts.NewNativeActorWalkJob(helpActorPosition, helpReturnPosition, heading, helpWalkRate)
+		helpWalk, helpInteractionStage = &walk, helpInteractionReturning
+		return nil
+	}
+	finishHelpChoice := func() error {
+		if helpPendingResult.SetPhase {
+			helpPhase = helpPendingResult.Phase
+		}
+		if helpPendingResult.GiveRing {
+			info, err := ringLargeView.FrameInfo(0, 0)
+			if err != nil {
+				return fmt.Errorf("select Ring inventory frame: %w", err)
+			}
+			data, err := inventoryArchive.Resource(info.Resource)
+			if err != nil {
+				return fmt.Errorf("read Ring inventory frame %d: %w", info.Resource, err)
+			}
+			ringInventoryFrame, err = render.DecodePuppetFrame(data)
+			if err != nil {
+				return fmt.Errorf("decode Ring inventory frame %d: %w", info.Resource, err)
+			}
+			ringInInventory = true
+			if err := soundBank.Play(audioContext, "inven", 1); err != nil {
+				return fmt.Errorf("play Ring inventory sound: %w", err)
+			}
+		}
+		if helpPendingResult.HideHelp {
+			helpVisible = false
+			nativeLoops.Stop(2, "help")
+		}
+		if helpPendingResult.GiveBone {
+			boneWorldProp.Position, boneWorldProp.Heading, boneWorldProp.Scale = bonePosition, 32, 1200
+			boneWorldProp.View, boneWorldProp.Visible, boneOwner = boneSmallView, true, "none"
+			if *debug {
+				log.Printf("prop=Bone setup=street owner=%s view=small point=%v degree=%d scale=%d", boneOwner, boneWorldProp.Position, boneWorldProp.Heading, boneWorldProp.Scale)
+			}
+			if err := refreshWorldScene(); err != nil {
+				return fmt.Errorf("show Bone after Help dialogue: %w", err)
+			}
+		}
+		if helpPendingResult.NextPage != "" {
+			nextPage := helpPendingResult.NextPage
+			helpPendingResult = scripts.HelpChoiceResult{}
+			return startHelpPage(nextPage)
+		}
+		if helpPendingResult.Complete {
+			return returnHelpToStar()
+		}
+		return fmt.Errorf("HELP1.PUP page %s has no verified continuation", helpPage)
+	}
+	startHelpChoice := func(event int32) error {
+		result, found := scripts.HelpPuppetChoice(helpPage, event)
+		if !found {
+			return fmt.Errorf("HELP1.PUP %s returned unsupported event %d", helpPage, event)
+		}
+		helpPendingResult, helpSpeechStages, helpSpeechStageIndex = result, result.Speech, 0
+		helpInitialPage, helpDelayReady = false, false
+		if len(helpSpeechStages) == 0 {
+			return finishHelpChoice()
+		}
+		return startHelpSpeechStage()
+	}
 	runNativeScheduler := func(serviceAmbient bool) (bool, error) {
 		displayChanged := false
 		status, err := nativeLoops.PassWhere(func(loop scripts.ScriptLoop) (uint16, error) {
@@ -787,6 +1153,9 @@ func run() error {
 				log.Printf("actor=help turn heading=%d target=%d active=%t", actorHeadings["help"], actorTurnTargets["help"], helpTurnActive)
 			}
 		}
+		if !serviceAmbient && helpInteractionStage == helpInteractionFacing && !helpTurnActive {
+			helpInteractionStage = helpInteractionPuppetPending
+		}
 		if leroyWalk != nil {
 			previousPosition, previousHeading := leroyPosition, actorHeadings["leroy"]
 			var walking bool
@@ -813,10 +1182,104 @@ func run() error {
 				}
 			}
 		}
+		if helpWalk != nil {
+			previousPosition, previousHeading := helpActorPosition, actorHeadings["help"]
+			var walking bool
+			helpActorPosition, actorHeadings["help"], walking = helpWalk.Pass(helpActorPosition, actorHeadings["help"], helpTurnRate)
+			displayChanged = displayChanged || helpActorPosition != previousPosition || actorHeadings["help"] != previousHeading
+			if *debug && (helpActorPosition != previousPosition || actorHeadings["help"] != previousHeading) {
+				log.Printf("actor=help walk point=%v heading=%d active=%t", helpActorPosition, actorHeadings["help"], walking)
+			}
+			if !walking {
+				helpWalk = nil
+				if helpInteractionStage == helpInteractionMoving {
+					currentDegree, found := render.NativeCurrentDegree(worldPoint[2])
+					if !found {
+						return false, fmt.Errorf("NITE.SET orientation %d has no native currentdeg", worldPoint[2])
+					}
+					actorTurnTargets["help"] = int16((int(currentDegree) + 128) % 256)
+					helpTurnActive = actorHeadings["help"] != actorTurnTargets["help"]
+					helpInteractionStage = helpInteractionFacing
+					if !helpTurnActive {
+						helpInteractionStage = helpInteractionPuppetPending
+					}
+				} else if helpInteractionStage == helpInteractionReturning {
+					actorPoses["help"], helpTurnActive = "stand", false
+					helpActorValue++
+					helpInteractionStage = helpInteractionIdle
+					nativeLoops.Stop(2, "help")
+					displayChanged = true
+				}
+			}
+		}
 		if displayChanged {
 			if err := refreshWorldScene(); err != nil {
 				return false, err
 			}
+		}
+		if !serviceAmbient && helpInteractionStage == helpInteractionPuppetPending {
+			if err := startHelpPuppet(); err != nil {
+				return false, err
+			}
+			return true, nil
+		}
+		if !serviceAmbient && helpInteractionStage == helpInteractionPuppetSpeaking {
+			if helpDialogue == nil {
+				return false, fmt.Errorf("Help dialogue state is missing its puppet player")
+			}
+			frameTick := scripts.NativeFrameUnits(scripts.NativeTickMilliseconds())
+			var frame render.IndexedFrame
+			var changed bool
+			var err error
+			if helpDialogueSkip {
+				frame, changed, err = helpDialogue.Skip()
+				helpDialogueSkip = false
+			} else {
+				frame, changed, err = helpDialogue.Update(frameTick)
+			}
+			if err != nil {
+				return false, fmt.Errorf("advance Help dialogue: %w", err)
+			}
+			if changed {
+				currentFrame, stageFrame = frame, frame
+				if !helpDialogue.Active() {
+					if helpInitialPage {
+						helpInitialPage = false
+						if err := showHelpChoices(helpPage); err != nil {
+							return false, fmt.Errorf("show Help choices: %w", err)
+						}
+					} else if helpSpeechStageIndex+1 < len(helpSpeechStages) {
+						helpSpeechStageIndex++
+						if err := startHelpSpeechStage(); err != nil {
+							return false, fmt.Errorf("start Help speech stage: %w", err)
+						}
+					} else if err := finishHelpChoice(); err != nil {
+						return false, fmt.Errorf("finish Help choice: %w", err)
+					}
+				}
+				return true, nil
+			}
+			if displayChanged {
+				frame, err = helpDialogue.Frame()
+				if err != nil {
+					return false, fmt.Errorf("refresh Help dialogue frame: %w", err)
+				}
+				currentFrame, stageFrame = frame, frame
+				return true, nil
+			}
+		}
+		if !serviceAmbient && helpInteractionStage == helpInteractionPuppetDelay && scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) >= helpDelayUntil {
+			helpDelayReady = true
+			if err := startHelpSpeechStage(); err != nil {
+				return false, fmt.Errorf("continue delayed Help speech: %w", err)
+			}
+			return true, nil
+		}
+		if !serviceAmbient && displayChanged && helpInteractionStage == helpInteractionPuppetChoices {
+			if err := showHelpChoices(helpPage); err != nil {
+				return false, fmt.Errorf("refresh Help choice panel: %w", err)
+			}
+			return true, nil
 		}
 		if leroyInteractionStage == leroyInteractionPuppetPending {
 			if err := startLeroyBySign(); err != nil {
@@ -904,6 +1367,7 @@ func run() error {
 	var pendingMovement assets.SceneMove
 	var pendingSceneMovie string
 	var dogMovieNeedsHelp bool
+	var dog2OfferPending bool
 	var transition *render.BarndoorEffect
 	runErr := engine.Run(playback.CurrentFrame(), func() (render.IndexedFrame, bool, error) {
 		if playback == nil && transition == nil && pendingSceneMovie != "" {
@@ -963,7 +1427,7 @@ func run() error {
 			if err != nil {
 				return render.IndexedFrame{}, false, err
 			}
-			nextWorldBackground, nextProjectedActors, err := render.CompositeWorldActors(nextBackground, nextPoint, nextActors)
+			nextWorldBackground, nextProjectedActors, err := compositeWorld(nextBackground, nextPoint, nextActors)
 			if err != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("render NITE.SET actors: %w", err)
 			}
@@ -1055,6 +1519,13 @@ func run() error {
 			}
 			return currentFrame, true, nil
 		}
+		if dog2OfferPending {
+			dog2OfferPending, gamePhase = false, 2
+			if *debug {
+				log.Printf("story=dog-bone phase=%d dog-visible=%t", gamePhase, dogVisibleState)
+			}
+			return currentFrame, true, nil
+		}
 		if *debug {
 			log.Printf("startup movies complete; scene=%s", stage.Scenes[currentScene].Name[1:])
 		}
@@ -1105,6 +1576,18 @@ func run() error {
 		}
 		return stageFrame, true, nil
 	}, func(key ebiten.Key) {
+		if helpInteractionStage == helpInteractionPuppetSpeaking {
+			if key == ebiten.KeySpace || key == ebiten.KeyEscape || key == ebiten.KeyQ || key == ebiten.KeyPeriod {
+				helpDialogueSkip = true
+			}
+			return
+		}
+		if helpInteractionStage != helpInteractionIdle && helpInteractionStage != helpInteractionPuppetChoices {
+			return
+		}
+		if helpInteractionStage == helpInteractionPuppetChoices {
+			return
+		}
 		if leroyInteractionStage == leroyInteractionPuppetSpeaking {
 			if key == ebiten.KeySpace || key == ebiten.KeyEscape || key == ebiten.KeyQ || key == ebiten.KeyPeriod {
 				leroySkipDialogue = true
@@ -1172,6 +1655,21 @@ func run() error {
 		if playback != nil || transition != nil {
 			return render.IndexedFrame{}, false, nil
 		}
+		if helpInteractionStage != helpInteractionIdle && helpInteractionStage != helpInteractionPuppetChoices {
+			return currentFrame, false, nil
+		}
+		if helpInteractionStage == helpInteractionPuppetChoices {
+			if mouseEvent.Button != ebiten.MouseButtonLeft {
+				return currentFrame, false, nil
+			}
+			event, found := scripts.NativePuppetChoiceAt(point, helpActiveChoices)
+			if !found {
+				return currentFrame, false, nil
+			}
+			helpChoicePressActive, helpChoicePressEvent = true, event
+			helpChoicePressIndex = (int(int16(point)) - 264) / 24
+			return currentFrame, false, nil
+		}
 		if leroyInteractionStage != leroyInteractionIdle && leroyInteractionStage != leroyInteractionPuppetChoices {
 			return currentFrame, false, nil
 		}
@@ -1213,6 +1711,25 @@ func run() error {
 			}
 		}
 		if !hit && currentScene == 0 {
+			if boneInInventory && !boneDragging && mouseEvent.Button == ebiten.MouseButtonLeft {
+				mousePoint := image.Pt(int(int16(point>>16)), int(int16(point)))
+				hitBone, err := render.HitTestPuppetFrame(boneInventoryFrame, image.Pt(316, 320), mousePoint)
+				if err != nil {
+					return render.IndexedFrame{}, false, fmt.Errorf("hit test Bone inventory frame: %w", err)
+				}
+				if hitBone {
+					boneDragging, boneDragLast = true, mousePoint
+					if err := refreshWorldScene(); err != nil {
+						return render.IndexedFrame{}, false, fmt.Errorf("start Bone drag: %w", err)
+					}
+					dragFrame, err := render.CompositePuppetFrame(currentFrame, boneInventoryFrame, mousePoint)
+					if err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+					currentFrame, stageFrame = dragFrame, dragFrame
+					return currentFrame, true, nil
+				}
+			}
 			if strings.EqualFold(string(view.Name[1:]), "Scene G15") {
 				if action, found := scripts.NiteNorthObjectAction(worldPoint[2], point, gameClock); found {
 					if *debug {
@@ -1227,6 +1744,62 @@ func run() error {
 			if actorName, found := render.HitTestWorldActors(projectedActors, image.Pt(int(int16(point>>16)), int(int16(point)))); found {
 				if *debug {
 					log.Printf("world-actor-hit=%s", actorName)
+				}
+				if strings.EqualFold(actorName, "Bone") && boneWorldProp.Visible && boneOwner == "none" {
+					camera := render.NativeActorCameraPosition(worldPoint)
+					playerPosition := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
+					distance := scripts.NativeActorDistance2D(boneWorldProp.Position, playerPosition)
+					if distance < 512 {
+						info, err := boneLargeView.FrameInfo(0, boneWorldProp.Heading)
+						if err != nil {
+							return render.IndexedFrame{}, false, fmt.Errorf("select Bone inventory frame: %w", err)
+						}
+						data, err := inventoryArchive.Resource(info.Resource)
+						if err != nil {
+							return render.IndexedFrame{}, false, fmt.Errorf("read Bone inventory frame %d: %w", info.Resource, err)
+						}
+						boneInventoryFrame, err = render.DecodePuppetFrame(data)
+						if err != nil {
+							return render.IndexedFrame{}, false, fmt.Errorf("decode Bone inventory frame %d: %w", info.Resource, err)
+						}
+						boneInInventory, boneOwner, boneWorldProp.View, boneWorldProp.Visible = true, "stranger", boneLargeView, false
+						if err := soundBank.Play(audioContext, "inven", 1); err != nil {
+							return render.IndexedFrame{}, false, fmt.Errorf("play Bone inventory sound: %w", err)
+						}
+						if *debug {
+							log.Printf("prop=Bone addinven owner=%s view=large distance=%d panel=316,320", boneOwner, distance)
+						}
+						if err := refreshWorldScene(); err != nil {
+							return render.IndexedFrame{}, false, fmt.Errorf("refresh after Bone pickup: %w", err)
+						}
+						return currentFrame, true, nil
+					}
+					return currentFrame, false, nil
+				}
+				if strings.EqualFold(actorName, "Help") && strings.EqualFold(string(view.Name[1:]), "Scene G15") && gameDay != 5 && helpInteractionStage == helpInteractionIdle {
+					camera := render.NativeActorCameraPosition(worldPoint)
+					playerPosition := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
+					distance := scripts.NativeActorDistance2D(helpActorPosition, playerPosition)
+					if distance < 384 {
+						if !scripts.NativeWalktopuppetAxisAligned(helpActorPosition, playerPosition) {
+							if *debug {
+								log.Printf("actor=help walktopuppet=blocked-axis-alignment actor=%v player=%v", helpActorPosition, playerPosition)
+							}
+							return currentFrame, false, nil
+						}
+						destination := [3]int16{playerPosition[0], playerPosition[1], 0}
+						routeHeading := render.NativeActorHeadingToPoint(helpActorPosition, destination)
+						helpReturnPosition = helpActorPosition
+						walk := scripts.NewNativeActorWalkJob(helpActorPosition, destination, routeHeading, helpWalkRate)
+						helpWalk, helpInteractionStage = &walk, helpInteractionMoving
+						helpTurnActive, actorPoses["help"] = false, "stand"
+						nativeLoops.Stop(2, "help")
+						if *debug {
+							log.Printf("actor=help walktopuppet distance=%d destination=%v heading=%d puppet=HELP1.PUP", distance, destination, routeHeading)
+						}
+						return currentFrame, true, nil
+					}
+					return currentFrame, false, nil
 				}
 				if sceneName, handlesClick := scripts.CastActorMouseDownScene(actorName); handlesClick {
 					nextView, found := nightSet.FindView(sceneName)
@@ -1260,7 +1833,7 @@ func run() error {
 					if err != nil {
 						return render.IndexedFrame{}, false, err
 					}
-					nextWorldBackground, nextProjectedActors, err := render.CompositeWorldActors(nextBackground, nextPoint, nextActors)
+					nextWorldBackground, nextProjectedActors, err := compositeWorld(nextBackground, nextPoint, nextActors)
 					if err != nil {
 						return render.IndexedFrame{}, false, fmt.Errorf("render %s actors: %w", sceneName, err)
 					}
@@ -1369,7 +1942,7 @@ func run() error {
 			return render.IndexedFrame{}, false, fmt.Errorf("render stage scene %d: %w", target, err)
 		}
 		if target == 0 {
-			worldBackground, visibleActors, actorErr := render.CompositeWorldActors(backgroundFrame, worldPoint, worldActors)
+			worldBackground, visibleActors, actorErr := compositeWorld(backgroundFrame, worldPoint, worldActors)
 			if actorErr != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("render returned NITE actors: %w", actorErr)
 			}
@@ -1413,6 +1986,83 @@ func run() error {
 		}
 		return nextFrame, true, nil
 	}, func(state engine.MouseState) (render.IndexedFrame, bool, error) {
+		if helpInteractionStage == helpInteractionPuppetChoices && helpChoicePressActive {
+			event, found := scripts.NativePuppetChoiceAt(state.Point, helpActiveChoices)
+			outline := -1
+			if found && event == helpChoicePressEvent {
+				outline = (int(int16(state.Point)) - 264) / 24
+			}
+			if state.LeftDown {
+				if outline == helpChoiceOutline {
+					return currentFrame, false, nil
+				}
+				if err := drawHelpChoices(outline); err != nil {
+					return render.IndexedFrame{}, false, err
+				}
+				return currentFrame, true, nil
+			}
+			if state.LeftReleased {
+				selected := outline >= 0 && outline == helpChoicePressIndex
+				selectedEvent := helpChoicePressEvent
+				helpChoicePressActive, helpChoicePressIndex = false, -1
+				if selected {
+					if err := startHelpChoice(selectedEvent); err != nil {
+						return render.IndexedFrame{}, false, fmt.Errorf("run Help choice %d: %w", selectedEvent, err)
+					}
+					return currentFrame, true, nil
+				}
+				if helpChoiceOutline >= 0 {
+					if err := drawHelpChoices(-1); err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+					return currentFrame, true, nil
+				}
+				return currentFrame, false, nil
+			}
+			return currentFrame, false, nil
+		}
+		if boneDragging {
+			point := image.Pt(int(int16(state.Point>>16)), int(int16(state.Point)))
+			if state.LeftDown {
+				if point == boneDragLast {
+					return currentFrame, false, nil
+				}
+				boneDragLast = point
+				if err := refreshWorldScene(); err != nil {
+					return render.IndexedFrame{}, false, fmt.Errorf("update Bone drag background: %w", err)
+				}
+				dragFrame, err := render.CompositePuppetFrame(currentFrame, boneInventoryFrame, point)
+				if err != nil {
+					return render.IndexedFrame{}, false, err
+				}
+				currentFrame, stageFrame = dragFrame, dragFrame
+				return currentFrame, true, nil
+			}
+			if state.LeftReleased {
+				boneDragging = false
+				actorName, hit := render.HitTestWorldActors(projectedActors, point)
+				if hit && strings.EqualFold(actorName, "dog") && boneInInventory && boneOwner == "stranger" && gameDay != 5 {
+					boneInInventory, boneOwner, boneWorldProp.Visible = false, "none", false
+					dogVisibleState, dog2OfferPending = false, true
+					nativeLoops.Stop(2, "dog")
+					if _, err := setWorldView("Scene G12", assets.SetDirectionNorth); err != nil {
+						return render.IndexedFrame{}, false, fmt.Errorf("prepare Dog offer scene: %w", err)
+					}
+					if err := startSceneMovie("MOVIES/DOG2.MOV"); err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+					if *debug {
+						log.Printf("actor=dog offerobject=Bone visible=false phase=%d movie=DOG2.MOV", gamePhase)
+					}
+					return playback.CurrentFrame(), true, nil
+				}
+				if err := refreshWorldScene(); err != nil {
+					return render.IndexedFrame{}, false, fmt.Errorf("finish Bone drag: %w", err)
+				}
+				return currentFrame, true, nil
+			}
+			return currentFrame, false, nil
+		}
 		if leroyInteractionStage != leroyInteractionPuppetChoices || !leroyChoicePressActive {
 			return currentFrame, false, nil
 		}

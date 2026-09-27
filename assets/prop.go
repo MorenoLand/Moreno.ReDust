@@ -34,9 +34,28 @@ type PropDefinition struct {
 }
 
 type PropView struct {
-	Resource uint32
-	Name     string
-	Frames   [][]uint32
+	Resource  uint32
+	Name      string
+	Frames    [][]uint32
+	variants  []PropFrameVariant
+	sequences []int16
+}
+
+type PropFrameInfo struct {
+	Resource                 uint32
+	Angle                    int16
+	Metric                   uint16
+	Left, Top, Right, Bottom int16
+	OriginX, OriginY         int16
+}
+
+type PropFrameVariant struct {
+	Resource                 uint32
+	Sequence                 int16
+	Angle                    int16
+	Metric                   uint16
+	Left, Top, Right, Bottom int16
+	OriginX, OriginY         int16
 }
 
 func (w Workspace) OpenPropArchive(name string) (*PropArchive, error) {
@@ -153,6 +172,11 @@ func (a *PropArchive) View(propName, viewName string) (PropView, error) {
 	}
 	degreeCount := int(degreeCountValue)
 	frames := make([][]uint32, degreeCount)
+	variants := make([]PropFrameVariant, degreeCount)
+	sequences := make([]int16, frameCount)
+	for frame := range sequences {
+		sequences[frame] = int16(binary.LittleEndian.Uint16(data[0x2e+frame*2 : 0x30+frame*2]))
+	}
 	for degree := range frames {
 		row := data[propDescriptorRows+degree*propDescriptorRowSize : propDescriptorRows+(degree+1)*propDescriptorRowSize]
 		if frameCount > len(row)/4 {
@@ -166,8 +190,35 @@ func (a *PropArchive) View(propName, viewName string) (PropView, error) {
 			}
 			frames[degree][frame] = frameResource
 		}
+		variants[degree] = PropFrameVariant{Resource: binary.LittleEndian.Uint32(row[:4]), Sequence: int16(binary.LittleEndian.Uint16(row[8:10])), Angle: int16(binary.LittleEndian.Uint16(row[0x28:0x2a])), Metric: binary.LittleEndian.Uint16(row[0x2a:0x2c]), Left: int16(binary.LittleEndian.Uint16(row[0x12:0x14])), Top: int16(binary.LittleEndian.Uint16(row[0x14:0x16])), Right: int16(binary.LittleEndian.Uint16(row[0x16:0x18])), Bottom: int16(binary.LittleEndian.Uint16(row[0x18:0x1a])), OriginX: int16(binary.LittleEndian.Uint16(row[0x1a:0x1c])), OriginY: int16(binary.LittleEndian.Uint16(row[0x1c:0x1e]))}
 	}
-	return PropView{Resource: resource, Name: viewName, Frames: frames}, nil
+	return PropView{Resource: resource, Name: viewName, Frames: frames, variants: variants, sequences: sequences}, nil
+}
+
+func (v PropView) FrameInfo(frameIndex int, angle int16) (PropFrameInfo, error) {
+	if frameIndex < 0 || len(v.sequences) == 0 {
+		return PropFrameInfo{}, fmt.Errorf("prop view %q frame index %d is invalid", v.Name, frameIndex)
+	}
+	sequence := v.sequences[frameIndex%len(v.sequences)] - 1
+	closest, selected := int16(1000), false
+	var result PropFrameInfo
+	for _, variant := range v.variants {
+		if variant.Sequence != sequence {
+			continue
+		}
+		distance := nativeAngleDistance(variant.Angle, angle)
+		if distance < closest {
+			closest, selected = distance, true
+			result = PropFrameInfo{Resource: variant.Resource, Angle: variant.Angle, Metric: variant.Metric, Left: variant.Left, Top: variant.Top, Right: variant.Right, Bottom: variant.Bottom, OriginX: variant.OriginX, OriginY: variant.OriginY}
+			if distance < 1 {
+				break
+			}
+		}
+	}
+	if !selected {
+		return PropFrameInfo{}, fmt.Errorf("prop view %q frame %d has no variant for sequence %d at angle %d", v.Name, frameIndex, sequence, angle)
+	}
+	return result, nil
 }
 
 func (v PropView) FrameResource(degree, frame int) (uint32, error) {
