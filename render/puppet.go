@@ -36,7 +36,9 @@ type PuppetCueSlot struct {
 }
 
 type PuppetCueRow struct {
-	Slots [puppetFrameSlotCount]PuppetCueSlot
+	Bounds    image.Rectangle
+	HasBounds bool
+	Slots     [puppetFrameSlotCount]PuppetCueSlot
 }
 
 type PuppetCanvas struct {
@@ -170,6 +172,11 @@ func (p *Puppet) CueTimeline(resource uint32) ([]PuppetCueRow, error) {
 	timeline := make([]PuppetCueRow, len(data)/puppetCueRowSize)
 	for frame := range timeline {
 		row := data[frame*puppetCueRowSize : (frame+1)*puppetCueRowSize]
+		y0, x0 := int(int16(binary.LittleEndian.Uint16(row[8:10]))), int(int16(binary.LittleEndian.Uint16(row[10:12])))
+		y1, x1 := int(int16(binary.LittleEndian.Uint16(row[12:14]))), int(int16(binary.LittleEndian.Uint16(row[14:16])))
+		if y1 > y0 && x1 > x0 {
+			timeline[frame].Bounds, timeline[frame].HasBounds = image.Rect(x0, y0, x1, y1), true
+		}
 		for slot := range timeline[frame].Slots {
 			offset := puppetCueSlotOffset + slot*6
 			timeline[frame].Slots[slot] = PuppetCueSlot{Frame: int16(binary.LittleEndian.Uint16(row[offset : offset+2])), Position: image.Pt(int(int16(binary.LittleEndian.Uint16(row[offset+4:offset+6]))), int(int16(binary.LittleEndian.Uint16(row[offset+2:offset+4]))))}

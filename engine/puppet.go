@@ -19,6 +19,7 @@ type PuppetDialogue struct {
 	background render.IndexedFrame
 	canvas     *render.PuppetCanvas
 	cues       []render.PuppetCueRow
+	baseClip   image.Rectangle
 	voice      *ebitenaudio.Player
 	startFrame uint32
 	currentCue int
@@ -49,6 +50,7 @@ func (d *PuppetDialogue) Start(background render.IndexedFrame, frame uint32) (re
 		return render.IndexedFrame{}, fmt.Errorf("puppet dialogue cannot start in its current state")
 	}
 	d.background, d.lineIndex, d.currentCue = background, 0, -1
+	d.setBaseClip()
 	canvas, err := d.newCanvas()
 	if err != nil {
 		return render.IndexedFrame{}, err
@@ -73,12 +75,35 @@ func (d *PuppetDialogue) Update(frame uint32) (render.IndexedFrame, bool, error)
 	}
 	changed := sample > d.currentCue
 	if changed {
-		for cue := d.currentCue + 1; cue <= sample; cue++ {
-			if err := d.drawCue(d.cues[cue]); err != nil {
-				return render.IndexedFrame{}, false, err
+		clip := d.baseClip
+		if d.currentCue >= 0 {
+			var dirty image.Rectangle
+			hasDirty := false
+			for cue := d.currentCue + 1; cue <= sample; cue++ {
+				if !d.cues[cue].HasBounds {
+					continue
+				}
+				if hasDirty {
+					dirty = dirty.Union(d.cues[cue].Bounds)
+				} else {
+					dirty, hasDirty = d.cues[cue].Bounds, true
+				}
+			}
+			if !hasDirty {
+				d.currentCue = sample
+				changed = false
+			} else {
+				clip = clip.Intersect(dirty)
 			}
 		}
-		d.currentCue = sample
+		if changed {
+			d.canvas.SetClip(clip)
+			if err := d.drawCue(d.cues[sample]); err != nil {
+				return render.IndexedFrame{}, false, err
+			}
+			d.canvas.SetClip(d.baseClip)
+			d.currentCue = sample
+		}
 	}
 	finished := d.voice != nil && !d.voice.IsPlaying()
 	if d.voice == nil {
@@ -140,6 +165,7 @@ func (d *PuppetDialogue) startLine(frame uint32) error {
 		return fmt.Errorf("puppet speech %q has %d cue rows, want %d", line.Name, len(cues), line.CueFrameLimit)
 	}
 	d.cues, d.startFrame, d.currentCue = cues, frame, -1
+	d.setBaseClip()
 	if err := d.drawCue(cues[0]); err != nil {
 		return err
 	}
@@ -177,9 +203,20 @@ func (d *PuppetDialogue) advance(frame uint32) error {
 func (d *PuppetDialogue) newCanvas() (*render.PuppetCanvas, error) {
 	canvas, err := render.NewPuppetCanvas(d.background)
 	if err == nil {
-		canvas.SetClip(image.Rect(0, 0, d.background.Width, min(d.background.Height, 264)))
+		canvas.SetClip(d.baseClip)
 	}
 	return canvas, err
+}
+
+func (d *PuppetDialogue) setBaseClip() {
+	height := 264
+	if d.lineIndex < len(d.lines) && len(d.lines[d.lineIndex].Subtitle) > 0 {
+		height = 224
+	}
+	d.baseClip = image.Rect(0, 0, d.background.Width, min(d.background.Height, height))
+	if d.canvas != nil {
+		d.canvas.SetClip(d.baseClip)
+	}
 }
 
 func (d *PuppetDialogue) drawCue(cue render.PuppetCueRow) error {
