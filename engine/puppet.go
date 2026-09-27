@@ -71,10 +71,12 @@ func (d *PuppetDialogue) Update(frame uint32) (render.IndexedFrame, bool, error)
 	if sample >= len(d.cues) {
 		sample = len(d.cues) - 1
 	}
-	changed := sample != d.currentCue
+	changed := sample > d.currentCue
 	if changed {
-		if err := d.drawCue(d.cues[sample]); err != nil {
-			return render.IndexedFrame{}, false, err
+		for cue := d.currentCue + 1; cue <= sample; cue++ {
+			if err := d.drawCue(d.cues[cue]); err != nil {
+				return render.IndexedFrame{}, false, err
+			}
 		}
 		d.currentCue = sample
 	}
