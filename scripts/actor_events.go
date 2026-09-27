@@ -3,12 +3,12 @@ package scripts
 import "strings"
 
 type ActorIdleStep struct {
-	Pose          string
-	Callback      string
-	Remaining     int32
-	TurnToCamera  bool
-	TurnBy        int16
-	Attention     int32
+	Pose           string
+	Callback       string
+	Remaining      int32
+	TurnToCamera   bool
+	TurnBy         int16
+	Attention      int32
 	ClearAttention bool
 }
 
@@ -61,4 +61,41 @@ func LeroyIdleStep(callback string, near, starred bool, phase int16, random *Nat
 	default:
 		return ActorIdleStep{}, false
 	}
+}
+
+func NativeTurnStep(current, target, speed int16) int16 {
+	const maximum = 255
+	position, destination, rate := int(current), int(target), int(speed)
+	if position < destination {
+		if destination-position < maximum-destination+position {
+			position += rate
+			if destination < position {
+				return target
+			}
+			return int16(position)
+		}
+		position -= rate
+		if position < 0 {
+			position += maximum
+			if position < destination {
+				return target
+			}
+		}
+		return int16(position)
+	}
+	if position-destination < maximum-position+destination {
+		position -= rate
+		if position < destination {
+			return target
+		}
+		return int16(position)
+	}
+	position += rate
+	if maximum <= position {
+		position -= maximum
+		if destination < position {
+			return target
+		}
+	}
+	return int16(position)
 }

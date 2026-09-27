@@ -144,6 +144,9 @@ func run() error {
 	}
 	actorPoses := map[string]string{"leroy": "stand", "dog": "stand"}
 	actorHeadings := map[string]int16{"leroy": 0, "dog": 32}
+	actorTurnTargets := map[string]int16{"leroy": 0}
+	actorTurnActive := false
+	const leroyTurnRate int16 = 7
 	loadWorldActors := func(point [3]int16) ([]render.WorldActorSprite, error) {
 		actors := make([]render.WorldActorSprite, 0, 1)
 		for _, actor := range gangCast.Actors {
@@ -359,7 +362,8 @@ func run() error {
 				}
 				actorPoses["leroy"], loop.Callback, loop.Remaining = step.Pose, step.Callback, step.Remaining
 				if step.TurnToCamera {
-					actorHeadings["leroy"] = render.NativeActorHeadingToCamera(leroyPosition, worldPoint)
+					actorTurnTargets["leroy"] = render.NativeActorHeadingToCamera(leroyPosition, worldPoint)
+					actorTurnActive = actorHeadings["leroy"] != actorTurnTargets["leroy"]
 				}
 				if step.TurnBy != 0 {
 					actorHeadings["leroy"] = int16((int(actorHeadings["leroy"]) + int(step.TurnBy) + 256) % 256)
@@ -400,6 +404,14 @@ func run() error {
 		}
 		if status != 0 {
 			return false, fmt.Errorf("native scene scheduler returned status %#x", status)
+		}
+		if actorTurnActive {
+			actorHeadings["leroy"] = scripts.NativeTurnStep(actorHeadings["leroy"], actorTurnTargets["leroy"], leroyTurnRate)
+			actorTurnActive = actorHeadings["leroy"] != actorTurnTargets["leroy"]
+			displayChanged = displayChanged || currentScene == 0
+			if *debug {
+				log.Printf("actor=leroy turn heading=%d target=%d active=%t", actorHeadings["leroy"], actorTurnTargets["leroy"], actorTurnActive)
+			}
 		}
 		if displayChanged {
 			if err := refreshWorldScene(); err != nil {
