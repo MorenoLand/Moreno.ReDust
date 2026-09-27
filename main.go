@@ -481,7 +481,7 @@ func run() error {
 			helpAttention = step.Attention
 		}
 		if step.TurnToCamera {
-			actorTurnTargets["help"] = render.NativeActorHeadingToCamera(helpPosition, worldPoint)
+			actorTurnTargets["help"] = render.NativeActorHeadingToPoint(helpPosition, player)
 			helpTurnActive = actorHeadings["help"] != actorTurnTargets["help"]
 		}
 		if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "help", Callback: step.Callback, Remaining: step.Remaining}); status != 0 {
@@ -683,14 +683,16 @@ func run() error {
 		status, err := nativeLoops.PassWhere(func(loop scripts.ScriptLoop) (uint16, error) {
 			switch loop.Callback {
 			case "toidle", "leroyidle":
-				dx, dy, dz := int(leroyPosition[0])-int(worldPoint[0]), int(leroyPosition[1])-int(worldPoint[1]), int(leroyPosition[2])-int(worldPoint[2])
+				actorCamera := render.NativeActorCameraPosition(worldPoint)
+				playerPoint := [3]int16{int16(actorCamera[0]), int16(actorCamera[1]), int16(actorCamera[2])}
+				dx, dy, dz := int(leroyPosition[0])-int(playerPoint[0]), int(leroyPosition[1])-int(playerPoint[1]), int(leroyPosition[2])-int(playerPoint[2])
 				step, found := scripts.LeroyIdleStep(loop.Callback, dx*dx+dy*dy+dz*dz < 384*384, true, leroyPhase, &nativeRandom)
 				if !found {
 					return 0, fmt.Errorf("unknown Leroy idle callback %q", loop.Callback)
 				}
 				actorPoses["leroy"], loop.Callback, loop.Remaining = step.Pose, step.Callback, step.Remaining
 				if step.TurnToCamera {
-					actorTurnTargets["leroy"] = render.NativeActorHeadingToCamera(leroyPosition, worldPoint)
+					actorTurnTargets["leroy"] = render.NativeActorHeadingToPoint(leroyPosition, playerPoint)
 					actorTurnActive = actorHeadings["leroy"] != actorTurnTargets["leroy"]
 				}
 				if step.TurnBy != 0 {
@@ -745,7 +747,7 @@ func run() error {
 					helpAttention = step.Attention
 				}
 				if step.TurnToCamera {
-					actorTurnTargets["help"] = render.NativeActorHeadingToCamera(helpPosition, worldPoint)
+					actorTurnTargets["help"] = render.NativeActorHeadingToPoint(helpPosition, player)
 					helpTurnActive = actorHeadings["help"] != actorTurnTargets["help"]
 				}
 				displayChanged = displayChanged || currentScene == 0 && previousPose != step.Pose

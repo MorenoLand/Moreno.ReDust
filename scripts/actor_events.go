@@ -71,7 +71,7 @@ func LeroyIdleStep(callback string, near, starred bool, phase int16, random *Nat
 				step.Attention = 10
 			}
 		} else {
-			step.TurnBy, step.ClearAttention = 2, true
+			step.ClearAttention = true
 		}
 		return step, true
 	default:
