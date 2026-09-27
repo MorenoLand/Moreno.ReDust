@@ -131,7 +131,7 @@ func run() error {
 		stage.Close()
 		return fmt.Errorf("read startup game position: %w", err)
 	}
-	gameClock := 3
+	gameClock, gameDay := 3, 1
 	townActors, err := extraCast.ResolveLocations(nightSet, "town")
 	if err != nil {
 		stage.Close()
@@ -147,6 +147,15 @@ func run() error {
 	actorTurnTargets := map[string]int16{"leroy": 0}
 	actorTurnActive := false
 	const leroyTurnRate int16 = 7
+	const leroyWalkRate int16 = 3
+	const (
+		leroyInteractionIdle uint8 = iota
+		leroyInteractionMoving
+		leroyInteractionFacing
+		leroyInteractionPuppetPending
+	)
+	leroyPhase, leroyInteractionStage := int16(0), leroyInteractionIdle
+	var leroyWalk *scripts.NativeActorWalkJob
 	loadWorldActors := func(point [3]int16) ([]render.WorldActorSprite, error) {
 		actors := make([]render.WorldActorSprite, 0, 1)
 		for _, actor := range gangCast.Actors {
@@ -356,7 +365,7 @@ func run() error {
 			switch loop.Callback {
 			case "toidle", "leroyidle":
 				dx, dy, dz := int(leroyPosition[0])-int(worldPoint[0]), int(leroyPosition[1])-int(worldPoint[1]), int(leroyPosition[2])-int(worldPoint[2])
-				step, found := scripts.LeroyIdleStep(loop.Callback, dx*dx+dy*dy+dz*dz < 384*384, true, 0, &nativeRandom)
+				step, found := scripts.LeroyIdleStep(loop.Callback, dx*dx+dy*dy+dz*dz < 384*384, true, leroyPhase, &nativeRandom)
 				if !found {
 					return 0, fmt.Errorf("unknown Leroy idle callback %q", loop.Callback)
 				}
@@ -411,6 +420,36 @@ func run() error {
 			displayChanged = displayChanged || currentScene == 0
 			if *debug {
 				log.Printf("actor=leroy turn heading=%d target=%d active=%t", actorHeadings["leroy"], actorTurnTargets["leroy"], actorTurnActive)
+			}
+			if !actorTurnActive && leroyInteractionStage == leroyInteractionFacing {
+				leroyInteractionStage = leroyInteractionPuppetPending
+				if *debug {
+					log.Printf("actor=leroy interaction=puppet pending file=PUPPETS/LEROY.PUP")
+				}
+			}
+		}
+		if leroyWalk != nil {
+			previousPosition, previousHeading := leroyPosition, actorHeadings["leroy"]
+			var walking bool
+			leroyPosition, actorHeadings["leroy"], walking = leroyWalk.Pass(leroyPosition, actorHeadings["leroy"], leroyTurnRate)
+			displayChanged = displayChanged || leroyPosition != previousPosition || actorHeadings["leroy"] != previousHeading
+			if *debug && (leroyPosition != previousPosition || actorHeadings["leroy"] != previousHeading) {
+				log.Printf("actor=leroy walk point=%v heading=%d active=%t", leroyPosition, actorHeadings["leroy"], walking)
+			}
+			if !walking {
+				leroyWalk = nil
+				if leroyInteractionStage == leroyInteractionMoving {
+					currentDegree, found := render.NativeCurrentDegree(worldPoint[2])
+					if !found {
+						return false, fmt.Errorf("NITE.SET orientation %d has no native currentdeg", worldPoint[2])
+					}
+					actorTurnTargets["leroy"] = int16((int(currentDegree) + 128) % 256)
+					actorTurnActive = actorHeadings["leroy"] != actorTurnTargets["leroy"]
+					leroyInteractionStage = leroyInteractionFacing
+					if !actorTurnActive {
+						leroyInteractionStage = leroyInteractionPuppetPending
+					}
+				}
 			}
 		}
 		if displayChanged {
@@ -755,6 +794,37 @@ func run() error {
 						}
 					}
 					return nextFrame, true, nil
+				}
+				if strings.EqualFold(actorName, "Leroy") && strings.EqualFold(string(view.Name[1:]), "Scene G15") && leroyInteractionStage == leroyInteractionIdle {
+					playerWorld := render.NativeActorCameraPosition(worldPoint)
+					playerPosition := [3]int16{int16(playerWorld[0]), int16(playerWorld[1]), int16(playerWorld[2])}
+					distance := scripts.NativeActorDistance2D(leroyPosition, playerPosition)
+					if scripts.LeroyMouseDownAction(gameDay, distance, 512) {
+						if !scripts.NativeWalktopuppetAxisAligned(leroyPosition, playerPosition) {
+							if *debug {
+								log.Printf("actor=leroy walktopuppet=blocked-axis-alignment actor=%v player=%v", leroyPosition, playerPosition)
+							}
+							return currentFrame, true, nil
+						}
+						currentDegree, found := render.NativeCurrentDegree(worldPoint[2])
+						if !found {
+							return render.IndexedFrame{}, false, fmt.Errorf("NITE.SET orientation %d has no native currentdeg", worldPoint[2])
+						}
+						vector, found := render.NativeDirectionVector(currentDegree, 32)
+						if !found {
+							return render.IndexedFrame{}, false, fmt.Errorf("NITE.SET currentdeg %d has no native cardinal vector", currentDegree)
+						}
+						destination := [3]int16{playerPosition[0] + vector[0], playerPosition[1] + vector[1], 0}
+						routeHeading := render.NativeActorHeadingToPoint(leroyPosition, destination)
+						walk := scripts.NewNativeActorWalkJob(leroyPosition, destination, routeHeading, leroyWalkRate)
+						leroyWalk, actorTurnActive, leroyInteractionStage = &walk, false, leroyInteractionMoving
+						actorPoses["leroy"] = "stand"
+						nativeLoops.Stop(2, "leroy")
+						if *debug {
+							log.Printf("actor=leroy walktopuppet distance=%d destination=%v heading=%d", distance, destination, routeHeading)
+						}
+						return currentFrame, true, nil
+					}
 				}
 			}
 		}

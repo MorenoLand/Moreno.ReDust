@@ -1,6 +1,9 @@
 package scripts
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 type ScriptLoop struct {
 	Kind      uint16
@@ -70,4 +73,15 @@ func (s *LoopScheduler) Len() int {
 		}
 	}
 	return count
+}
+
+func (s *LoopScheduler) Stop(kind uint16, owner string) {
+	if s == nil {
+		return
+	}
+	for index, slot := range s.slots {
+		if slot != nil && slot.Kind == kind && strings.EqualFold(slot.Owner, owner) {
+			s.slots[index] = nil
+		}
+	}
 }

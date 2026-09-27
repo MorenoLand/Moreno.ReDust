@@ -99,3 +99,66 @@ func NativeTurnStep(current, target, speed int16) int16 {
 	}
 	return int16(position)
 }
+
+type NativeActorWalkJob struct {
+	start, target [3]int16
+	distance      int
+	progress      int
+	speed         int16
+	heading       int16
+}
+
+func LeroyMouseDownAction(day, distance, hotDistance int) bool {
+	return day != 5 && distance < hotDistance
+}
+
+func NativeActorDistance2D(first, second [3]int16) int {
+	dx, dy := int64(first[0])-int64(second[0]), int64(first[1])-int64(second[1])
+	return int(NativeIntegerSqrt(uint64(dx*dx + dy*dy)))
+}
+
+func NativeWalktopuppetAxisAligned(actor, player [3]int16) bool {
+	return int(player[0])/256-int(actor[0])/256 == 0 || int(player[1])/256-int(actor[1])/256 == 0
+}
+
+func NewNativeActorWalkJob(start, target [3]int16, heading, speed int16) NativeActorWalkJob {
+	dx, dy, dz := int64(start[0])-int64(target[0]), int64(start[1])-int64(target[1]), int64(start[2])-int64(target[2])
+	distance := int(NativeIntegerSqrt(uint64(dx*dx + dy*dy + dz*dz)))
+	return NativeActorWalkJob{start: start, target: target, distance: distance, speed: speed, heading: heading}
+}
+
+func (job *NativeActorWalkJob) Pass(position [3]int16, heading, turnSpeed int16) ([3]int16, int16, bool) {
+	if heading != job.heading {
+		heading = NativeTurnStep(heading, job.heading, turnSpeed)
+		return position, heading, true
+	}
+	if job.distance == 0 {
+		return job.target, heading, false
+	}
+	job.progress += int(job.speed)
+	if job.progress > job.distance {
+		job.progress = job.distance
+	}
+	for axis := range job.start {
+		delta := int64(job.start[axis]) - int64(job.target[axis])
+		position[axis] = int16(int64(job.start[axis]) - delta*int64(job.progress)/int64(job.distance))
+	}
+	return position, heading, job.progress < job.distance
+}
+
+func NativeIntegerSqrt(value uint64) uint64 {
+	result, bit := uint64(0), uint64(1)<<62
+	for bit > value {
+		bit >>= 2
+	}
+	for bit != 0 {
+		if value >= result+bit {
+			value -= result + bit
+			result = (result >> 1) + bit
+		} else {
+			result >>= 1
+		}
+		bit >>= 2
+	}
+	return result
+}

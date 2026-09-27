@@ -46,6 +46,40 @@ func NativeActorHeadingToCamera(position [3]int16, point [3]int16) int16 {
 	return nativeActorBearing(camera[0]-int(position[0]), camera[1]-int(position[1]))
 }
 
+func NativeActorHeadingToPoint(position, target [3]int16) int16 {
+	return nativeActorBearing(int(target[0])-int(position[0]), int(target[1])-int(position[1]))
+}
+
+func NativeCurrentDegree(direction int16) (int16, bool) {
+	switch direction {
+	case assets.SetDirectionNorth:
+		return 192, true
+	case assets.SetDirectionSouth:
+		return 64, true
+	case assets.SetDirectionEast:
+		return 0, true
+	case assets.SetDirectionWest:
+		return 128, true
+	default:
+		return 0, false
+	}
+}
+
+func NativeDirectionVector(heading, length int16) ([2]int16, bool) {
+	switch heading {
+	case 0:
+		return [2]int16{length, 0}, true
+	case 64:
+		return [2]int16{0, length}, true
+	case 128:
+		return [2]int16{-length, 0}, true
+	case 192:
+		return [2]int16{0, -length}, true
+	default:
+		return [2]int16{}, false
+	}
+}
+
 func NativeActorCameraPosition(point [3]int16) [3]int {
 	forwardX, forwardY := 0, -1
 	switch point[2] {
