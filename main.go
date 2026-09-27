@@ -132,6 +132,44 @@ func run() error {
 		return fmt.Errorf("read startup game position: %w", err)
 	}
 	gameClock, gameDay := 3, 1
+	propArchive, err := workspace.OpenPropArchive("DATA/HOUSE.PRP")
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("open prop archive: %w", err)
+	}
+	defer propArchive.Close()
+	avatarView, err := propArchive.View("avatar", "gossip")
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("resolve avatar gossip view: %w", err)
+	}
+	if len(avatarView.Frames) < 2 {
+		stage.Close()
+		return fmt.Errorf("avatar gossip view has %d degree rows, want 2", len(avatarView.Frames))
+	}
+	var avatarFrames [2]render.PuppetFrame
+	var avatarResources [2]uint32
+	for degree := range avatarFrames {
+		resource, err := avatarView.FrameResource(degree, 0)
+		if err != nil {
+			stage.Close()
+			return fmt.Errorf("resolve avatar gossip degree %d: %w", degree, err)
+		}
+		data, err := propArchive.Resource(resource)
+		if err != nil {
+			stage.Close()
+			return fmt.Errorf("read avatar gossip frame %d: %w", resource, err)
+		}
+		avatarFrames[degree], err = render.DecodePuppetFrame(data)
+		if err != nil {
+			stage.Close()
+			return fmt.Errorf("decode avatar gossip frame %d: %w", resource, err)
+		}
+		avatarResources[degree] = resource
+	}
+	if *debug {
+		log.Printf("prop=avatar view=gossip degree-resources=%d,%d anchor=456,328 placement=panel-art-inference", avatarResources[0], avatarResources[1])
+	}
 	townActors, err := extraCast.ResolveLocations(nightSet, "town")
 	if err != nil {
 		stage.Close()
@@ -250,7 +288,18 @@ func run() error {
 		stage.Close()
 		return fmt.Errorf("render G15 actors: %w", err)
 	}
-	stageFrame, err := render.CompositeUnderlay(worldBackground, frame)
+	composeMainPanel := func(worldBackground, panel render.IndexedFrame) (render.IndexedFrame, error) {
+		frame, err := render.CompositeUnderlay(worldBackground, panel)
+		if err != nil {
+			return render.IndexedFrame{}, err
+		}
+		degree := 1
+		if gameClock == 3 {
+			degree = 0
+		}
+		return render.CompositePuppetFrame(frame, avatarFrames[degree], image.Pt(456, 328))
+	}
+	stageFrame, err := composeMainPanel(worldBackground, frame)
 	if err != nil {
 		stage.Close()
 		return fmt.Errorf("compose startup game scene: %w", err)
@@ -375,7 +424,7 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("refresh mainpanel: %w", err)
 		}
-		nextFrame, err := render.CompositeUnderlay(worldBackground, panel)
+		nextFrame, err := composeMainPanel(worldBackground, panel)
 		if err != nil {
 			return fmt.Errorf("compose refreshed NITE scene: %w", err)
 		}
@@ -798,7 +847,7 @@ func run() error {
 			if err != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("render stage scene %d: %w", currentScene, err)
 			}
-			nextFrame, err := render.CompositeUnderlay(nextWorldBackground, overlay)
+			nextFrame, err := composeMainPanel(nextWorldBackground, overlay)
 			if err != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("compose moved game background: %w", err)
 			}
@@ -1061,7 +1110,7 @@ func run() error {
 					if err != nil {
 						return render.IndexedFrame{}, false, fmt.Errorf("render mainpanel over %s: %w", sceneName, err)
 					}
-					nextFrame, err := render.CompositeUnderlay(nextWorldBackground, panel)
+					nextFrame, err := composeMainPanel(nextWorldBackground, panel)
 					if err != nil {
 						return render.IndexedFrame{}, false, fmt.Errorf("compose %s scene: %w", sceneName, err)
 					}
@@ -1175,7 +1224,7 @@ func run() error {
 				return render.IndexedFrame{}, false, fmt.Errorf("render returned NITE actors: %w", actorErr)
 			}
 			projectedActors = visibleActors
-			nextFrame, err = render.CompositeUnderlay(worldBackground, nextFrame)
+			nextFrame, err = composeMainPanel(worldBackground, nextFrame)
 			if err != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("compose startup game background: %w", err)
 			}

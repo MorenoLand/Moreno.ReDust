@@ -1,0 +1,221 @@
+package assets
+
+import (
+	"encoding/binary"
+	"fmt"
+	"strings"
+)
+
+const (
+	propListCountOffset       = 0x938
+	propListRowsOffset        = 0x93c
+	propListRowSize           = 0x10
+	propDefinitionName        = 0x2a
+	propViewCountOffset       = 0x5a
+	propViewRowsOffset        = 0x5e
+	propViewRowSize           = 0x20
+	propViewNameOffset        = 0x10
+	propDescriptorRows        = 0x76
+	propDescriptorRowSize     = 0x2c
+	propDescriptorFrameCount  = 0x70
+	propDescriptorDegreeCount = 0x72
+)
+
+type PropArchive struct {
+	cache         *ResourceCache
+	resourceCount uint32
+	definitions   map[string]PropDefinition
+}
+
+type PropDefinition struct {
+	Resource uint32
+	Name     string
+	views    map[string]uint32
+}
+
+type PropView struct {
+	Resource uint32
+	Name     string
+	Frames   [][]uint32
+}
+
+func (w Workspace) OpenPropArchive(name string) (*PropArchive, error) {
+	cache, err := w.OpenResourceCache(name)
+	if err != nil {
+		return nil, err
+	}
+	failed := true
+	defer func() {
+		if failed {
+			_ = cache.Close()
+		}
+	}()
+	header, err := cache.Header()
+	if err != nil {
+		return nil, err
+	}
+	list, err := readPropResource(cache, 0)
+	if err != nil {
+		return nil, err
+	}
+	if len(list) < propListRowsOffset {
+		return nil, fmt.Errorf("prop list resource is truncated")
+	}
+	countValue := binary.LittleEndian.Uint32(list[propListCountOffset : propListCountOffset+4])
+	if uint64(countValue) > uint64((len(list)-propListRowsOffset)/propListRowSize) {
+		return nil, fmt.Errorf("prop list count %d exceeds resource size %d", countValue, len(list))
+	}
+	count := int(countValue)
+	archive := &PropArchive{cache: cache, resourceCount: header.CountB, definitions: make(map[string]PropDefinition, count)}
+	for index := range count {
+		row := list[propListRowsOffset+index*propListRowSize : propListRowsOffset+(index+1)*propListRowSize]
+		resource := binary.LittleEndian.Uint32(row[:4])
+		if resource >= header.CountB {
+			return nil, fmt.Errorf("prop list row %d references resource %d outside %d entries", index, resource, header.CountB)
+		}
+		data, err := readPropResource(cache, resource)
+		if err != nil {
+			return nil, fmt.Errorf("read prop definition %d: %w", resource, err)
+		}
+		definition, err := parsePropDefinition(resource, data, header.CountB)
+		if err != nil {
+			return nil, fmt.Errorf("parse prop definition %d: %w", resource, err)
+		}
+		key := asciiUpper(definition.Name)
+		if _, exists := archive.definitions[key]; exists {
+			return nil, fmt.Errorf("prop list contains duplicate definition %q", definition.Name)
+		}
+		archive.definitions[key] = definition
+	}
+	failed = false
+	return archive, nil
+}
+
+func parsePropDefinition(resource uint32, data []byte, resourceCount uint32) (PropDefinition, error) {
+	if len(data) <= propDefinitionName {
+		return PropDefinition{}, fmt.Errorf("definition resource is shorter than its name field")
+	}
+	name, err := propName(data[propDefinitionName:])
+	if err != nil {
+		return PropDefinition{}, err
+	}
+	if len(data) < propViewRowsOffset {
+		return PropDefinition{}, fmt.Errorf("definition %q view table header is truncated", name)
+	}
+	countValue := binary.LittleEndian.Uint32(data[propViewCountOffset : propViewCountOffset+4])
+	if uint64(countValue) > uint64((len(data)-propViewRowsOffset)/propViewRowSize) {
+		return PropDefinition{}, fmt.Errorf("definition %q view count %d exceeds resource size %d", name, countValue, len(data))
+	}
+	count := int(countValue)
+	definition := PropDefinition{Resource: resource, Name: name, views: make(map[string]uint32, count)}
+	for index := range count {
+		row := data[propViewRowsOffset+index*propViewRowSize : propViewRowsOffset+(index+1)*propViewRowSize]
+		descriptor := binary.LittleEndian.Uint32(row[:4])
+		if descriptor >= resourceCount {
+			return PropDefinition{}, fmt.Errorf("view %d references descriptor %d outside %d entries", index, descriptor, resourceCount)
+		}
+		viewName, err := propName(row[propViewNameOffset:])
+		if err != nil {
+			return PropDefinition{}, fmt.Errorf("view %d name: %w", index, err)
+		}
+		key := asciiUpper(viewName)
+		if _, exists := definition.views[key]; exists {
+			return PropDefinition{}, fmt.Errorf("definition %q has duplicate view %q", name, viewName)
+		}
+		definition.views[key] = descriptor
+	}
+	return definition, nil
+}
+
+func (a *PropArchive) View(propName, viewName string) (PropView, error) {
+	if a == nil || a.cache == nil {
+		return PropView{}, fmt.Errorf("prop archive is closed")
+	}
+	definition, found := a.definitions[asciiUpper(propName)]
+	if !found {
+		return PropView{}, fmt.Errorf("prop definition %q is absent", propName)
+	}
+	resource, found := definition.views[asciiUpper(viewName)]
+	if !found {
+		return PropView{}, fmt.Errorf("prop view %q is absent from %q", viewName, definition.Name)
+	}
+	data, err := readPropResource(a.cache, resource)
+	if err != nil {
+		return PropView{}, fmt.Errorf("read prop view descriptor %d: %w", resource, err)
+	}
+	if len(data) < propDescriptorRows {
+		return PropView{}, fmt.Errorf("prop view descriptor %d is truncated", resource)
+	}
+	frameCount := int(binary.LittleEndian.Uint16(data[propDescriptorFrameCount : propDescriptorFrameCount+2]))
+	degreeCountValue := binary.LittleEndian.Uint32(data[propDescriptorDegreeCount : propDescriptorDegreeCount+4])
+	if frameCount == 0 || degreeCountValue == 0 || uint64(degreeCountValue) > uint64((len(data)-propDescriptorRows)/propDescriptorRowSize) {
+		return PropView{}, fmt.Errorf("prop view descriptor %d has invalid frames=%d degrees=%d size=%d", resource, frameCount, degreeCountValue, len(data))
+	}
+	degreeCount := int(degreeCountValue)
+	frames := make([][]uint32, degreeCount)
+	for degree := range frames {
+		row := data[propDescriptorRows+degree*propDescriptorRowSize : propDescriptorRows+(degree+1)*propDescriptorRowSize]
+		if frameCount > len(row)/4 {
+			return PropView{}, fmt.Errorf("prop view descriptor %d degree %d has %d frames in a %d-byte row", resource, degree, frameCount, len(row))
+		}
+		frames[degree] = make([]uint32, frameCount)
+		for frame := range frames[degree] {
+			frameResource := binary.LittleEndian.Uint32(row[frame*4 : frame*4+4])
+			if frameResource >= a.resourceCount {
+				return PropView{}, fmt.Errorf("prop view descriptor %d degree %d frame %d references resource %d outside %d entries", resource, degree, frame, frameResource, a.resourceCount)
+			}
+			frames[degree][frame] = frameResource
+		}
+	}
+	return PropView{Resource: resource, Name: viewName, Frames: frames}, nil
+}
+
+func (v PropView) FrameResource(degree, frame int) (uint32, error) {
+	if degree < 0 || degree >= len(v.Frames) || frame < 0 || frame >= len(v.Frames[degree]) {
+		return 0, fmt.Errorf("prop view %q frame %d/%d is outside %d degree rows", v.Name, degree, frame, len(v.Frames))
+	}
+	return v.Frames[degree][frame], nil
+}
+
+func (a *PropArchive) Resource(index uint32) ([]byte, error) {
+	if a == nil || a.cache == nil {
+		return nil, fmt.Errorf("prop archive is closed")
+	}
+	if index >= a.resourceCount {
+		return nil, fmt.Errorf("prop resource %d is outside %d entries", index, a.resourceCount)
+	}
+	return readPropResource(a.cache, index)
+}
+
+func (a *PropArchive) Close() error {
+	if a == nil || a.cache == nil {
+		return nil
+	}
+	cache := a.cache
+	a.cache = nil
+	a.definitions = nil
+	return cache.Close()
+}
+
+func readPropResource(cache *ResourceCache, index uint32) ([]byte, error) {
+	lease, err := cache.Acquire(index)
+	if err != nil {
+		return nil, err
+	}
+	data, readErr := lease.Bytes()
+	closeErr := lease.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	return data, nil
+}
+
+func propName(field []byte) (string, error) {
+	if len(field) == 0 || int(field[0])+1 > len(field) {
+		return "", fmt.Errorf("Pascal prop name length exceeds its %d-byte field", len(field))
+	}
+	return strings.TrimSpace(string(field[1 : 1+int(field[0])])), nil
+}

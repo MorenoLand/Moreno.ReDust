@@ -259,6 +259,17 @@ func (p *Puppet) Draw(canvas *PuppetCanvas, slot, frame int, anchor image.Point)
 	return canvas.Draw(puppetFrame, anchor)
 }
 
+func CompositePuppetFrame(background IndexedFrame, frame PuppetFrame, anchor image.Point) (IndexedFrame, error) {
+	canvas, err := NewPuppetCanvas(background)
+	if err != nil {
+		return IndexedFrame{}, err
+	}
+	if err := canvas.Draw(frame, anchor); err != nil {
+		return IndexedFrame{}, err
+	}
+	return canvas.Frame(), nil
+}
+
 func (p *Puppet) DrawResource(canvas *PuppetCanvas, resource uint32, anchor image.Point) error {
 	if canvas == nil {
 		return fmt.Errorf("puppet canvas is unavailable")
