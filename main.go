@@ -231,7 +231,7 @@ func run() error {
 				return nil, fmt.Errorf("NITE.SET has no town.leroy1 coordinate")
 			}
 			actor.Position, actor.Located = leroyPosition, true
-			sprite, err := render.LoadCastActorFrame(workspace, gangCast, actor, actorPoses["leroy"], 0, 1100, render.NativeActorViewAngle(leroyPosition, point, actorHeadings["leroy"]))
+			sprite, err := render.LoadCastActorFrame(workspace, gangCast, actor, actorPoses["leroy"], 0, 1100, render.NativeActorViewAngle(leroyPosition, point, actorHeadings["leroy"]), 32)
 			if err != nil {
 				return nil, fmt.Errorf("load G15 actor %s: %w", actor.Name, err)
 			}
@@ -241,7 +241,7 @@ func run() error {
 			if gameClock != 3 || !strings.EqualFold(actor.Name, "dog") {
 				continue
 			}
-			sprite, err := render.LoadCastActorFrame(workspace, extraCast, actor, actorPoses["dog"], 0, 880, render.NativeActorViewAngle(actor.Position, point, actorHeadings["dog"]))
+			sprite, err := render.LoadCastActorFrame(workspace, extraCast, actor, actorPoses["dog"], 0, 880, render.NativeActorViewAngle(actor.Position, point, actorHeadings["dog"]), 32)
 			if err != nil {
 				return nil, fmt.Errorf("load G15 actor %s: %w", actor.Name, err)
 			}

@@ -15,6 +15,7 @@ type WorldActorSprite struct {
 	Name     string
 	Position [3]int16
 	Scale    int16
+	ZClip    int16
 	Metric   uint16
 	Frame    PuppetFrame
 	Visible  bool
@@ -153,7 +154,7 @@ func absInt(value int) int {
 	return value
 }
 
-func LoadCastActorFrame(workspace assets.Workspace, cast assets.Cast, actor assets.CastActor, poseName string, frameIndex int, scale int16, angle int16) (WorldActorSprite, error) {
+func LoadCastActorFrame(workspace assets.Workspace, cast assets.Cast, actor assets.CastActor, poseName string, frameIndex int, scale int16, angle, zClip int16) (WorldActorSprite, error) {
 	variant, found, err := workspace.CastPoseFrame(cast, actor, poseName, frameIndex, angle)
 	if err != nil {
 		return WorldActorSprite{}, err
@@ -182,7 +183,7 @@ func LoadCastActorFrame(workspace assets.Workspace, cast assets.Cast, actor asse
 		return WorldActorSprite{}, fmt.Errorf("decode cast actor %q frame %d: %w", actor.Name, variant.Resource, err)
 	}
 	frame.Origin.X, frame.Origin.Y = frame.Origin.Y, frame.Origin.X
-	return WorldActorSprite{Name: actor.Name, Position: actor.Position, Scale: scale, Metric: variant.Metric, Frame: frame, Visible: true}, nil
+	return WorldActorSprite{Name: actor.Name, Position: actor.Position, Scale: scale, ZClip: zClip, Metric: variant.Metric, Frame: frame, Visible: true}, nil
 }
 
 func CompositeWorldActors(background IndexedFrame, point [3]int16, actors []WorldActorSprite) (IndexedFrame, []ProjectedWorldActor, error) {
@@ -266,7 +267,11 @@ func projectWorldActor(background IndexedFrame, point [3]int16, actor WorldActor
 	deltaX, deltaY := int(actor.Position[0])-cameraX, int(actor.Position[1])-cameraY
 	depth := deltaX*forwardX + deltaY*forwardY
 	lateral := deltaX*(-forwardY) + deltaY*forwardX
-	if depth <= 0 {
+	farClip := depth - int(actor.ZClip) + 0x80
+	if farClip < 0 {
+		farClip = 0
+	}
+	if depth < 0x20 || farClip > 0x600 {
 		return ProjectedWorldActor{}, false, nil
 	}
 	denominator := depth * 1000
@@ -283,7 +288,23 @@ func projectWorldActor(background IndexedFrame, point [3]int16, actor WorldActor
 	anchorX, anchorY := background.Width/2+310*lateral/depth, background.Height/2-310*(int(actor.Position[2])-cameraZ)/depth
 	left := anchorX - actor.Frame.Origin.X*width/actor.Frame.Width
 	top := anchorY - actor.Frame.Origin.Y*height/actor.Frame.Height
-	return ProjectedWorldActor{Name: actor.Name, Depth: depth, Bounds: image.Rect(left, top, left+width, top+height), pixels: pixels, mask: mask}, true, nil
+	bounds := image.Rect(left, top, left+width, top+height)
+	visible := bounds.Intersect(image.Rect(0, 0, background.Width, background.Height))
+	if visible.Empty() {
+		return ProjectedWorldActor{}, false, nil
+	}
+	if visible != bounds {
+		clippedPixels, clippedMask := make([]byte, visible.Dx()*visible.Dy()), make([]bool, visible.Dx()*visible.Dy())
+		for y := range visible.Dy() {
+			for x := range visible.Dx() {
+				source := (visible.Min.Y-bounds.Min.Y+y)*bounds.Dx() + visible.Min.X - bounds.Min.X + x
+				destination := y*visible.Dx() + x
+				clippedPixels[destination], clippedMask[destination] = pixels[source], mask[source]
+			}
+		}
+		pixels, mask = clippedPixels, clippedMask
+	}
+	return ProjectedWorldActor{Name: actor.Name, Depth: depth, Bounds: visible, pixels: pixels, mask: mask}, true, nil
 }
 
 func scaleWorldActorFrame(frame PuppetFrame, sourcePixels []byte, sourceMask []bool, width, height int) ([]byte, []bool) {
