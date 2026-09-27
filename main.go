@@ -584,6 +584,10 @@ func run() error {
 		if !found {
 			return fmt.Errorf("Leroy bysign returned unsupported event %d", event)
 		}
+		flow, found := scripts.LeroyBySignResponseTransition(event, gameDay)
+		if !found {
+			return fmt.Errorf("Leroy bysign event %d has no verified response transition", event)
+		}
 		if err := leroyDialogue.Close(); err != nil {
 			return err
 		}
@@ -598,14 +602,7 @@ func run() error {
 		}
 		currentFrame, stageFrame = frame, frame
 		leroyChoiceAnswered[event] = true
-		switch event {
-		case 101:
-			leroyDialogueRepeats, leroyDialogueReturns = gameDay != 1, gameDay == 1
-		case 102:
-			leroyDialogueRepeats, leroyDialogueReturns = true, false
-		case 103, 104:
-			leroyDialogueRepeats, leroyDialogueReturns, leroyDialogueSetsPhase = false, true, true
-		}
+		leroyDialogueRepeats, leroyDialogueReturns, leroyDialogueSetsPhase = flow.Repeats, flow.Returns, flow.SetsPhase
 		leroyInteractionStage = leroyInteractionPuppetSpeaking
 		if *debug {
 			log.Printf("puppet=leroy event=%d response-lines=%d", event, len(calls))

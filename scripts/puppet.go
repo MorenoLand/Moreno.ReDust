@@ -106,3 +106,22 @@ func LeroyBySignResponseCalls(event int32) ([]string, bool) {
 		return nil, false
 	}
 }
+
+type PuppetResponseTransition struct {
+	Repeats   bool
+	Returns   bool
+	SetsPhase bool
+}
+
+func LeroyBySignResponseTransition(event int32, day int) (PuppetResponseTransition, bool) {
+	switch event {
+	case 101:
+		return PuppetResponseTransition{Repeats: day != 1, Returns: day == 1}, true
+	case 102, 103:
+		return PuppetResponseTransition{Repeats: true}, true
+	case 104:
+		return PuppetResponseTransition{Returns: true, SetsPhase: true}, true
+	default:
+		return PuppetResponseTransition{}, false
+	}
+}
