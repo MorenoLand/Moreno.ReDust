@@ -760,6 +760,16 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("refresh NITE actors: %w", err)
 		}
+		if *debug && activeSetName == "sallower" {
+			projectedCount := 0
+			for _, actor := range projected {
+				if strings.EqualFold(actor.Name, "Isao") {
+					projectedCount++
+					log.Printf("actor=isao projection depth=%d bounds=%d,%d,%d,%d", actor.Depth, actor.Bounds.Min.X, actor.Bounds.Min.Y, actor.Bounds.Max.X, actor.Bounds.Max.Y)
+				}
+			}
+			log.Printf("actor=isao scene-refresh set=%s view=%s point=%v visible=%t pose=%s heading=%d projected=%d", activeSetName, view.Name[1:], worldPoint, isaoVisible, actorPoses["isao"], actorHeadings["isao"], projectedCount)
+		}
 		panel, err := render.StageFrame(stage, currentPixels.Pixels)
 		if err != nil {
 			return fmt.Errorf("refresh mainpanel: %w", err)
