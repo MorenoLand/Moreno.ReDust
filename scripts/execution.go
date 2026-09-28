@@ -87,6 +87,64 @@ func equalPascalText(value []byte, text string) bool {
 
 type ScriptFrameState [39]uint16
 
+const nativeScriptContextCount = 9
+const nativeScriptContextPageSize = 0x100
+
+type ScriptContextPages [nativeScriptContextCount][nativeScriptContextPageSize]byte
+
+func NewScriptContextPages(current []byte) (ScriptContextPages, error) {
+	var pages ScriptContextPages
+	for index := range pages {
+		if err := pages.Store(index, current); err != nil {
+			return ScriptContextPages{}, err
+		}
+	}
+	return pages, nil
+}
+
+func (pages *ScriptContextPages) Store(index int, current []byte) error {
+	if pages == nil {
+		return fmt.Errorf("script context pages are unavailable")
+	}
+	if index < 0 || index >= len(pages) {
+		return fmt.Errorf("native script context index %d is outside 0..%d", index, len(pages)-1)
+	}
+	if len(current) == 0 || int(current[0])+1 > len(current) {
+		return fmt.Errorf("script context is not a complete Pascal string")
+	}
+	copy(pages[index][:], current[:int(current[0])+1])
+	return nil
+}
+
+func (pages ScriptContextPages) Restore(index int) ([]byte, error) {
+	if index < 0 || index >= len(pages) {
+		return nil, fmt.Errorf("native script context index %d is outside 0..%d", index, len(pages)-1)
+	}
+	length := int(pages[index][0]) + 1
+	return append([]byte(nil), pages[index][:length]...), nil
+}
+
+func (pages ScriptContextPages) MarshalBinary() ([]byte, error) {
+	data := make([]byte, nativeScriptContextCount*nativeScriptContextPageSize)
+	for index := range pages {
+		copy(data[index*nativeScriptContextPageSize:], pages[index][:])
+	}
+	return data, nil
+}
+
+func (pages *ScriptContextPages) UnmarshalBinary(data []byte) error {
+	if pages == nil {
+		return fmt.Errorf("script context pages are unavailable")
+	}
+	if len(data) != nativeScriptContextCount*nativeScriptContextPageSize {
+		return fmt.Errorf("native script context block has %d bytes, want %d", len(data), nativeScriptContextCount*nativeScriptContextPageSize)
+	}
+	for index := range pages {
+		copy(pages[index][:], data[index*nativeScriptContextPageSize:(index+1)*nativeScriptContextPageSize])
+	}
+	return nil
+}
+
 func (f *ScriptFrameState) SetBaseByteOffset(offset uint32) {
 	f[10] = uint16(offset)
 	f[11] = uint16(offset >> 16)
