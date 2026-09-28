@@ -122,21 +122,39 @@ func NewNativePlaylist(context *ebitenaudio.Context, tracks []NativeSound, event
 	if context == nil {
 		return nil, fmt.Errorf("audio context is nil")
 	}
+	stream, err := nativePlaylistStream(tracks, events, loopIndex, context.SampleRate())
+	if err != nil || stream == nil {
+		return nil, err
+	}
+	player, err := context.NewPlayer(stream)
+	if err != nil {
+		return nil, err
+	}
+	managed := newPlayer(player)
+	managed.Play()
+	return managed, nil
+}
+
+func nativePlaylistStream(tracks []NativeSound, events []int, loopIndex, targetRate int) (io.Reader, error) {
 	if len(events) == 0 {
 		return nil, nil
 	}
-	if loopIndex < 0 || loopIndex >= len(events) {
+	oneShot := loopIndex == -1
+	if !oneShot && (loopIndex < 0 || loopIndex >= len(events)) {
 		return nil, fmt.Errorf("native audio loop index %d is outside %d events", loopIndex, len(events))
 	}
 	prepared := make([][]byte, len(tracks))
 	for index, track := range tracks {
 		var err error
-		prepared[index], err = stereoPCMAtRate(track.Samples, track.Format, context.SampleRate())
+		prepared[index], err = stereoPCMAtRate(track.Samples, track.Format, targetRate)
 		if err != nil {
 			return nil, fmt.Errorf("prepare native audio track %d: %w", index, err)
 		}
 	}
 	var prefix, loop bytes.Buffer
+	if oneShot {
+		loopIndex = len(events)
+	}
 	for index, event := range events {
 		if event < 0 || event >= len(prepared) {
 			return nil, fmt.Errorf("native audio event %d references track %d outside %d tracks", index, event, len(prepared))
@@ -149,17 +167,16 @@ func NewNativePlaylist(context *ebitenaudio.Context, tracks []NativeSound, event
 			return nil, err
 		}
 	}
-	if loop.Len() == 0 {
+	if oneShot && prefix.Len() == 0 {
+		return nil, fmt.Errorf("native audio sequence is empty")
+	}
+	if !oneShot && loop.Len() == 0 {
 		return nil, fmt.Errorf("native audio loop is empty")
 	}
-	stream := io.MultiReader(bytes.NewReader(prefix.Bytes()), ebitenaudio.NewInfiniteLoop(bytes.NewReader(loop.Bytes()), int64(loop.Len())))
-	player, err := context.NewPlayer(stream)
-	if err != nil {
-		return nil, err
+	if oneShot {
+		return bytes.NewReader(prefix.Bytes()), nil
 	}
-	managed := newPlayer(player)
-	managed.Play()
-	return managed, nil
+	return io.MultiReader(bytes.NewReader(prefix.Bytes()), ebitenaudio.NewInfiniteLoop(bytes.NewReader(loop.Bytes()), int64(loop.Len()))), nil
 }
 
 func stereoPCMAtRate(input []byte, format PCMFormat, targetRate int) ([]byte, error) {

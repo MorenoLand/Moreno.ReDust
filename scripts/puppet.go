@@ -266,6 +266,29 @@ func NativePuppetChoiceAt(point uint32, choices []PuppetChoice) (int32, bool) {
 	return 0, false
 }
 
+type LeroyBySignEntry struct {
+	Speech   []string
+	Phase    int16
+	SetPhase bool
+	Repeats  bool
+	Returns  bool
+}
+
+func LeroyBySignEntryForPhase(phase int16) LeroyBySignEntry {
+	entry := LeroyBySignEntry{Repeats: true}
+	if phase > 999 {
+		entry.Speech = append(entry.Speech, "leroy.42")
+	}
+	if phase == 1001 {
+		entry.Phase, entry.SetPhase, entry.Repeats, entry.Returns = 1, true, false, true
+		return entry
+	}
+	if phase == 0 {
+		entry.Speech = append(entry.Speech, "leroy.43", "leroy.44")
+	}
+	return entry
+}
+
 func LeroyBySignResponseCalls(event int32) ([]string, bool) {
 	switch event {
 	case 101:

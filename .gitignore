@@ -9,3 +9,4 @@ Ghidra/
 !/assets/*.go
 *_test.go
 SESSION*/
+AGENTS.md

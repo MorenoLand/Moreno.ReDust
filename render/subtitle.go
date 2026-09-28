@@ -42,6 +42,27 @@ func DrawNativeSubtitle(frame IndexedFrame, text string) (IndexedFrame, error) {
 	return frame, nil
 }
 
+func DrawNativeTextAt(frame IndexedFrame, text string, position image.Point) (IndexedFrame, error) {
+	return DrawNativeTextAtColor(frame, text, position, color.White)
+}
+
+func DrawNativeTextAtColor(frame IndexedFrame, text string, position image.Point, ink color.Color) (IndexedFrame, error) {
+	face, err := nativeSubtitleFace()
+	if err != nil {
+		return IndexedFrame{}, err
+	}
+	background, err := frame.rgbaImage()
+	if err != nil {
+		return IndexedFrame{}, err
+	}
+	rgba := image.NewRGBA(background.Bounds())
+	draw.Draw(rgba, rgba.Bounds(), background, image.Point{}, draw.Src)
+	drawer := font.Drawer{Dst: rgba, Src: image.NewUniform(ink), Face: face, Dot: fixed.P(position.X, position.Y)}
+	drawer.DrawString(text)
+	frame.rgba = rgba
+	return frame, nil
+}
+
 func DrawNativePuppetChoices(frame IndexedFrame, choices []string) (IndexedFrame, error) {
 	if len(frame.Palette) <= 0xfa {
 		return IndexedFrame{}, fmt.Errorf("puppet choice text palette has %d entries, want at least 251", len(frame.Palette))

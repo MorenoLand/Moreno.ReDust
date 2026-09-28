@@ -90,10 +90,17 @@ func DispatchPlayMovie(runtime *ConditionRuntime, frame ConditionFrame, start in
 }
 
 type MouseDownAction struct {
-	FlatTarget   int
-	VisualEffect uint16
-	Duration     int
+	FlatTarget       int
+	VisualEffect     uint16
+	Duration         int
+	ReturnIdentifier string
 }
+
+// ErrUnresolvedFlatTarget reports a gotoflat argument form that the verified
+// evidence does not cover. A numeric argument is a flat transition; an
+// identifier argument is the dynamic return that restores the flat captured by
+// an earlier assignment in the same handler.
+var ErrUnresolvedFlatTarget = errors.New("mousedown gotoflat argument form is unsupported")
 
 func MouseDownFlatAction(program Program) (MouseDownAction, bool, error) {
 	start, err := FindCode(program, "mousedown")
@@ -115,14 +122,34 @@ func MouseDownFlatAction(program Program) (MouseDownAction, bool, error) {
 	for i := start + 1; i < end; i++ {
 		switch program.Records[i].Kind {
 		case LookupOpcode("gotoflat"):
-			if i+3 >= end || program.Records[i+1].Kind != 4018 || program.Records[i+2].Kind != 4 || program.Records[i+3].Kind != 4019 {
+			if i+3 >= end || program.Records[i+1].Kind != 4018 || program.Records[i+3].Kind != 4019 {
 				return MouseDownAction{}, false, fmt.Errorf("mousedown gotoflat statement at record %d does not match the verified call form", i)
 			}
-			target := int32(program.Records[i+2].Data)
-			if target < 1 {
-				return MouseDownAction{}, false, fmt.Errorf("mousedown gotoflat target %d is invalid", target)
+			switch program.Records[i+2].Kind {
+			case 4:
+				target := int32(program.Records[i+2].Data)
+				if target < 1 {
+					return MouseDownAction{}, false, fmt.Errorf("mousedown gotoflat target %d is invalid", target)
+				}
+				action.FlatTarget, found = int(target-1), true
+			case 5:
+				// Verified dynamic return. NEW.FLT resource 24 captures the
+				// current flat into a local and returns to it after savegame:
+				//   r20  arg = currentflat()
+				//   r31  gotoflat(1)
+				//   r43  savegame("dust 0.3")
+				//   r48  gotoflat(arg)
+				identifier, err := program.IdentifierPascal(i + 2)
+				if err != nil || len(identifier) < 2 {
+					return MouseDownAction{}, false, fmt.Errorf("mousedown gotoflat identifier at record %d is unreadable: %w", i, err)
+				}
+				if action.ReturnIdentifier != "" {
+					return MouseDownAction{}, false, fmt.Errorf("mousedown has more than one dynamic gotoflat return, at record %d", i)
+				}
+				action.ReturnIdentifier = string(identifier[1:])
+			default:
+				return MouseDownAction{}, false, fmt.Errorf("%w: record %d argument kind %d", ErrUnresolvedFlatTarget, i, program.Records[i+2].Kind)
 			}
-			action.FlatTarget, found = int(target-1), true
 		case LookupOpcode("visualeffect"):
 			if i+5 >= end || program.Records[i+1].Kind != 4018 || program.Records[i+3].Kind != 4020 || program.Records[i+4].Kind != 4 || program.Records[i+5].Kind != 4019 {
 				return MouseDownAction{}, false, fmt.Errorf("mousedown visualeffect statement at record %d does not match the verified call form", i)

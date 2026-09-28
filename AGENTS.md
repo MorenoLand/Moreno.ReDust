@@ -34,6 +34,15 @@ Keep `Original/DF386.EXE` pristine. Any runtime patch or compatibility experimen
 - Development launch: `go run .`; `--debug` enables diagnostics; `--work=bin/` selects the default runtime work directory.
 - Final native executable goes in `bin/`, beside `bin/assets/`; WebAssembly output and its locally staged assets go in `bin/web/`. Keep generated binaries and extracted data out of public commits.
 
+## Fast, evidence-first iteration
+
+- Start with `.codex/evidence-ledger.md`, the current Go implementation, and the existing `.codex/ghidra-exports/` function JSON. The function records already contain decompilation and machine-level evidence; reuse them instead of repeating corpus-wide analysis.
+- Do not re-export the full program or regenerate raw assembly for routine work. Inspect a function's cached assembly/p-code only where decompilation leaves a concrete ambiguity; request new Ghidra output only for a named missing or stale function record.
+- Treat the evidence ledger as the progress map. Do not redo completed findings unless new evidence contradicts them; update the ledger only when a behavior or limitation is actually verified.
+- Work from one user-visible behavior slice at a time, grouping its related Go code and evidence. Prefer finishing and running a small end-to-end slice over serially generating candidate code for every native function. Preserve correct behavior and existing working code; do not simplify by dropping features.
+- ReAgent is optional evidence tooling, not the implementation loop. Its per-function C/C++ recovery and iterative candidate review are not the Go port. Use it only when one specifically named, important function remains ambiguous after cached decompilation/assembly review, and limit the attempt to that function and one round; stop if the candidate does not add concrete evidence.
+- Keep runtime implementation in the existing grouped Go subsystems. Use the documented `go run . --debug --work=bin/` path for development when runtime verification is needed; do not treat generated C/C++ or an export as completed behavior.
+
 ## Required analysis order
 
 1. Verify the reference hash before using evidence.
@@ -41,7 +50,7 @@ Keep `Original/DF386.EXE` pristine. Any runtime patch or compatibility experimen
 3. Trace the CRT boundary from the `R600x` strings before counting engine functions.
 4. Resolve the opcode name table at `0x0045EB08` and determine whether dispatch compares text or indexes integers.
 5. Decode the APPL word-swapped strings before interpreting script/data records.
-6. Use ReAgent for bounded function evidence and candidate C/C++ recovery.
+6. Reuse cached Ghidra function evidence; use ReAgent only under the narrow exception in “Fast, evidence-first iteration.”
 7. Translate only verified behavior into grouped Go subsystem packages; native C/C++ candidates are evidence, not runtime source.
 
 Do not invent interpreter behavior, file formats, timing semantics, or ownership. Treat unresolved behavior as an explicit evidence gap.
@@ -53,17 +62,6 @@ Do not invent interpreter behavior, file formats, timing semantics, or ownership
 - Keep `.codex/`, `Ghidra/`, `*.gzf`, logs, generated evidence, manifests, and local runtime data ignored or untracked.
 - Make frequent factual, GPG-signed local commits at meaningful conversion milestones so the work has restore points. Do not push unless explicitly requested.
 
-## ReAgent workflow
+## Optional ReAgent use
 
-Run from the ReDust repository root:
-
-```powershell
-$re = '.\.codex\venv\Scripts\re-agent.exe'
-$bridge = '.\.codex\venv\Scripts\ghidra-bridge.exe'
-& $bridge --config '.\.codex\ghidra-bridge.yaml' export decompiled
-& $re --config '.\.codex\re-agent.yaml' doctor --address 0xADDRESS
-& $re --config '.\.codex\re-agent.yaml' plan --address 0xADDRESS --max-depth 0 --max-functions 1 --output '.\.codex\target-plan.json'
-& $re --config '.\.codex\re-agent.yaml' reverse --manifest '.\.codex\target-plan.json' --max-functions 1 --max-rounds 1
-```
-
-Validation is disabled until a real DUST candidate-consuming native/differential harness exists. Generated candidates are evidence, not completed Go implementation or parity proof. Run Go development with `go run .`; place final build output in `bin/`.
+Do not run ReAgent's doctor/plan/reverse sequence by default. First verify that the specific function's cached Ghidra JSON is absent or insufficient and that resolving it would unblock a meaningful behavior slice. If justified, run from the repository root against only that address, with one function and one round; review the candidate as evidence, then return to the Go implementation. Do not launch corpus-wide sessions or repeat rounds without a new, concrete question. Validation remains disabled until a real DUST candidate-consuming native/differential harness exists. Generated candidates are not completed Go implementation or parity proof.

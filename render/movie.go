@@ -23,13 +23,14 @@ type MovieFrameDescriptor struct {
 }
 
 type Movie struct {
-	resources           *assets.ResourceCache
-	frames              []MovieFrameDescriptor
-	paletteRaw          []byte
-	actionFrameMarkers  [2]int16
-	defaultTick         uint32
-	soundtrackResources []uint32
-	soundtrackLoop      int
+	resources              *assets.ResourceCache
+	frames                 []MovieFrameDescriptor
+	paletteRaw             []byte
+	actionFrameMarkers     [2]int16
+	defaultTick            uint32
+	embeddedSoundResources []uint32
+	soundtrackResources    []uint32
+	soundtrackLoop         int
 }
 
 type MoviePlayback struct {
@@ -110,6 +111,10 @@ func OpenMovie(workspace assets.Workspace, name string) (*Movie, error) {
 		resources.Close()
 		return nil, fmt.Errorf("movie audio loop target %d exceeds %d events", loopTarget, eventCount)
 	}
+	embeddedSoundResources := make([]uint32, soundCount)
+	for index := range embeddedSoundResources {
+		embeddedSoundResources[index] = uint32(index + 1)
+	}
 	soundtrackResources := make([]uint32, eventCount)
 	for index := range soundtrackResources {
 		event := int(binary.LittleEndian.Uint16(data[0x83e+index*2 : 0x840+index*2]))
@@ -130,7 +135,7 @@ func OpenMovie(workspace assets.Workspace, name string) (*Movie, error) {
 			return nil, fmt.Errorf("movie frame %d references resource %d outside %d entries", index, frames[index].ResourceIndex, header.CountB)
 		}
 	}
-	return &Movie{resources: resources, frames: frames, paletteRaw: append([]byte(nil), data[0x3e:0x83e]...), actionFrameMarkers: [2]int16{int16(binary.LittleEndian.Uint16(data[0x2e:0x30])), int16(binary.LittleEndian.Uint16(data[0x30:0x32]))}, defaultTick: binary.LittleEndian.Uint32(data[0x26:0x2a]), soundtrackResources: soundtrackResources, soundtrackLoop: int(loopTarget)}, nil
+	return &Movie{resources: resources, frames: frames, paletteRaw: append([]byte(nil), data[0x3e:0x83e]...), actionFrameMarkers: [2]int16{int16(binary.LittleEndian.Uint16(data[0x2e:0x30])), int16(binary.LittleEndian.Uint16(data[0x30:0x32]))}, defaultTick: binary.LittleEndian.Uint32(data[0x26:0x2a]), embeddedSoundResources: embeddedSoundResources, soundtrackResources: soundtrackResources, soundtrackLoop: int(loopTarget)}, nil
 }
 
 func (m *Movie) FrameCount() int {
@@ -145,6 +150,13 @@ func (m *Movie) SoundtrackResources() ([]uint32, int) {
 		return nil, 0
 	}
 	return append([]uint32(nil), m.soundtrackResources...), m.soundtrackLoop
+}
+
+func (m *Movie) EmbeddedSoundResources() []uint32 {
+	if m == nil {
+		return nil
+	}
+	return append([]uint32(nil), m.embeddedSoundResources...)
 }
 
 func (m *Movie) Frame(index int) (MovieFrameDescriptor, error) {
