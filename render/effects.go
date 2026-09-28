@@ -19,6 +19,60 @@ type BarndoorEffect struct {
 	targetRGBA   *image.RGBA
 }
 
+type FadeEffect struct {
+	from, target         IndexedFrame
+	fromRGBA, targetRGBA *image.RGBA
+	duration, step       int
+	done                 bool
+}
+
+func NewFadeEffect(from, target IndexedFrame, duration int) (*FadeEffect, error) {
+	if from.Width < 1 || from.Height < 1 || from.Width != target.Width || from.Height != target.Height || len(from.Pixels) != from.Width*from.Height || len(target.Pixels) != target.Width*target.Height || duration < 1 || duration > 1000 {
+		return nil, fmt.Errorf("fade frames or duration are invalid")
+	}
+	fromRGBA, err := from.rgbaImage()
+	if err != nil {
+		return nil, err
+	}
+	targetRGBA, err := target.rgbaImage()
+	if err != nil {
+		return nil, err
+	}
+	from.Pixels, target.Pixels = append([]byte(nil), from.Pixels...), append([]byte(nil), target.Pixels...)
+	return &FadeEffect{from: from, target: target, fromRGBA: clonePuppetRGBA(fromRGBA), targetRGBA: clonePuppetRGBA(targetRGBA), duration: duration}, nil
+}
+
+func (e *FadeEffect) CurrentFrame() IndexedFrame {
+	if e == nil {
+		return IndexedFrame{}
+	}
+	frame := image.NewRGBA(image.Rect(0, 0, e.from.Width, e.from.Height))
+	for index, start := range e.fromRGBA.Pix {
+		end := e.targetRGBA.Pix[index]
+		frame.Pix[index] = byte((int(start)*(e.duration-e.step) + int(end)*e.step) / e.duration)
+	}
+	return IndexedFrame{Width: e.from.Width, Height: e.from.Height, Pixels: append([]byte(nil), e.from.Pixels...), Palette: e.target.Palette, rgba: frame}
+}
+
+func (e *FadeEffect) TargetFrame() IndexedFrame {
+	if e == nil {
+		return IndexedFrame{}
+	}
+	return e.target
+}
+
+func (e *FadeEffect) Update() (IndexedFrame, bool, bool) {
+	if e == nil || e.done {
+		return e.TargetFrame(), false, true
+	}
+	e.step++
+	if e.step >= e.duration {
+		e.done = true
+		return e.TargetFrame(), true, true
+	}
+	return e.CurrentFrame(), true, false
+}
+
 func NewBarndoorOpen(from, target IndexedFrame, duration int) (*BarndoorEffect, error) {
 	return newBarndoorEffect(from, target, duration, true)
 }

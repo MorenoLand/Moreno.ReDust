@@ -137,6 +137,19 @@ func (s *Set) FindView(name string) (SetView, bool) {
 	return SetView{}, false
 }
 
+func (s *Set) FindViewByIDs(directionID, sceneID uint16) (SetView, bool) {
+	if s == nil {
+		return SetView{}, false
+	}
+	for _, view := range s.views {
+		if view.DirectionID == directionID && view.SceneID == sceneID {
+			view.Name = append([]byte(nil), view.Name...)
+			return view, true
+		}
+	}
+	return SetView{}, false
+}
+
 func (s *Set) BackgroundResourceForPoints(from, to [3]int16) (uint32, bool, error) {
 	if s == nil {
 		return 0, false, fmt.Errorf("SET is unavailable")

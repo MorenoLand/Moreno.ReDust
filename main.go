@@ -121,6 +121,14 @@ func run() error {
 		return fmt.Errorf("open startup game set: %w", err)
 	}
 	defer func() { _ = nightSet.Close() }()
+	activeSet, activeSetName, activeSetOwned := nightSet, "town", false
+	defer func() {
+		if activeSetOwned && activeSet != nil {
+			_ = activeSet.Close()
+		}
+	}()
+	var doorOwner string
+	townReturnScene := ""
 	view, found := nightSet.FindView("Scene G15")
 	if !found {
 		stage.Close()
@@ -229,12 +237,14 @@ func run() error {
 		stage.Close()
 		return fmt.Errorf("resolve Jones bar position: %w", err)
 	}
-	actorPoses := map[string]string{"leroy": "stand", "dog": "stand", "help": "stand", "jones": "stand"}
-	actorHeadings := map[string]int16{"leroy": 0, "dog": 32, "help": 0, "jones": 0}
-	actorTurnTargets := map[string]int16{"leroy": 0, "help": 0, "jones": 0}
+	actorPoses := map[string]string{"leroy": "stand", "dog": "stand", "help": "stand", "jones": "stand", "isao": "stand"}
+	actorHeadings := map[string]int16{"leroy": 0, "dog": 32, "help": 0, "jones": 0, "isao": 64}
+	actorTurnTargets := map[string]int16{"leroy": 0, "help": 0, "jones": 0, "isao": 64}
 	actorTurnActive, helpTurnActive, jonesTurnActive := false, false, false
 	helpVisible, helpPhase, helpAttention := false, int16(0), int32(0)
 	jonesPosition, jonesVisible := jonesStartPosition, false
+	var isaoPosition [3]int16
+	isaoVisible, isaoBouncer, isaoDirGo := false, false, false
 	const leroyTurnRate int16 = 7
 	const leroyWalkRate int16 = 3
 	const helpWalkRate int16 = 3
@@ -321,10 +331,30 @@ func run() error {
 		}
 	}()
 	compositeWorld := func(background render.IndexedFrame, point [3]int16, actors []render.WorldActorSprite) (render.IndexedFrame, []render.ProjectedWorldActor, error) {
-		return render.CompositeWorldActorsAndProps(background, point, "town", actors, []render.WorldPropSprite{boneWorldProp})
+		return render.CompositeWorldActorsAndProps(background, point, activeSetName, actors, []render.WorldPropSprite{boneWorldProp})
 	}
 	loadWorldActors := func(point [3]int16) ([]render.WorldActorSprite, error) {
-		actors := make([]render.WorldActorSprite, 0, 3)
+		actors := make([]render.WorldActorSprite, 0, 4)
+		if activeSetName == "sallower" {
+			if isaoVisible {
+				for _, actor := range gangCast.Actors {
+					if !strings.EqualFold(actor.Name, "Isao") {
+						continue
+					}
+					actor.Position, actor.Located = isaoPosition, true
+					sprite, err := render.LoadCastActorFrame(workspace, gangCast, actor, actorPoses["isao"], 0, 4200, render.NativeActorViewAngle(isaoPosition, point, actorHeadings["isao"]), 32)
+					if err != nil {
+						return nil, fmt.Errorf("load Sallowers actor Isao: %w", err)
+					}
+					actors = append(actors, sprite)
+					break
+				}
+			}
+			return actors, nil
+		}
+		if activeSetName != "town" {
+			return actors, nil
+		}
 		for _, actor := range gangCast.Actors {
 			if strings.EqualFold(actor.Name, "leroy") {
 				if !hasLeroy {
@@ -564,19 +594,19 @@ func run() error {
 		return nil
 	}
 	setWorldView := func(sceneName string, direction int16) (render.IndexedFrame, error) {
-		nextView, found := nightSet.FindView(sceneName)
+		nextView, found := activeSet.FindView(sceneName)
 		if !found {
-			return render.IndexedFrame{}, fmt.Errorf("NITE.SET has no view %q", sceneName)
+			return render.IndexedFrame{}, fmt.Errorf("%s has no view %q", activeSetName, sceneName)
 		}
 		nextPoint := [3]int16{int16(nextView.DirectionID), int16(nextView.SceneID), direction}
-		frameResource, found, err := nightSet.BackgroundResourceForDirection(nextView, direction)
+		frameResource, found, err := activeSet.BackgroundResourceForDirection(nextView, direction)
 		if err != nil || !found {
 			if err != nil {
 				return render.IndexedFrame{}, fmt.Errorf("resolve %s background: %w", sceneName, err)
 			}
 			return render.IndexedFrame{}, fmt.Errorf("%s has no background for direction %d", sceneName, direction)
 		}
-		backgroundData, err := nightSet.Resource(frameResource)
+		backgroundData, err := activeSet.Resource(frameResource)
 		if err != nil {
 			return render.IndexedFrame{}, fmt.Errorf("read %s background resource %d: %w", sceneName, frameResource, err)
 		}
@@ -587,7 +617,7 @@ func run() error {
 		if decodeErr != nil && *debug {
 			log.Printf("scene=%s resource=%d partial-frame: %v", sceneName, frameResource, decodeErr)
 		}
-		nextBackground, err := render.StageFrame(&assets.Stage{Width: uint16(backgroundPixels.Width), Height: uint16(backgroundPixels.Height), PaletteRaw: nightSet.Palette()}, backgroundPixels.Pixels)
+		nextBackground, err := render.StageFrame(&assets.Stage{Width: uint16(backgroundPixels.Width), Height: uint16(backgroundPixels.Height), PaletteRaw: activeSet.Palette()}, backgroundPixels.Pixels)
 		if err != nil {
 			return render.IndexedFrame{}, fmt.Errorf("render %s background: %w", sceneName, err)
 		}
@@ -612,6 +642,180 @@ func run() error {
 		stageFrame, currentFrame = nextFrame, nextFrame
 		if *debug {
 			log.Printf("scene=%s direction=%d frame-resource=%d", view.Name[1:], worldPoint[2], frameResource)
+			for _, actor := range projectedActors {
+				log.Printf("world-actor=%s depth=%d bounds=%d,%d,%d,%d", actor.Name, actor.Depth, actor.Bounds.Min.X, actor.Bounds.Min.Y, actor.Bounds.Max.X, actor.Bounds.Max.Y)
+			}
+		}
+		return nextFrame, nil
+	}
+	switchSpecialSet := func(setName, sceneName, directionName string) (render.IndexedFrame, error) {
+		setName = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(strings.TrimPrefix(setName, "DATA/")), ".set"))
+		semanticName := setName
+		var nextSet *assets.Set
+		nextOwned := false
+		if setName == "town" || setName == "nite" {
+			semanticName = "town"
+			if gameClock == 3 || setName == "nite" {
+				nextSet = nightSet
+			} else {
+				nextSet, err = workspace.OpenSet("DATA/TOWN.SET")
+				nextOwned = err == nil
+			}
+		} else {
+			nextSet, err = workspace.OpenSet("DATA/" + strings.ToUpper(setName) + ".SET")
+			nextOwned = err == nil
+		}
+		if err != nil {
+			return render.IndexedFrame{}, fmt.Errorf("open special SET %s: %w", setName, err)
+		}
+		closeNext := func(err error) (render.IndexedFrame, error) {
+			if nextOwned {
+				_ = nextSet.Close()
+			}
+			return render.IndexedFrame{}, err
+		}
+		startPoint, err := nextSet.StartPoint()
+		if err != nil {
+			return closeNext(fmt.Errorf("read %s start point: %w", setName, err))
+		}
+		nextView, found := assets.SetView{}, false
+		if sceneName != "" {
+			nextView, found = nextSet.FindView(sceneName)
+		} else {
+			for _, candidate := range nextSet.Views() {
+				if candidate.DirectionID == uint16(startPoint[0]) && candidate.SceneID == uint16(startPoint[1]) {
+					nextView, found = candidate, true
+					break
+				}
+			}
+		}
+		if !found {
+			return closeNext(fmt.Errorf("%s has no start view for scene %q", setName, sceneName))
+		}
+		direction := startPoint[2]
+		if directionName != "" {
+			switch strings.ToLower(directionName) {
+			case "north":
+				direction = assets.SetDirectionNorth
+			case "south":
+				direction = assets.SetDirectionSouth
+			case "east":
+				direction = assets.SetDirectionEast
+			case "west":
+				direction = assets.SetDirectionWest
+			default:
+				return closeNext(fmt.Errorf("unknown %s direction %q", setName, directionName))
+			}
+		}
+		nextPoint := [3]int16{int16(nextView.DirectionID), int16(nextView.SceneID), direction}
+		resource, found, err := nextSet.BackgroundResourceForDirection(nextView, direction)
+		if err != nil || !found {
+			if err != nil {
+				return closeNext(fmt.Errorf("resolve %s/%s background: %w", setName, nextView.Name[1:], err))
+			}
+			return closeNext(fmt.Errorf("%s/%s has no background for direction %d", setName, nextView.Name[1:], direction))
+		}
+		data, err := nextSet.Resource(resource)
+		if err != nil {
+			return closeNext(fmt.Errorf("read %s background resource %d: %w", setName, resource, err))
+		}
+		pixels, decodeErr := render.DecodeMoviePixels(data, nil)
+		if len(pixels.Pixels) == 0 {
+			return closeNext(fmt.Errorf("decode %s background resource %d: %w", setName, resource, decodeErr))
+		}
+		if decodeErr != nil && *debug {
+			log.Printf("set=%s resource=%d partial-frame: %v", setName, resource, decodeErr)
+		}
+		background, err := render.StageFrame(&assets.Stage{Width: uint16(pixels.Width), Height: uint16(pixels.Height), PaletteRaw: nextSet.Palette()}, pixels.Pixels)
+		if err != nil {
+			return closeNext(fmt.Errorf("render %s background: %w", setName, err))
+		}
+		previousSet, previousName, previousOwned := activeSet, activeSetName, activeSetOwned
+		if previousName == "town" && semanticName != "town" {
+			townReturnScene = string(view.Name[1:])
+			nativeLoops.Stop(1, "scene g14")
+			for _, owner := range []string{"leroy", "dog", "help", "jones", "isao"} {
+				nativeLoops.Stop(2, owner)
+			}
+			leroyWalk, helpWalk, jonesWalk = nil, nil, nil
+			actorPoses["leroy"], actorPoses["help"], actorPoses["jones"] = "stand", "stand", "stand"
+			actorTurnActive, helpTurnActive, jonesTurnActive = false, false, false
+		}
+		activeSet, activeSetName, activeSetOwned = nextSet, semanticName, nextOwned
+		view, worldPoint, backgroundFrame = nextView, nextPoint, background
+		doorOwner = ""
+		if semanticName == "sallower" {
+			position, found, err := nextSet.ResolveLocation("sallower.isao")
+			if err != nil || !found {
+				return render.IndexedFrame{}, fmt.Errorf("resolve Sallowers Isao position: point=%v found=%t err=%v", position, found, err)
+			}
+			isaoPosition, isaoVisible, actorPoses["isao"], actorHeadings["isao"] = position, true, "stand", 64
+			isaoBouncer, isaoDirGo, jonesTurnActive = false, false, false
+			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "isao", Callback: "isaoidle", Remaining: 2}); status != 0 {
+				return render.IndexedFrame{}, fmt.Errorf("register Isao idle loop returned status %#x", status)
+			}
+		} else {
+			isaoVisible = false
+			nativeLoops.Stop(2, "isao")
+		}
+		nextActors, err := loadWorldActors(nextPoint)
+		if err != nil {
+			return render.IndexedFrame{}, err
+		}
+		worldBackground, nextProjected, err := compositeWorld(background, nextPoint, nextActors)
+		if err != nil {
+			return render.IndexedFrame{}, fmt.Errorf("render %s actors: %w", setName, err)
+		}
+		panel, err := render.StageFrame(stage, currentPixels.Pixels)
+		if err != nil {
+			return render.IndexedFrame{}, fmt.Errorf("render mainpanel over %s: %w", setName, err)
+		}
+		nextFrame, err := composeMainPanel(worldBackground, panel)
+		if err != nil {
+			return render.IndexedFrame{}, fmt.Errorf("compose %s scene: %w", setName, err)
+		}
+		worldActors, projectedActors, stageFrame, currentFrame = nextActors, nextProjected, nextFrame, nextFrame
+		if semanticName == "town" && previousName != "town" {
+			if gameClock == 3 {
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "leroy", Callback: "leroyidle", Remaining: 20}); status != 0 {
+					return render.IndexedFrame{}, fmt.Errorf("register Leroy idle loop after town return returned status %#x", status)
+				}
+			}
+			if gameDay == 1 && dogVisibleState {
+				step, found := scripts.DogIdleStep("doright", &nativeRandom)
+				if found {
+					actorPoses["dog"] = step.Pose
+					if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "dog", Callback: step.Callback, Remaining: step.Remaining}); status != 0 {
+						return render.IndexedFrame{}, fmt.Errorf("register Dog idle loop after town return returned status %#x", status)
+					}
+				}
+			}
+			if helpVisible {
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "help", Callback: "helpidle", Remaining: 19}); status != 0 {
+					return render.IndexedFrame{}, fmt.Errorf("register Help idle loop after town return returned status %#x", status)
+				}
+			}
+			if jonesVisible && jonesWalk == nil {
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "jones", Callback: "jonesidle", Remaining: 17}); status != 0 {
+					return render.IndexedFrame{}, fmt.Errorf("register Jones idle loop after town return returned status %#x", status)
+				}
+			}
+			if currentThemeName == "nightwind3" {
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 1, Owner: "scene g14", Callback: "nightfxs", Remaining: 2}); status != 0 {
+					return render.IndexedFrame{}, fmt.Errorf("register NITE nightfxs loop after town return returned status %#x", status)
+				}
+			}
+		}
+		if previousOwned && previousSet != nextSet {
+			if err := previousSet.Close(); err != nil {
+				return render.IndexedFrame{}, fmt.Errorf("close previous active SET: %w", err)
+			}
+		}
+		if semanticName == "town" {
+			townReturnScene = ""
+		}
+		if *debug {
+			log.Printf("set=%s view=%s direction=%d resource=%d size=%dx%d", setName, view.Name[1:], direction, resource, background.Width, background.Height)
 			for _, actor := range projectedActors {
 				log.Printf("world-actor=%s depth=%d bounds=%d,%d,%d,%d", actor.Name, actor.Depth, actor.Bounds.Min.X, actor.Bounds.Min.Y, actor.Bounds.Max.X, actor.Bounds.Max.Y)
 			}
@@ -1253,6 +1457,28 @@ func run() error {
 				if *debug {
 					log.Printf("actor=jones idle=turn-check point=%v ticks=%d turn=%t", jonesPosition, loop.Remaining, jonesTurnActive)
 				}
+			case "isaoidle":
+				if isaoBouncer {
+					actorPoses["isao"], isaoBouncer = "stand", false
+				} else {
+					actorPoses["isao"], isaoBouncer = "up", true
+				}
+				if isaoDirGo {
+					actorHeadings["isao"] -= 2
+					if actorHeadings["isao"] < 44 {
+						isaoDirGo = false
+					}
+				} else {
+					actorHeadings["isao"] += 2
+					if actorHeadings["isao"] > 84 {
+						isaoDirGo = true
+					}
+				}
+				loop.Remaining = 2
+				displayChanged = displayChanged || currentScene == 0
+				if *debug {
+					log.Printf("actor=isao pose=%s heading=%d next=%s ticks=%d", actorPoses["isao"], actorHeadings["isao"], loop.Callback, loop.Remaining)
+				}
 			default:
 				return 0, fmt.Errorf("unknown native loop callback %q", loop.Callback)
 			}
@@ -1562,6 +1788,15 @@ func run() error {
 					cursor = "touch"
 				}
 			}
+			if activeSetName == "town" {
+				if _, found := scripts.NiteDoorAt(view.Resource, worldPoint[2], point); found {
+					cursor = "touch"
+				}
+			} else if activeSetName == "sallower" {
+				if _, found := scripts.SallowerDoorAt(view.Resource, worldPoint[2], point); found {
+					cursor = "touch"
+				}
+			}
 			if helpInteractionStage == helpInteractionPuppetChoices {
 				if _, found := scripts.NativePuppetChoiceAt(point, helpActiveChoices); found {
 					cursor = "touch"
@@ -1575,8 +1810,28 @@ func run() error {
 		}
 		setNativeCursor(cursor)
 	}
-	var transition *render.BarndoorEffect
+	var transition interface {
+		CurrentFrame() render.IndexedFrame
+		TargetFrame() render.IndexedFrame
+		Update() (render.IndexedFrame, bool, bool)
+	}
+	var transitionMode uint8
+	var pendingSetName, pendingSetScene, pendingSetDirection string
+	var transferSetName, transferSetScene, transferSetDirection string
 	runErr := engine.Run(playback.CurrentFrame(), func() (render.IndexedFrame, bool, error) {
+		if playback == nil && transition == nil && pendingSetName != "" {
+			transferSetName, transferSetScene, transferSetDirection = pendingSetName, pendingSetScene, pendingSetDirection
+			pendingSetName, pendingSetScene, pendingSetDirection = "", "", ""
+			fade, err := render.NewFadeEffect(currentFrame, blackFrame, 30)
+			if err != nil {
+				return render.IndexedFrame{}, false, fmt.Errorf("fade before SET transfer: %w", err)
+			}
+			transition, transitionMode = fade, 1
+			if *debug {
+				log.Printf("set-transfer=fade-out target=%s scene=%q direction=%q duration=30", transferSetName, transferSetScene, transferSetDirection)
+			}
+			return fade.CurrentFrame(), true, nil
+		}
 		if playback == nil && transition == nil && pendingSceneMovie != "" {
 			name := pendingSceneMovie
 			pendingSceneMovie = ""
@@ -1634,9 +1889,9 @@ func run() error {
 		if playback == nil && transition == nil && currentScene == 0 && pendingMovement != 0 {
 			movement := pendingMovement
 			pendingMovement = 0
-			nextPoint, transitionResource, found, err := nightSet.MovePoint(worldPoint, movement)
+			nextPoint, transitionResource, found, err := activeSet.MovePoint(worldPoint, movement)
 			if err != nil {
-				return render.IndexedFrame{}, false, fmt.Errorf("move in NITE.SET: %w", err)
+				return render.IndexedFrame{}, false, fmt.Errorf("move in %s: %w", activeSetName, err)
 			}
 			if !found {
 				if *debug {
@@ -1645,16 +1900,20 @@ func run() error {
 				return render.IndexedFrame{}, false, nil
 			}
 			viewPoint := assets.SetView{DirectionID: uint16(nextPoint[0]), SceneID: uint16(nextPoint[1])}
-			frameResource, hasView, err := nightSet.BackgroundResourceForDirection(viewPoint, nextPoint[2])
+			frameResource, hasView, err := activeSet.BackgroundResourceForDirection(viewPoint, nextPoint[2])
 			if err != nil {
-				return render.IndexedFrame{}, false, fmt.Errorf("resolve NITE.SET directional background after movement: %w", err)
+				return render.IndexedFrame{}, false, fmt.Errorf("resolve %s directional background after movement: %w", activeSetName, err)
+			}
+			nextView, hasEventView := activeSet.FindViewByIDs(viewPoint.DirectionID, viewPoint.SceneID)
+			if hasView && !hasEventView {
+				return render.IndexedFrame{}, false, fmt.Errorf("%s has no event view for scene IDs %d,%d", activeSetName, viewPoint.DirectionID, viewPoint.SceneID)
 			}
 			if !hasView {
 				frameResource = transitionResource
 			}
-			backgroundData, err := nightSet.Resource(frameResource)
+			backgroundData, err := activeSet.Resource(frameResource)
 			if err != nil {
-				return render.IndexedFrame{}, false, fmt.Errorf("load NITE.SET background %d: %w", frameResource, err)
+				return render.IndexedFrame{}, false, fmt.Errorf("load %s background %d: %w", activeSetName, frameResource, err)
 			}
 			backgroundPixels, decodeErr := render.DecodeMoviePixels(backgroundData, nil)
 			if len(backgroundPixels.Pixels) == 0 {
@@ -1663,9 +1922,9 @@ func run() error {
 			if decodeErr != nil && *debug {
 				log.Printf("level-resource=%d partial-frame: %v", frameResource, decodeErr)
 			}
-			nextBackground, err := render.StageFrame(&assets.Stage{Width: uint16(backgroundPixels.Width), Height: uint16(backgroundPixels.Height), PaletteRaw: nightSet.Palette()}, backgroundPixels.Pixels)
+			nextBackground, err := render.StageFrame(&assets.Stage{Width: uint16(backgroundPixels.Width), Height: uint16(backgroundPixels.Height), PaletteRaw: activeSet.Palette()}, backgroundPixels.Pixels)
 			if err != nil {
-				return render.IndexedFrame{}, false, fmt.Errorf("render NITE.SET background %d: %w", frameResource, err)
+				return render.IndexedFrame{}, false, fmt.Errorf("render %s background %d: %w", activeSetName, frameResource, err)
 			}
 			nextActors, err := loadWorldActors(nextPoint)
 			if err != nil {
@@ -1683,6 +1942,11 @@ func run() error {
 			if err != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("compose moved game background: %w", err)
 			}
+			if hasEventView {
+				view = nextView
+			} else {
+				view = assets.SetView{}
+			}
 			worldPoint, backgroundFrame, stageFrame, currentFrame = nextPoint, nextBackground, nextFrame, nextFrame
 			worldActors, projectedActors = nextActors, nextProjectedActors
 			if *debug {
@@ -1699,7 +1963,28 @@ func run() error {
 			}
 			transitionFrame, changed, done := transition.Update()
 			if done {
+				if transitionMode == 1 {
+					blackFrame := transition.TargetFrame()
+					nextFrame, err := switchSpecialSet(transferSetName, transferSetScene, transferSetDirection)
+					if err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+					fade, err := render.NewFadeEffect(blackFrame, nextFrame, 30)
+					if err != nil {
+						return render.IndexedFrame{}, false, fmt.Errorf("fade into SET %s: %w", transferSetName, err)
+					}
+					transition, transitionMode = fade, 2
+					if *debug {
+						log.Printf("set-transfer=fade-in set=%s scene=%s duration=30", activeSetName, view.Name[1:])
+					}
+					return fade.CurrentFrame(), true, nil
+				}
 				currentFrame, transition = transition.TargetFrame(), nil
+				if transitionMode == 2 {
+					stageFrame = currentFrame
+					transitionMode = 0
+					return currentFrame, true, nil
+				}
 			}
 			return transitionFrame, changed, nil
 		}
@@ -1854,6 +2139,37 @@ func run() error {
 			if currentScene == 0 && transition == nil {
 				switch key {
 				case ebiten.KeyArrowUp:
+					if activeSetName == "town" {
+						if target, found := scripts.NiteInteriorTarget(view.Resource, worldPoint[2], doorOwner); found {
+							pendingSetName, doorOwner = target, ""
+							if *debug {
+								log.Printf("interior-enter target=%s view=%s point=%v", target, view.Name[1:], worldPoint)
+							}
+							return
+						}
+					} else {
+						direction := ""
+						switch activeSetName {
+						case "sallower":
+							if scripts.SallowerExitToTown(worldPoint[2], doorOwner) {
+								direction = "east"
+							}
+						case "store", "livery":
+							if worldPoint[2] == assets.SetDirectionEast && (activeSetName == "store" && doorOwner == "shop" || activeSetName == "livery" && doorOwner == "horse") {
+								direction = "west"
+							}
+						}
+						if direction != "" {
+							pendingSetName, pendingSetScene, pendingSetDirection, doorOwner = "nite.set", townReturnScene, direction, ""
+							if gameClock != 3 {
+								pendingSetName = "town.set"
+							}
+							if *debug {
+								log.Printf("interior-exit set=%s scene=%q direction=%s", activeSetName, townReturnScene, direction)
+							}
+							return
+						}
+					}
 					dogVisible, dogDistance := false, 1<<30
 					for _, actor := range worldActors {
 						if strings.EqualFold(actor.Name, "dog") && actor.Visible {
@@ -1989,6 +2305,37 @@ func run() error {
 					return currentFrame, true, nil
 				}
 			}
+			if mouseEvent.Button == ebiten.MouseButtonLeft && activeSetName == "town" {
+				if owner, found := scripts.NiteDoorAt(view.Resource, worldPoint[2], point); found {
+					locked, err := scripts.NiteDoorLocked(owner, gameDay, gameClock, gamePhase, false, false, &nativeRandom)
+					if err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+					doorOwner = ""
+					if locked {
+						if err := soundBank.Play(audioContext, "knock1", 1); err != nil {
+							return render.IndexedFrame{}, false, fmt.Errorf("play locked-door knock: %w", err)
+						}
+						if *debug {
+							log.Printf("door=%s locked=true view=%s day=%d clock=%d phase=%d", owner, view.Name[1:], gameDay, gameClock, gamePhase)
+						}
+					} else {
+						doorOwner = owner
+						if *debug {
+							log.Printf("door=%s owner=door view=%s direction=%d", owner, view.Name[1:], worldPoint[2])
+						}
+					}
+					return currentFrame, false, nil
+				}
+			} else if mouseEvent.Button == ebiten.MouseButtonLeft && activeSetName == "sallower" {
+				if owner, found := scripts.SallowerDoorAt(view.Resource, worldPoint[2], point); found {
+					doorOwner = owner
+					if *debug {
+						log.Printf("door=%s owner=door set=sallower direction=%d", owner, worldPoint[2])
+					}
+					return currentFrame, false, nil
+				}
+			}
 			if actorName, found := render.HitTestWorldActors(projectedActors, image.Pt(int(int16(point>>16)), int(int16(point)))); found {
 				if *debug {
 					log.Printf("world-actor-hit=%s", actorName)
@@ -2031,20 +2378,20 @@ func run() error {
 					}
 					return currentFrame, started, nil
 				}
-				if sceneName, handlesClick := scripts.CastActorMouseDownScene(actorName); handlesClick {
-					nextView, found := nightSet.FindView(sceneName)
+				if sceneName, handlesClick := scripts.CastActorMouseDownScene(actorName); handlesClick && activeSetName == "town" {
+					nextView, found := activeSet.FindView(sceneName)
 					if !found {
-						return render.IndexedFrame{}, false, fmt.Errorf("NITE.SET has no view %q", sceneName)
+						return render.IndexedFrame{}, false, fmt.Errorf("%s has no view %q", activeSetName, sceneName)
 					}
 					nextPoint := [3]int16{int16(nextView.DirectionID), int16(nextView.SceneID), worldPoint[2]}
-					frameResource, found, err := nightSet.BackgroundResourceForDirection(nextView, nextPoint[2])
+					frameResource, found, err := activeSet.BackgroundResourceForDirection(nextView, nextPoint[2])
 					if err != nil || !found {
 						if err != nil {
 							return render.IndexedFrame{}, false, fmt.Errorf("resolve %s background: %w", sceneName, err)
 						}
 						return render.IndexedFrame{}, false, fmt.Errorf("%s has no background for direction %d", sceneName, nextPoint[2])
 					}
-					backgroundData, err := nightSet.Resource(frameResource)
+					backgroundData, err := activeSet.Resource(frameResource)
 					if err != nil {
 						return render.IndexedFrame{}, false, fmt.Errorf("read %s background resource %d: %w", sceneName, frameResource, err)
 					}
@@ -2055,7 +2402,7 @@ func run() error {
 					if decodeErr != nil && *debug {
 						log.Printf("scene=%s resource=%d partial-frame: %v", sceneName, frameResource, decodeErr)
 					}
-					nextBackground, err := render.StageFrame(&assets.Stage{Width: uint16(backgroundPixels.Width), Height: uint16(backgroundPixels.Height), PaletteRaw: nightSet.Palette()}, backgroundPixels.Pixels)
+					nextBackground, err := render.StageFrame(&assets.Stage{Width: uint16(backgroundPixels.Width), Height: uint16(backgroundPixels.Height), PaletteRaw: activeSet.Palette()}, backgroundPixels.Pixels)
 					if err != nil {
 						return render.IndexedFrame{}, false, fmt.Errorf("render %s background: %w", sceneName, err)
 					}
