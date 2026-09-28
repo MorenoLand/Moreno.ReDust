@@ -78,6 +78,10 @@ func run() error {
 	var nativeLoops scripts.LoopScheduler
 	var nativeRandom scripts.NativeRandom
 	var currentThemeName string
+	var currentTheme audio.NativeTheme
+	var pendingSpotMovie, spotMovieName string
+	var spotMovieReturnFrame render.IndexedFrame
+	var spotMovieActionFrameOne, spotMovieActive, spotMovieStarting bool
 	if !*silent {
 		soundBank, err = audio.OpenSoundBank(workspace, "DATA/UNILIB.SND")
 		if err != nil {
@@ -379,6 +383,7 @@ func run() error {
 	var isaoSpeechFinishesRun bool
 	var isaoSecondRun bool
 	var isaoDelayUntil uint32
+	var isaoKeyMoviePending, isaoKeyMovieActive, isaoThemeResume bool
 	var isaoInventoryReturnPending bool
 	var isaoInventoryReturnCode string
 	var isaoGiftCounter int32
@@ -1750,21 +1755,27 @@ func run() error {
 		isaoInteractionStage = isaoInteractionPuppetChoices
 		return showIsaoChoices(code, 0)
 	}
-	finishIsaoPuppetRun = func() error {
-		if isaoDialogue != nil {
-			if err := isaoDialogue.Close(); err != nil {
-				return err
-			}
-			isaoDialogue = nil
-		}
-		if !isaoSecondRun {
-			isaoActorValue++
-			isaoPhase, isaoSecondRun = 999, true
-			isaoDelayUntil = scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) + 60
-			isaoInteractionStage = isaoInteractionPuppetDelay
+	resumeIsaoTheme := func() error {
+		if !isaoThemeResume {
 			return nil
 		}
-		isaoActorValue++
+		if themePlayer != nil {
+			if err := themePlayer.Close(); err != nil {
+				return err
+			}
+			themePlayer = nil
+		}
+		if currentTheme.Name == "" || audioContext == nil {
+			return fmt.Errorf("Isao saved theme state is unavailable")
+		}
+		player, err := currentTheme.Play(audioContext)
+		if err != nil {
+			return err
+		}
+		themePlayer, isaoThemeResume = player, false
+		return nil
+	}
+	returnIsaoToIdle := func() error {
 		isaoSecondRun, isaoInteractionStage = false, isaoInteractionIdle
 		actorPoses["isao"] = "stand"
 		if isaoVisible && activeSetName == "sallower" {
@@ -1772,10 +1783,36 @@ func run() error {
 				return fmt.Errorf("register Isao idle loop after dialogue returned status %#x", status)
 			}
 		}
+		if err := resumeIsaoTheme(); err != nil {
+			return fmt.Errorf("resume Isao theme: %w", err)
+		}
 		if *debug {
 			log.Printf("actor=isao mousedown-complete actorvalue=%d isaophase=%d visible=%t", isaoActorValue, isaoPhase, isaoVisible)
 		}
 		return refreshWorldScene()
+	}
+	finishIsaoPuppetRun = func() error {
+		if isaoDialogue != nil {
+			if err := isaoDialogue.Close(); err != nil {
+				return err
+			}
+			isaoDialogue = nil
+		}
+		if err := refreshWorldScene(); err != nil {
+			return fmt.Errorf("restore Sallower after Isao PUP run: %w", err)
+		}
+		if !isaoSecondRun {
+			isaoActorValue++
+			if gameDay == 3 && gameClock == 1 {
+				isaoKeyMoviePending = true
+				isaoDelayUntil = scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) + 60
+				isaoInteractionStage = isaoInteractionPuppetDelay
+				return nil
+			}
+			return returnIsaoToIdle()
+		}
+		isaoActorValue++
+		return returnIsaoToIdle()
 	}
 	startIsaoEventResponse = func(event int32) error {
 		state := scripts.IsaoState{Day: gameDay, Clock: gameClock, Phase: gamePhase, IsaoPhase: isaoPhase, OonaActorValue: oonaActorValue, RingOwner: inventoryOwners["ring"]}
@@ -1852,6 +1889,13 @@ func run() error {
 				log.Printf("actor=isao mousedown=ignored distance=%d hotdist=%d", distance, townActorHotDistance)
 			}
 			return false, nil
+		}
+		isaoThemeResume = themePlayer != nil && currentTheme.Name != ""
+		if themePlayer != nil {
+			if err := themePlayer.Close(); err != nil {
+				return false, fmt.Errorf("halt Isao background theme: %w", err)
+			}
+			themePlayer = nil
 		}
 		nativeLoops.Stop(2, "isao")
 		isaoInteractionStage = isaoInteractionPuppetPending
@@ -3037,6 +3081,14 @@ func run() error {
 			return true, nil
 		}
 		if !serviceAmbient && isaoInteractionStage == isaoInteractionPuppetDelay && scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) >= isaoDelayUntil {
+			if isaoKeyMoviePending {
+				isaoKeyMoviePending, isaoKeyMovieActive = false, true
+				pendingSpotMovie = "MOVIES/KEYS.MOV"
+				if *debug {
+					log.Printf("actor=isao movie=KEYS.MOV after-frame-delay=60")
+				}
+				return true, nil
+			}
 			if err := startIsaoConversation(); err != nil {
 				return false, fmt.Errorf("start Isao follow-up: %w", err)
 			}
@@ -3197,7 +3249,7 @@ func run() error {
 		return render.CompositePanel(frame, dogMoviePanelFrame, dogMoviePanelTop)
 	}
 	startSceneMovie := func(name string) error {
-		if currentScene == 0 {
+		if currentScene == 0 && !spotMovieStarting {
 			if err := refreshWorldScene(); err != nil {
 				return fmt.Errorf("refresh scene before movie %s: %w", name, err)
 			}
@@ -3345,6 +3397,20 @@ func run() error {
 			}
 			return fade.CurrentFrame(), true, nil
 		}
+		if playback == nil && transition == nil && pendingSpotMovie != "" {
+			spotMovieName, pendingSpotMovie = pendingSpotMovie, ""
+			spotMovieReturnFrame, spotMovieActionFrameOne, spotMovieActive = currentFrame, false, true
+			fade, err := render.NewFadeEffect(currentFrame, blackFrame, 10)
+			if err != nil {
+				spotMovieName, spotMovieActive = "", false
+				return render.IndexedFrame{}, false, fmt.Errorf("premovie screentoblack: %w", err)
+			}
+			transition, transitionMode = fade, 4
+			if *debug {
+				log.Printf("spotmovie=%s premovie=screentoblack duration=10", spotMovieName)
+			}
+			return fade.CurrentFrame(), true, nil
+		}
 		if playback == nil && transition == nil && pendingSceneMovie != "" {
 			name := pendingSceneMovie
 			pendingSceneMovie = ""
@@ -3480,6 +3546,78 @@ func run() error {
 			}
 			transitionFrame, changed, done := transition.Update()
 			if done {
+				if transitionMode == 4 {
+					currentFrame, stageFrame, transition, transitionMode = transition.TargetFrame(), transition.TargetFrame(), nil, 0
+					spotMovieStarting = true
+					err := startSceneMovie(spotMovieName)
+					spotMovieStarting = false
+					if err != nil {
+						return render.IndexedFrame{}, false, fmt.Errorf("start spotmovie %s: %w", spotMovieName, err)
+					}
+					frame, err := movieOutputFrame(playback.CurrentFrame())
+					if err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+					return frame, true, nil
+				}
+				if transitionMode == 3 {
+					completedSpotMovie := spotMovieName
+					currentFrame, stageFrame, transition, transitionMode = transition.TargetFrame(), transition.TargetFrame(), nil, 0
+					spotMovieActive, spotMovieName = false, ""
+					if isaoKeyMovieActive {
+						isaoKeyMovieActive = false
+						action, found := scripts.IsaoKeyMovieResponse(spotMovieActionFrameOne, inventoryOwners["ring"])
+						if !found {
+							if err := returnIsaoToIdle(); err != nil {
+								return render.IndexedFrame{}, false, err
+							}
+							return currentFrame, true, nil
+						}
+						if action.AddInventoryItem != "" {
+							inventoryOwners[action.AddInventoryItem], handItem = "stranger", action.AddInventoryItem
+							if err := soundBank.Play(audioContext, "inven", 1); err != nil {
+								return render.IndexedFrame{}, false, fmt.Errorf("play Isao ring inventory sound: %w", err)
+							}
+							if err := returnIsaoToIdle(); err != nil {
+								return render.IndexedFrame{}, false, err
+							}
+							return currentFrame, true, nil
+						}
+						if action.RunPuppet != "" {
+							if action.SetIsaoPhaseValid {
+								isaoPhase = action.SetIsaoPhase
+							}
+							isaoSecondRun = true
+							isaoDelayUntil = scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) + uint32(action.DelayFrames)
+							isaoInteractionStage = isaoInteractionPuppetDelay
+							if *debug {
+								log.Printf("actor=isao movie=%s actionframe=%t ring-owner=%s followup=%s delay=%d", completedSpotMovie, spotMovieActionFrameOne, inventoryOwners["ring"], action.RunPuppet, action.DelayFrames)
+							}
+							return currentFrame, true, nil
+						}
+					}
+					if *debug {
+						log.Printf("spotmovie=%s postmovie=restored clock=%d", completedSpotMovie, gameClock)
+					}
+					if dogMovieNeedsHelp {
+						dogMovieNeedsHelp = false
+						if err := setupHelpActor(); err != nil {
+							return render.IndexedFrame{}, false, fmt.Errorf("setup Help after DOG1.MOV: %w", err)
+						}
+						if err := refreshWorldScene(); err != nil {
+							return render.IndexedFrame{}, false, fmt.Errorf("show Help after DOG1.MOV: %w", err)
+						}
+						return currentFrame, true, nil
+					}
+					if dog2OfferStage == dog2OfferMovie {
+						dog2OfferStage = dog2OfferDelayBeforeEast
+						dog2OfferUntil = scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) + 60
+						if *debug {
+							log.Printf("actor=dog offerobject=movie-complete wait=east frames=60")
+						}
+					}
+					return currentFrame, true, nil
+				}
 				if transitionMode == 1 {
 					blackFrame := transition.TargetFrame()
 					nextFrame, err := switchSpecialSet(transferSetName, transferSetScene, transferSetDirection)
@@ -3536,6 +3674,12 @@ func run() error {
 		if !done {
 			return movieFrame, changed, nil
 		}
+		if spotMovieActive {
+			spotMovieActionFrameOne, err = playback.ActionFrame(1)
+			if err != nil {
+				return render.IndexedFrame{}, false, fmt.Errorf("read spotmovie actionframe(1): %w", err)
+			}
+		}
 		dogMoviePanelActive = false
 		if *debug && movieWarningCount[movieIndex] > 0 {
 			log.Printf("movie=%s decode-warnings=%d first=%s", movieNames[movieIndex], movieWarningCount[movieIndex], movieWarningSample[movieIndex])
@@ -3574,6 +3718,36 @@ func run() error {
 		}
 		playback = nil
 		currentFrame = stageFrame
+		if spotMovieActive {
+			blackScreen := currentFrame
+			gameClock = 1
+			if activeSetName == "town" && currentScene == 0 {
+				direction := "north"
+				switch worldPoint[2] {
+				case assets.SetDirectionEast:
+					direction = "east"
+				case assets.SetDirectionSouth:
+					direction = "south"
+				case assets.SetDirectionWest:
+					direction = "west"
+				}
+				returnFrame, err := switchSpecialSet("town.set", string(view.Name[1:]), direction)
+				if err != nil {
+					return render.IndexedFrame{}, false, fmt.Errorf("restore town after spotmovie: %w", err)
+				}
+				spotMovieReturnFrame = returnFrame
+			}
+			currentFrame, stageFrame = blackScreen, blackScreen
+			fade, err := render.NewFadeEffect(blackScreen, spotMovieReturnFrame, 30)
+			if err != nil {
+				return render.IndexedFrame{}, false, fmt.Errorf("postmovie fade to saved scene: %w", err)
+			}
+			transition, transitionMode = fade, 3
+			if *debug {
+				log.Printf("spotmovie=%s postmovie=blacktoscreen clock=%d actionframe1=%t duration=30", spotMovieName, gameClock, spotMovieActionFrameOne)
+			}
+			return fade.CurrentFrame(), true, nil
+		}
 		if dogMovieNeedsHelp {
 			dogMovieNeedsHelp = false
 			if err := setupHelpActor(); err != nil {
@@ -3604,6 +3778,7 @@ func run() error {
 			if err != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("load startup town theme: %w", err)
 			}
+			currentTheme = theme
 			themePlayer, err = theme.Play(audioContext)
 			if err != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("start startup town theme: %w", err)
@@ -3754,7 +3929,7 @@ func run() error {
 					}
 					if name, blocked := scripts.NiteDogGateMovieInView(view.Resource, worldPoint[2], gameDay, dogVisible); blocked {
 						pendingMovement = 0
-						pendingSceneMovie = name
+						pendingSpotMovie = name
 						dogMovieNeedsHelp = true
 						if *debug {
 							log.Printf("event=NITE.SET/key-down dog-gate point=%v movie=%s", worldPoint, name)
@@ -4046,17 +4221,11 @@ func run() error {
 					}
 					if name, triggered := scripts.NiteDogGateMovieInView(view.Resource, worldPoint[2], gameDay, dogVisibleState); triggered {
 						dogMovieNeedsHelp = true
-						if err := startSceneMovie(name); err != nil {
-							return render.IndexedFrame{}, false, err
-						}
+						pendingSpotMovie = name
 						if *debug {
 							log.Printf("actor=dog mousedown=G12-keydown-up movie=%s", name)
 						}
-						frame, err := movieOutputFrame(playback.CurrentFrame())
-						if err != nil {
-							return render.IndexedFrame{}, false, err
-						}
-						return frame, true, nil
+						return currentFrame, true, nil
 					}
 					return nextFrame, true, nil
 				}
@@ -4409,17 +4578,11 @@ func run() error {
 					if _, err := setWorldView("Scene G12", assets.SetDirectionNorth); err != nil {
 						return render.IndexedFrame{}, false, fmt.Errorf("prepare Dog offer scene: %w", err)
 					}
-					if err := startSceneMovie("MOVIES/DOG2.MOV"); err != nil {
-						return render.IndexedFrame{}, false, err
-					}
+					pendingSpotMovie = "MOVIES/DOG2.MOV"
 					if *debug {
 						log.Printf("actor=dog offerobject=Bone visible=false phase=%d movie=DOG2.MOV", gamePhase)
 					}
-					frame, err := movieOutputFrame(playback.CurrentFrame())
-					if err != nil {
-						return render.IndexedFrame{}, false, err
-					}
-					return frame, true, nil
+					return currentFrame, true, nil
 				}
 				if err := refreshWorldScene(); err != nil {
 					return render.IndexedFrame{}, false, fmt.Errorf("finish Bone drag: %w", err)

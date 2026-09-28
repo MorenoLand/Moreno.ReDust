@@ -30,6 +30,14 @@ type IsaoGiftResponse struct {
 	Counter int32
 }
 
+type IsaoKeyMovieAction struct {
+	AddInventoryItem  string
+	DelayFrames       int
+	SetIsaoPhase      int16
+	SetIsaoPhaseValid bool
+	RunPuppet         string
+}
+
 func IsaoEntry(state IsaoState) IsaoStep {
 	if state.IsaoPhase == 999 {
 		return IsaoStep{Speech: []string{"happy2"}, SetIsaoPhase: 0, SetIsaoPhaseValid: true, Finish: true}
@@ -44,6 +52,16 @@ func IsaoEntry(state IsaoState) IsaoStep {
 		return IsaoStep{Code: "brushoff"}
 	}
 	return IsaoStep{Code: "runyoself"}
+}
+
+func IsaoKeyMovieResponse(actionFrameReached bool, ringOwner string) (IsaoKeyMovieAction, bool) {
+	if !actionFrameReached {
+		return IsaoKeyMovieAction{}, false
+	}
+	if ringOwner == "isao" {
+		return IsaoKeyMovieAction{AddInventoryItem: "ring"}, true
+	}
+	return IsaoKeyMovieAction{DelayFrames: 60, SetIsaoPhase: 999, SetIsaoPhaseValid: true, RunPuppet: "isao.pup"}, true
 }
 
 func IsaoGift(counter int32) (IsaoGiftResponse, bool) {
