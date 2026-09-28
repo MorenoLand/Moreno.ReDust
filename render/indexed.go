@@ -151,6 +151,25 @@ func CompositeUnderlay(background, overlay IndexedFrame) (IndexedFrame, error) {
 	return overlay, nil
 }
 
+func CompositePanel(frame, panel IndexedFrame, panelTop int) (IndexedFrame, error) {
+	if frame.Width <= 0 || frame.Width != panel.Width || frame.Height != panel.Height || panelTop < 0 || panelTop >= frame.Height {
+		return IndexedFrame{}, fmt.Errorf("panel frames or top boundary are invalid")
+	}
+	frameRGBA, err := frame.rgbaImage()
+	if err != nil {
+		return IndexedFrame{}, err
+	}
+	panelRGBA, err := panel.rgbaImage()
+	if err != nil {
+		return IndexedFrame{}, err
+	}
+	composite := image.NewRGBA(image.Rect(0, 0, frame.Width, frame.Height))
+	draw.Draw(composite, composite.Bounds(), frameRGBA, image.Point{}, draw.Src)
+	draw.Draw(composite, image.Rect(0, panelTop, frame.Width, frame.Height), panelRGBA, image.Pt(0, panelTop), draw.Src)
+	frame.rgba = composite
+	return frame, nil
+}
+
 func WritePNG(path string, frame IndexedFrame) error {
 	image, err := frame.rgbaImage()
 	if err != nil {
