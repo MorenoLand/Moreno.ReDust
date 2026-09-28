@@ -138,9 +138,6 @@ func (p *ExpressionValueParser) parsePathValue(program Program, start int) (Reco
 	if index.Kind != 4 {
 		return Record{}, 0, 14, nil
 	}
-	if kindAt(program, start+2+int(consumed)) != LookupOpcode(")") {
-		return Record{}, 0, 2, nil
-	}
 	contextIndex := int(int32(index.Data))
 	if contextIndex <= 0 || contextIndex >= nativeScriptContextCount {
 		return Record{}, 0, 10, nil
@@ -150,6 +147,12 @@ func (p *ExpressionValueParser) parsePathValue(program Program, start int) (Reco
 		return Record{}, 0, 0, err
 	}
 	value, stringStatus, err := p.Strings.Store(pascal)
+	if err != nil || stringStatus != 0 {
+		return value, consumed + 3, uint32(stringStatus), err
+	}
+	if kindAt(program, start+2+int(consumed)) != LookupOpcode(")") {
+		return Record{}, 0, 2, nil
+	}
 	return value, consumed + 3, uint32(stringStatus), err
 }
 

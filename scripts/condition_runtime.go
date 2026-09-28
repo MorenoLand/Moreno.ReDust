@@ -27,7 +27,13 @@ func (s *ConditionCodeSession) EvaluateExpression(start int) (int32, uint16, err
 }
 
 func (s *ConditionCodeSession) DispatchStatement(start int) (uint16, error) {
-	if s == nil || s.Dispatch == nil {
+	if s == nil {
+		return 0, ErrNoStatementDispatcher
+	}
+	if start >= 0 && start < len(s.Frame.Program.Records) && s.Frame.Program.Records[start].Kind == LookupOpcode("path") {
+		return s.Runtime.DispatchPathStatement(s.Frame.Context, s.Frame.Program, start, s.Frame.VariableScope)
+	}
+	if s.Dispatch == nil {
 		return 0, ErrNoStatementDispatcher
 	}
 	return s.Dispatch(start)
@@ -159,6 +165,39 @@ func (r *ConditionRuntime) EvaluateValue(context any, program Program, recordInd
 	return result, consumed, status, nil
 }
 
+func (r *ConditionRuntime) DispatchPathStatement(context any, program Program, start int, scope any) (uint16, error) {
+	if r == nil || start < 0 || start >= len(program.Records) || program.Records[start].Kind != LookupOpcode("path") {
+		return 0, fmt.Errorf("path statement index %d is invalid", start)
+	}
+	if kindAt(program, start+1) != LookupOpcode("(") {
+		return 2, nil
+	}
+	index, indexConsumed, status, err := r.EvaluateValue(context, program, start+2, scope)
+	if err != nil || status != 0 {
+		return uint16(status), err
+	}
+	comma := start + 2 + int(indexConsumed)
+	if kindAt(program, comma) != LookupOpcode(",") {
+		return 0x1c, nil
+	}
+	valueStart := comma + 1
+	value, valueConsumed, status, err := r.EvaluateValue(context, program, valueStart, scope)
+	if err != nil || status != 0 {
+		return uint16(status), err
+	}
+	toRecord := func(value ExpressionValue) Record {
+		return Record{Kind: binary.LittleEndian.Uint16(value[:2]), Data: binary.LittleEndian.Uint32(value[2:6]), Tail: binary.LittleEndian.Uint16(value[6:8])}
+	}
+	status16, err := r.SetPathValue(toRecord(index), toRecord(value))
+	if err != nil || status16 != 0 {
+		return status16, err
+	}
+	if kindAt(program, valueStart+int(valueConsumed)) != LookupOpcode(")") {
+		return 2, nil
+	}
+	return 0, nil
+}
+
 func (r *ConditionRuntime) AssignVariable(scope any, index uint16, value ExpressionValue) (uint32, error) {
 	if r == nil {
 		return 9, nil
@@ -173,4 +212,32 @@ func (r *ConditionRuntime) AssignVariable(scope any, index uint16, value Express
 	}
 	status, err := table.WriteValue(index, value, strings)
 	return uint32(status), err
+}
+
+func (r *ConditionRuntime) SetPathValue(index, value Record) (uint16, error) {
+	if index.Kind != 4 {
+		return 14, nil
+	}
+	contextIndex := int(int32(index.Data))
+	if contextIndex <= 0 || contextIndex >= nativeScriptContextCount {
+		return 10, nil
+	}
+	if r == nil || r.ContextPages == nil {
+		return 0, fmt.Errorf("native script context pages are unavailable")
+	}
+	strings := r.Strings
+	if strings == nil && r.Expressions != nil {
+		strings = r.Expressions.Strings
+	}
+	if strings == nil {
+		return 0, fmt.Errorf("expression string registers are unavailable")
+	}
+	pascal, status, err := strings.Load(value)
+	if err != nil || status != 0 {
+		return status, err
+	}
+	if err := r.ContextPages.Store(contextIndex, pascal); err != nil {
+		return 0, err
+	}
+	return 0, nil
 }
