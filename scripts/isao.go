@@ -25,6 +25,11 @@ type IsaoStep struct {
 	SetIsaoPhaseValid bool
 }
 
+type IsaoGiftResponse struct {
+	Speech  []string
+	Counter int32
+}
+
 func IsaoEntry(state IsaoState) IsaoStep {
 	if state.IsaoPhase == 999 {
 		return IsaoStep{Speech: []string{"happy2"}, SetIsaoPhase: 0, SetIsaoPhaseValid: true, Finish: true}
@@ -39,6 +44,19 @@ func IsaoEntry(state IsaoState) IsaoStep {
 		return IsaoStep{Code: "brushoff"}
 	}
 	return IsaoStep{Code: "runyoself"}
+}
+
+func IsaoGift(counter int32) (IsaoGiftResponse, bool) {
+	switch counter {
+	case 0:
+		return IsaoGiftResponse{Speech: []string{"no1", "bye1"}, Counter: 1}, true
+	case 1:
+		return IsaoGiftResponse{Speech: []string{"no2"}, Counter: 2}, true
+	case 2:
+		return IsaoGiftResponse{Speech: []string{"sad1", "no1"}, Counter: 0}, true
+	default:
+		return IsaoGiftResponse{}, false
+	}
 }
 
 func IsaoPuppetResponse(code string, event int32, state IsaoState, randomChoice uint32) (IsaoStep, error) {
@@ -99,7 +117,7 @@ func IsaoPuppetResponse(code string, event int32, state IsaoState, randomChoice 
 		return IsaoStep{Speech: speech, NextCode: "byenow", NextGroup: 0}, nil
 	case "byenow":
 		if event == 101 {
-			return IsaoStep{Speech: []string{"bye1"}, Finish: true}, nil
+			return IsaoStep{Speech: []string{"bye1"}, Finish: true, SetIsaoPhase: 1, SetIsaoPhaseValid: true}, nil
 		}
 	case "ring":
 		if event == 101 {

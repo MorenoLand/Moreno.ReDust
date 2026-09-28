@@ -339,6 +339,8 @@ func run() error {
 		isaoInteractionPuppetSpeaking
 		isaoInteractionPuppetChoices
 		isaoInteractionPuppetDelay
+		isaoInteractionInventory
+		isaoInteractionInventoryReturning
 	)
 	leroyPhase, leroyInteractionStage := int16(0), leroyInteractionIdle
 	var leroyWalk *scripts.NativeActorWalkJob
@@ -377,6 +379,9 @@ func run() error {
 	var isaoSpeechFinishesRun bool
 	var isaoSecondRun bool
 	var isaoDelayUntil uint32
+	var isaoInventoryReturnPending bool
+	var isaoInventoryReturnCode string
+	var isaoGiftCounter int32
 	helpActorPosition, helpReturnPosition := helpPosition, helpPosition
 	var helpWalk *scripts.NativeActorWalkJob
 	var jonesWalk *scripts.NativeActorWalkJob
@@ -442,6 +447,7 @@ func run() error {
 	var boneInventoryFrame render.PuppetFrame
 	var boneInInventory bool
 	inventoryOwners := map[string]string{"gun": "stranger", "boots": "stranger", "bullets": "stranger", "badge": "stranger", "hankerchief": "limbo", "ring": "none", "bone": "none"}
+	inventoryHidden := make(map[string]bool)
 	inventoryPropNames := map[string]string{"gun": "Gun", "boots": "Boots", "bullets": "Bullets", "badge": "Badge", "hankerchief": "Hankerchief", "ring": "Ring", "bone": "Bone"}
 	inventoryHandNames := map[string]string{"gun": "gun", "boots": "boots", "bullets": "bullets", "badge": "badge", "hankerchief": "hankerchief", "ring": "ring", "bone": "Bone"}
 	inventoryAnchors := map[string]image.Point{"gun": image.Pt(94, 213), "boots": image.Pt(249, 304), "badge": image.Pt(271, 151), "ring": image.Pt(185, 252), "bone": image.Pt(416, 191)}
@@ -619,7 +625,7 @@ func run() error {
 		}
 		if !boneDragging {
 			item := strings.ToLower(handItem)
-			if inventoryOwners[item] == "stranger" {
+			if inventoryOwners[item] == "stranger" && !inventoryHidden[item] {
 				if itemFrame, found := inventoryLargeFrames[item]; found {
 					return render.CompositePuppetFrame(frame, itemFrame, image.Pt(316, 320))
 				}
@@ -1549,6 +1555,24 @@ func run() error {
 			_ = puppet.Close()
 			return err
 		}
+		if len(marieInventoryProgram.Records) == 0 {
+			inventoryData, err := inventoryArchive.Resource(1)
+			if err != nil {
+				_ = puppet.Close()
+				return err
+			}
+			inventoryProgram, err := scripts.ParseProgram(inventoryData)
+			if err != nil {
+				_ = puppet.Close()
+				return err
+			}
+			handChoices, err := scripts.PuppetBevelChoices(inventoryProgram, "addhandbevel")
+			if err != nil {
+				_ = puppet.Close()
+				return err
+			}
+			marieInventoryProgram, marieHandBevelChoices = inventoryProgram, handChoices
+		}
 		groups := make(map[string][][]scripts.PuppetChoice, 5)
 		for _, code := range []string{"runyoself", "whoareyou", "byenow", "brushoff", "ring"} {
 			groups[code], err = scripts.PuppetBevelChoiceGroups(program, code)
@@ -1561,6 +1585,8 @@ func run() error {
 		return nil
 	}
 	var buildIsaoConversationBase func() error
+	var resumeIsaoInventory func() error
+	var openIsaoInventory func() error
 	var drawIsaoChoices func(int) error
 	var showIsaoChoices func(string, int) error
 	var startIsaoSpeech func([]string, string, int, bool) error
@@ -1615,6 +1641,22 @@ func run() error {
 				choices = choices[:1]
 			} else {
 				choices = choices[1:]
+			}
+		}
+		if code == "runyoself" && group == 0 && (handFlag == 1 || handItem != "" && !inventoryHidden[strings.ToLower(handItem)]) {
+			var handChoice scripts.PuppetChoice
+			var hasHandChoice bool
+			var err error
+			if handFlag == 1 && len(marieHandBevelChoices) > 0 {
+				handChoice, hasHandChoice = marieHandBevelChoices[0], true
+			} else if handItem != "" {
+				handChoice, hasHandChoice, err = scripts.PuppetBevelChoiceInCase(marieInventoryProgram, "addhandbevel", "handitem", handItem)
+			}
+			if err != nil {
+				return err
+			}
+			if hasHandChoice {
+				choices = append(choices, handChoice)
 			}
 		}
 		if len(choices) == 0 {
@@ -1682,6 +1724,31 @@ func run() error {
 		}
 		return nil
 	}
+	resumeIsaoInventory = func() error {
+		code := isaoInventoryReturnCode
+		isaoInventoryReturnCode = ""
+		if handItem != "" {
+			gift, found := scripts.IsaoGift(isaoGiftCounter)
+			if !found {
+				return fmt.Errorf("Isao gift script has no counter case %d for %q", isaoGiftCounter, handItem)
+			}
+			giftedItem := handItem
+			inventoryHidden[strings.ToLower(handItem)], isaoGiftCounter = true, gift.Counter
+			if err := buildIsaoConversationBase(); err != nil {
+				return err
+			}
+			if *debug {
+				log.Printf("puppet=isao gift=%s lines=%d counter=%d", giftedItem, len(gift.Speech), isaoGiftCounter)
+			}
+			return startIsaoSpeech(gift.Speech, "byenow", 0, false)
+		}
+		if err := buildIsaoConversationBase(); err != nil {
+			return err
+		}
+		currentFrame, stageFrame = isaoConversationBase, isaoConversationBase
+		isaoInteractionStage = isaoInteractionPuppetChoices
+		return showIsaoChoices(code, 0)
+	}
 	finishIsaoPuppetRun = func() error {
 		if isaoDialogue != nil {
 			if err := isaoDialogue.Close(); err != nil {
@@ -1719,8 +1786,26 @@ func run() error {
 		if err != nil {
 			return err
 		}
+		if step.SetIsaoPhaseValid {
+			isaoPhase = step.SetIsaoPhase
+		}
 		if step.OpenInventory {
-			return fmt.Errorf("Isao event %d requests the native inventory selector, which is not yet wired to this PUP", event)
+			if handItem == "" || handFlag == 1 {
+				return openIsaoInventory()
+			}
+			gift, found := scripts.IsaoGift(isaoGiftCounter)
+			if !found {
+				return fmt.Errorf("Isao gift script has no counter case %d for %q", isaoGiftCounter, handItem)
+			}
+			giftedItem := handItem
+			inventoryHidden[strings.ToLower(handItem)], isaoGiftCounter = true, gift.Counter
+			if err := buildIsaoConversationBase(); err != nil {
+				return err
+			}
+			if *debug {
+				log.Printf("puppet=isao gift=%s lines=%d counter=%d", giftedItem, len(gift.Speech), isaoGiftCounter)
+			}
+			return startIsaoSpeech(gift.Speech, "byenow", 0, false)
 		}
 		if len(step.Speech) > 0 {
 			return startIsaoSpeech(step.Speech, step.NextCode, step.NextGroup, step.Finish)
@@ -2171,7 +2256,7 @@ func run() error {
 		}
 		props := make([]render.FlatPropSprite, 0, len(inventoryPropOrder))
 		for _, key := range inventoryPropOrder {
-			if inventoryOwners[key] != "stranger" {
+			if inventoryOwners[key] != "stranger" || inventoryHidden[key] {
 				continue
 			}
 			anchor, found := inventoryAnchors[key]
@@ -2199,6 +2284,12 @@ func run() error {
 	openMarieInventory := func() error {
 		handFlag = 0
 		marieInteractionStage = marieInteractionInventory
+		return renderMarieInventory()
+	}
+	openIsaoInventory = func() error {
+		handFlag = 0
+		isaoInventoryReturnCode = isaoCurrentCode
+		isaoInteractionStage = isaoInteractionInventory
 		return renderMarieInventory()
 	}
 	var buildMarieConversationBase func() error
@@ -3208,7 +3299,7 @@ func run() error {
 					cursor = "touch"
 				}
 			}
-			if marieInteractionStage == marieInteractionInventory && currentScene == 2 {
+			if (marieInteractionStage == marieInteractionInventory || isaoInteractionStage == isaoInteractionInventory) && currentScene == 2 {
 				if _, found := render.HitTestFlatProps(marieInventoryProjected, image.Pt(int(int16(point>>16)), int(int16(point)))); found {
 					cursor = "touch"
 				}
@@ -3391,6 +3482,13 @@ func run() error {
 				if transitionMode == 2 {
 					stageFrame = currentFrame
 					transitionMode = 0
+					if isaoInventoryReturnPending {
+						isaoInventoryReturnPending = false
+						if err := resumeIsaoInventory(); err != nil {
+							return render.IndexedFrame{}, false, err
+						}
+						return currentFrame, true, nil
+					}
 					if marieInventoryReturnPending {
 						marieInventoryReturnPending = false
 						if err := resumeMarieInventory(); err != nil {
@@ -3709,7 +3807,19 @@ func run() error {
 			isaoChoicePressIndex = (int(int16(point)) - 264) / 24
 			return currentFrame, false, nil
 		}
-		if isaoInteractionStage != isaoInteractionIdle {
+		if isaoInteractionStage == isaoInteractionInventory && currentScene == 2 && mouseEvent.Button == ebiten.MouseButtonLeft {
+			if name, found := render.HitTestFlatProps(marieInventoryProjected, image.Pt(int(int16(point>>16)), int(int16(point)))); found {
+				handItem = name
+				if err := renderMarieInventory(); err != nil {
+					return render.IndexedFrame{}, false, err
+				}
+				if *debug {
+					log.Printf("inventory-select item=%s owner=%s flat=avatar recipient=isao", handItem, inventoryOwners[strings.ToLower(handItem)])
+				}
+				return currentFrame, true, nil
+			}
+		}
+		if isaoInteractionStage != isaoInteractionIdle && isaoInteractionStage != isaoInteractionInventory {
 			return currentFrame, false, nil
 		}
 		if jonesInteractionStage != jonesInteractionIdle {
@@ -4034,6 +4144,9 @@ func run() error {
 			}
 		}
 		currentScene, currentPixels = target, nextPixels
+		if isaoInteractionStage == isaoInteractionInventory && target == 0 {
+			isaoInventoryReturnPending, isaoInteractionStage = true, isaoInteractionInventoryReturning
+		}
 		if marieInteractionStage == marieInteractionInventory && target == 0 {
 			marieInventoryReturnPending, marieInteractionStage = true, marieInteractionInventoryReturning
 		}
@@ -4074,13 +4187,20 @@ func run() error {
 				}
 			}
 			if transition != nil {
-				if effectName == "plain" || marieInventoryReturnPending {
+				if effectName == "plain" || marieInventoryReturnPending || isaoInventoryReturnPending {
 					transitionMode = 2
 				}
 				return transition.CurrentFrame(), true, nil
 			}
 		}
 		currentFrame = nextFrame
+		if isaoInventoryReturnPending {
+			isaoInventoryReturnPending = false
+			if err := resumeIsaoInventory(); err != nil {
+				return render.IndexedFrame{}, false, err
+			}
+			return currentFrame, true, nil
+		}
 		if marieInventoryReturnPending {
 			marieInventoryReturnPending = false
 			if err := resumeMarieInventory(); err != nil {
