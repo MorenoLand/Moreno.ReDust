@@ -690,7 +690,8 @@ func run() error {
 		stage.Close()
 		return fmt.Errorf("create startup movie frame: %w", err)
 	}
-	playback, err := render.NewMoviePlayback(movie, blackFrame)
+	movieRestorePalette := render.BlackPaletteRaw()
+	playback, err := render.NewMoviePlayback(movie, blackFrame, movieRestorePalette)
 	if err != nil {
 		stage.Close()
 		return fmt.Errorf("start startup movie %s: %w", movieNames[movieIndex], err)
@@ -3222,7 +3223,8 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("open scene movie %s: %w", name, err)
 		}
-		playback, err = render.NewMoviePlayback(movie, currentFrame)
+		movieRestorePalette = activeSet.Palette()
+		playback, err = render.NewMoviePlayback(movie, currentFrame, movieRestorePalette)
 		if err != nil {
 			return fmt.Errorf("start scene movie %s: %w", name, err)
 		}
@@ -3554,7 +3556,7 @@ func run() error {
 			if err != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("open startup movie %s: %w", movieNames[movieIndex], err)
 			}
-			playback, err = render.NewMoviePlayback(movie, movieFrame)
+			playback, err = render.NewMoviePlayback(movie, movieFrame, movieRestorePalette)
 			if err != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("start startup movie %s: %w", movieNames[movieIndex], err)
 			}

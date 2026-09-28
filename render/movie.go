@@ -48,7 +48,7 @@ type MoviePlayback struct {
 	covered      []bool
 	palette      PaletteState
 	moviePalette PaletteState
-	blackPalette PaletteState
+	basePalette  PaletteState
 	fadeFrom     PaletteState
 	fadeTo       PaletteState
 	done         bool
@@ -218,7 +218,7 @@ func BlackFrame(width, height int) (IndexedFrame, error) {
 	return IndexedFrame{Width: width, Height: height, Pixels: make([]byte, width*height), Palette: palette.Colors()}, nil
 }
 
-func NewMoviePlayback(movie *Movie, base IndexedFrame) (*MoviePlayback, error) {
+func NewMoviePlayback(movie *Movie, base IndexedFrame, basePaletteRaw []byte) (*MoviePlayback, error) {
 	if movie == nil || movie.resources == nil || base.Width <= 0 || base.Height <= 0 || len(base.Pixels) != base.Width*base.Height {
 		return nil, fmt.Errorf("movie playback input is incomplete")
 	}
@@ -226,12 +226,15 @@ func NewMoviePlayback(movie *Movie, base IndexedFrame) (*MoviePlayback, error) {
 	if err != nil {
 		return nil, err
 	}
+	basePalette, err := paletteStateFromRaw(basePaletteRaw)
+	if err != nil {
+		return nil, err
+	}
 	baseRGBA, err := base.rgbaImage()
 	if err != nil {
 		return nil, err
 	}
-	blackPalette := blackPaletteState()
-	playback := &MoviePlayback{movie: movie, width: base.Width, height: base.Height, screenPixels: append([]byte(nil), base.Pixels...), baseRGBA: clonePuppetRGBA(baseRGBA), screenRGBA: clonePuppetRGBA(baseRGBA), covered: make([]bool, base.Width*base.Height), palette: blackPalette, blackPalette: blackPalette, moviePalette: moviePalette}
+	playback := &MoviePlayback{movie: movie, width: base.Width, height: base.Height, screenPixels: append([]byte(nil), base.Pixels...), baseRGBA: clonePuppetRGBA(baseRGBA), screenRGBA: clonePuppetRGBA(baseRGBA), covered: make([]bool, base.Width*base.Height), palette: basePalette, basePalette: basePalette, moviePalette: moviePalette}
 	if err := playback.loadFrame(0); err != nil {
 		return nil, err
 	}
@@ -245,6 +248,8 @@ func blackPaletteState() PaletteState {
 	}
 	return palette
 }
+
+func BlackPaletteRaw() []byte { return make([]byte, 0x800) }
 
 func (p *MoviePlayback) CurrentFrame() IndexedFrame {
 	if p == nil {
@@ -357,7 +362,7 @@ func (p *MoviePlayback) loadFrame(index int) error {
 		}
 	}
 	if descriptor.Mode == 17 {
-		p.fadeFrom, p.fadeTo = p.palette, p.blackPalette
+		p.fadeFrom, p.fadeTo = p.palette, p.basePalette
 	} else if descriptor.Mode == 18 {
 		p.fadeFrom, p.fadeTo = p.palette, p.moviePalette
 	} else {
