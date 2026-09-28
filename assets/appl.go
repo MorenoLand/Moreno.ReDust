@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sort"
 	"sync"
 )
 
@@ -129,6 +130,89 @@ func alignNativeRecordSize(size int32) int32 {
 	adjusted := size + 0x47
 	adjusted += (adjusted >> 31) & 0x3f
 	return (adjusted >> 6) << 6
+}
+
+func WriteContainer(writer io.Writer, entries map[uint32][]byte) error {
+	if writer == nil {
+		return errors.New("APPL writer is nil")
+	}
+	var countB uint64
+	indices := make([]uint32, 0, len(entries))
+	for index, data := range entries {
+		if uint64(index)+1 > uint64(math.MaxUint32) {
+			return fmt.Errorf("APPL resource index %d exceeds the 32-bit count", index)
+		}
+		if uint64(len(data)) > uint64(math.MaxUint32) || uint64(len(data)) > uint64(math.MaxInt32-0x47) {
+			return fmt.Errorf("APPL resource %d payload is too large", index)
+		}
+		if uint64(index)+1 > countB {
+			countB = uint64(index) + 1
+		}
+		indices = append(indices, index)
+	}
+	countA := (countB + indexPageEntries - 1) &^ uint64(indexPageEntries-1)
+	tableSize := countA * 4
+	fileSize := uint64(HeaderSize) + tableSize
+	if fileSize > uint64(math.MaxUint32) || tableSize > uint64(math.MaxInt) {
+		return errors.New("APPL index table exceeds the 32-bit file-size field")
+	}
+	sort.Slice(indices, func(i, j int) bool { return indices[i] < indices[j] })
+	offsets := make(map[uint32]uint32, len(indices))
+	for _, index := range indices {
+		recordSize := uint64(alignNativeRecordSize(int32(len(entries[index]))))
+		if recordSize < 8 || fileSize+recordSize > uint64(math.MaxUint32) {
+			return fmt.Errorf("APPL resource %d exceeds the 32-bit file-size field", index)
+		}
+		offsets[index], fileSize = uint32(fileSize), fileSize+recordSize
+	}
+	var header [HeaderSize]byte
+	binary.LittleEndian.PutUint32(header[0:4], 0x00010000)
+	binary.LittleEndian.PutUint32(header[4:8], uint32(fileSize))
+	binary.LittleEndian.PutUint32(header[0x10:0x14], uint32(countA))
+	binary.LittleEndian.PutUint32(header[0x14:0x18], uint32(countB))
+	copy(header[0x20:0x28], "LPPALPPA")
+	if err := writeAll(writer, header[:]); err != nil {
+		return fmt.Errorf("write APPL header: %w", err)
+	}
+	indexTable := make([]byte, int(tableSize))
+	for index, offset := range offsets {
+		binary.LittleEndian.PutUint32(indexTable[int(index)*4:], offset)
+	}
+	if err := writeAll(writer, indexTable); err != nil {
+		return fmt.Errorf("write APPL index table: %w", err)
+	}
+	for _, index := range indices {
+		data := entries[index]
+		var record [8]byte
+		binary.LittleEndian.PutUint32(record[0:4], index)
+		binary.LittleEndian.PutUint32(record[4:8], uint32(len(data)))
+		if err := writeAll(writer, record[:]); err != nil {
+			return fmt.Errorf("write APPL resource %d header: %w", index, err)
+		}
+		if err := writeAll(writer, data); err != nil {
+			return fmt.Errorf("write APPL resource %d payload: %w", index, err)
+		}
+		padding := make([]byte, int(alignNativeRecordSize(int32(len(data))))-8-len(data))
+		zeroNativeBuffer(padding)
+		if err := writeAll(writer, padding); err != nil {
+			return fmt.Errorf("write APPL resource %d padding: %w", index, err)
+		}
+	}
+	return nil
+}
+
+func writeAll(writer io.Writer, data []byte) error {
+	for len(data) > 0 {
+		written, err := writer.Write(data)
+		if err != nil {
+			return err
+		}
+		if written <= 0 {
+			return io.ErrShortWrite
+		}
+		data = data[written:]
+	}
+	return nil
 }
 
 func (c *Container) entryOffset(index uint32) (uint32, error) {
