@@ -195,6 +195,53 @@ func (a *PropArchive) View(propName, viewName string) (PropView, error) {
 	return PropView{Resource: resource, Name: viewName, Frames: frames, variants: variants, sequences: sequences}, nil
 }
 
+func (a *PropArchive) FrameInfo(propName, viewName string, frameIndex int, angle int16) (PropFrameInfo, error) {
+	if a == nil || a.cache == nil {
+		return PropFrameInfo{}, fmt.Errorf("prop archive is closed")
+	}
+	definition, found := a.definitions[asciiUpper(propName)]
+	if !found {
+		return PropFrameInfo{}, fmt.Errorf("prop definition %q is absent", propName)
+	}
+	resource, found := definition.views[asciiUpper(viewName)]
+	if !found {
+		return PropFrameInfo{}, fmt.Errorf("prop view %q is absent from %q", viewName, definition.Name)
+	}
+	data, err := readPropResource(a.cache, resource)
+	if err != nil {
+		return PropFrameInfo{}, fmt.Errorf("read prop view descriptor %d: %w", resource, err)
+	}
+	if len(data) < propDescriptorRows {
+		return PropFrameInfo{}, fmt.Errorf("prop view descriptor %d is truncated", resource)
+	}
+	frameCount := int(binary.LittleEndian.Uint16(data[propDescriptorFrameCount : propDescriptorFrameCount+2]))
+	variantCountValue := binary.LittleEndian.Uint32(data[propDescriptorDegreeCount : propDescriptorDegreeCount+4])
+	if frameIndex < 0 || frameCount == 0 || uint64(propDescriptorRows)+uint64(variantCountValue)*propDescriptorRowSize > uint64(len(data)) || 0x2e+frameCount*2 > propDescriptorRows {
+		return PropFrameInfo{}, fmt.Errorf("prop view descriptor %d has invalid frame/variant tables", resource)
+	}
+	sequence := int16(binary.LittleEndian.Uint16(data[0x2e+(frameIndex%frameCount)*2:0x30+(frameIndex%frameCount)*2])) - 1
+	closest, selected := int16(1000), false
+	var result PropFrameInfo
+	for index := 0; index < int(variantCountValue); index++ {
+		row := data[propDescriptorRows+index*propDescriptorRowSize : propDescriptorRows+(index+1)*propDescriptorRowSize]
+		if int16(binary.LittleEndian.Uint16(row[8:10])) != sequence {
+			continue
+		}
+		distance := nativeAngleDistance(int16(binary.LittleEndian.Uint16(row[0x28:0x2a])), angle)
+		if distance < closest {
+			closest, selected = distance, true
+			result = PropFrameInfo{Resource: binary.LittleEndian.Uint32(row[:4]), Angle: int16(binary.LittleEndian.Uint16(row[0x28:0x2a])), Metric: binary.LittleEndian.Uint16(row[0x2a:0x2c]), Left: int16(binary.LittleEndian.Uint16(row[0x12:0x14])), Top: int16(binary.LittleEndian.Uint16(row[0x14:0x16])), Right: int16(binary.LittleEndian.Uint16(row[0x16:0x18])), Bottom: int16(binary.LittleEndian.Uint16(row[0x18:0x1a])), OriginX: int16(binary.LittleEndian.Uint16(row[0x1a:0x1c])), OriginY: int16(binary.LittleEndian.Uint16(row[0x1c:0x1e]))}
+			if distance < 1 {
+				break
+			}
+		}
+	}
+	if !selected {
+		return PropFrameInfo{}, fmt.Errorf("prop view %q frame %d has no variant for sequence %d at angle %d", viewName, frameIndex, sequence, angle)
+	}
+	return result, nil
+}
+
 func (v PropView) FrameInfo(frameIndex int, angle int16) (PropFrameInfo, error) {
 	if frameIndex < 0 || len(v.sequences) == 0 {
 		return PropFrameInfo{}, fmt.Errorf("prop view %q frame index %d is invalid", v.Name, frameIndex)

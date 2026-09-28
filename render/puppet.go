@@ -235,8 +235,12 @@ func (p *Puppet) drawCue(canvas *PuppetCanvas, cue PuppetCueRow, sceneBackground
 			}
 			continue
 		}
-		if int(cueSlot.Frame) >= p.FrameCount(slot) {
-			return fmt.Errorf("puppet cue slot %d frame %d is outside %d frames", slot, cueSlot.Frame, p.FrameCount(slot))
+		frameCount := p.FrameCount(slot)
+		if frameCount == 0 {
+			continue
+		}
+		if int(cueSlot.Frame) >= frameCount {
+			return fmt.Errorf("puppet cue slot %d frame %d is outside %d frames", slot, cueSlot.Frame, frameCount)
 		}
 		frame, err := p.Frame(slot, int(cueSlot.Frame))
 		if err != nil {

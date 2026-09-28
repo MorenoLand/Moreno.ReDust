@@ -20,6 +20,18 @@ import (
 	"redust/scripts"
 )
 
+func loadInventoryFrame(archive *assets.PropArchive, propName, viewName string, angle int16) (render.PuppetFrame, error) {
+	info, err := archive.FrameInfo(propName, viewName, 0, angle)
+	if err != nil {
+		return render.PuppetFrame{}, err
+	}
+	data, err := archive.Resource(info.Resource)
+	if err != nil {
+		return render.PuppetFrame{}, err
+	}
+	return render.DecodePuppetFrame(data)
+}
+
 func run() error {
 	work := flag.String("work", "bin", "work directory; assets are read from its assets child")
 	debug := flag.Bool("debug", false, "enable diagnostics")
@@ -175,10 +187,18 @@ func run() error {
 		stage.Close()
 		return fmt.Errorf("resolve Bone large view: %w", err)
 	}
-	ringLargeView, err := inventoryArchive.View("Ring", "large")
-	if err != nil {
-		stage.Close()
-		return fmt.Errorf("resolve Ring large view: %w", err)
+	inventoryLargeFrames := make(map[string]render.PuppetFrame, 5)
+	for _, item := range []struct {
+		name  string
+		prop  string
+		angle int16
+	}{{"badge", "Badge", 0}, {"gun", "Gun", 0}, {"boots", "Boots", 0}, {"ring", "Ring", 0}, {"bone", "Bone", 32}} {
+		frame, err := loadInventoryFrame(inventoryArchive, item.prop, "large", item.angle)
+		if err != nil {
+			stage.Close()
+			return fmt.Errorf("load %s large inventory frame: %w", item.prop, err)
+		}
+		inventoryLargeFrames[item.name] = frame
 	}
 	avatarView, err := propArchive.View("avatar", "gossip")
 	if err != nil {
@@ -310,6 +330,15 @@ func run() error {
 		marieInteractionPuppetPending
 		marieInteractionPuppetSpeaking
 		marieInteractionPuppetChoices
+		marieInteractionInventory
+		marieInteractionInventoryReturning
+	)
+	const (
+		isaoInteractionIdle uint8 = iota
+		isaoInteractionPuppetPending
+		isaoInteractionPuppetSpeaking
+		isaoInteractionPuppetChoices
+		isaoInteractionPuppetDelay
 	)
 	leroyPhase, leroyInteractionStage := int16(0), leroyInteractionIdle
 	var leroyWalk *scripts.NativeActorWalkJob
@@ -330,6 +359,24 @@ func run() error {
 	jonesInteractionStage := jonesInteractionIdle
 	jonesPhase, laurelPhase := int16(0), int16(0)
 	jonesActorValue := int32(0)
+	isaoInteractionStage := isaoInteractionIdle
+	isaoPhase, isaoActorValue, oonaActorValue := int16(0), int32(0), int32(0)
+	var isaoPuppet *render.Puppet
+	var isaoPuppetTable assets.PuppetSpeechTable
+	var isaoDialogue *engine.PuppetDialogue
+	var isaoConversationBase, isaoChoiceBase render.IndexedFrame
+	var isaoChoiceGroups map[string][][]scripts.PuppetChoice
+	var isaoActiveChoices []scripts.PuppetChoice
+	var isaoCurrentCode string
+	isaoChoiceOutline := -1
+	isaoNextCode, isaoNextChoiceGroup := "", -1
+	var isaoChoicePressActive bool
+	var isaoChoicePressEvent int32
+	isaoChoicePressIndex := -1
+	var isaoDialogueSkip bool
+	var isaoSpeechFinishesRun bool
+	var isaoSecondRun bool
+	var isaoDelayUntil uint32
 	helpActorPosition, helpReturnPosition := helpPosition, helpPosition
 	var helpWalk *scripts.NativeActorWalkJob
 	var jonesWalk *scripts.NativeActorWalkJob
@@ -352,7 +399,8 @@ func run() error {
 	marieInteractionStage := marieInteractionIdle
 	mariePhase, marieFlag1, marieFlag2, marieFlag3 := int16(0), false, false, false
 	marieActorValue := int32(0)
-	marieHandItem, marieHandFlag := "", int16(0)
+	handItem, handFlag := "", int16(0)
+	var marieGiftCounter int32
 	var mariePuppet *render.Puppet
 	var mariePuppetTable assets.PuppetSpeechTable
 	var mariePuppetProgram, marieInventoryProgram scripts.Program
@@ -361,6 +409,8 @@ func run() error {
 	var marieConversationBase, marieChoiceBase render.IndexedFrame
 	var marieChoiceGroups [][]scripts.PuppetChoice
 	var marieActiveChoices []scripts.PuppetChoice
+	var marieInventoryProjected []render.ProjectedFlatProp
+	var marieInventoryReturnPending bool
 	var marieChoiceGroup int
 	var marieDialogueSkip bool
 	var marieChoicePressActive bool
@@ -391,12 +441,21 @@ func run() error {
 	boneOwner := "none"
 	var boneInventoryFrame render.PuppetFrame
 	var boneInInventory bool
-	var ringInventoryFrame render.PuppetFrame
-	var ringInInventory bool
+	inventoryOwners := map[string]string{"gun": "stranger", "boots": "stranger", "bullets": "stranger", "badge": "stranger", "hankerchief": "limbo", "ring": "none", "bone": "none"}
+	inventoryPropNames := map[string]string{"gun": "Gun", "boots": "Boots", "bullets": "Bullets", "badge": "Badge", "hankerchief": "Hankerchief", "ring": "Ring", "bone": "Bone"}
+	inventoryHandNames := map[string]string{"gun": "gun", "boots": "boots", "bullets": "bullets", "badge": "badge", "hankerchief": "hankerchief", "ring": "ring", "bone": "Bone"}
+	inventoryAnchors := map[string]image.Point{"gun": image.Pt(94, 213), "boots": image.Pt(249, 304), "badge": image.Pt(271, 151), "ring": image.Pt(185, 252), "bone": image.Pt(416, 191)}
+	inventoryPropOrder := []string{"gun", "boots", "badge", "bullets", "hankerchief", "ring", "bone"}
 	var boneDragging bool
 	var boneDragLast image.Point
 	var dog2PhaseAfterHelp bool
 	defer func() {
+		if isaoDialogue != nil {
+			_ = isaoDialogue.Close()
+		}
+		if isaoPuppet != nil {
+			_ = isaoPuppet.Close()
+		}
 		if marieDialogue != nil {
 			_ = marieDialogue.Close()
 		}
@@ -558,11 +617,13 @@ func run() error {
 		if err != nil {
 			return render.IndexedFrame{}, err
 		}
-		if boneInInventory && !boneDragging {
-			return render.CompositePuppetFrame(frame, boneInventoryFrame, image.Pt(316, 320))
-		}
-		if ringInInventory && !boneDragging {
-			return render.CompositePuppetFrame(frame, ringInventoryFrame, image.Pt(316, 320))
+		if !boneDragging {
+			item := strings.ToLower(handItem)
+			if inventoryOwners[item] == "stranger" {
+				if itemFrame, found := inventoryLargeFrames[item]; found {
+					return render.CompositePuppetFrame(frame, itemFrame, image.Pt(316, 320))
+				}
+			}
 		}
 		return frame, nil
 	}
@@ -1448,6 +1509,271 @@ func run() error {
 		jonesPuppet, jonesPuppetTable, jonesPuppetProgram, jonesChoiceGroups = puppet, table, program, groups
 		return nil
 	}
+	openIsaoPuppet := func() error {
+		if isaoPuppet != nil {
+			return nil
+		}
+		puppet, err := render.OpenPuppet(workspace, "PUPPETS/ISAO.PUP")
+		if err != nil {
+			return err
+		}
+		table, err := workspace.OpenPuppetSpeechTable("PUPPETS/ISAO.PUP")
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		cache, err := workspace.OpenResourceCache("PUPPETS/ISAO.PUP")
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		lease, err := cache.Acquire(22)
+		if err != nil {
+			_ = cache.Close()
+			_ = puppet.Close()
+			return err
+		}
+		data, err := lease.Bytes()
+		if closeErr := lease.Close(); err == nil {
+			err = closeErr
+		}
+		if closeErr := cache.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		program, err := scripts.ParseProgram(data)
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		groups := make(map[string][][]scripts.PuppetChoice, 5)
+		for _, code := range []string{"runyoself", "whoareyou", "byenow", "brushoff", "ring"} {
+			groups[code], err = scripts.PuppetBevelChoiceGroups(program, code)
+			if err != nil {
+				_ = puppet.Close()
+				return err
+			}
+		}
+		isaoPuppet, isaoPuppetTable, isaoChoiceGroups = puppet, table, groups
+		return nil
+	}
+	var buildIsaoConversationBase func() error
+	var drawIsaoChoices func(int) error
+	var showIsaoChoices func(string, int) error
+	var startIsaoSpeech func([]string, string, int, bool) error
+	var startIsaoConversation func() error
+	var finishIsaoSpeech func() error
+	var finishIsaoPuppetRun func() error
+	var startIsaoEventResponse func(int32) error
+	drawIsaoChoices = func(outline int) error {
+		labels := make([]string, len(isaoActiveChoices))
+		for index, choice := range isaoActiveChoices {
+			labels[index] = choice.Text
+		}
+		frame, err := isaoPuppet.ChoiceFrame(isaoChoiceBase, isaoPuppetTable.PanelResource, labels)
+		if err != nil {
+			return fmt.Errorf("render Isao choice panel: %w", err)
+		}
+		if outline >= 0 {
+			frame, err = render.DrawNativePuppetChoiceBevel(frame, outline)
+			if err != nil {
+				return fmt.Errorf("render Isao choice bevel: %w", err)
+			}
+		}
+		currentFrame, stageFrame, isaoChoiceOutline = frame, frame, outline
+		return nil
+	}
+	finishIsaoSpeech = func() error {
+		if isaoDialogue != nil {
+			if err := isaoDialogue.Close(); err != nil {
+				return err
+			}
+			isaoDialogue = nil
+		}
+		if isaoNextCode != "" {
+			code, group := isaoNextCode, isaoNextChoiceGroup
+			isaoNextCode, isaoNextChoiceGroup = "", -1
+			return showIsaoChoices(code, group)
+		}
+		if isaoSpeechFinishesRun {
+			isaoSpeechFinishesRun = false
+			return finishIsaoPuppetRun()
+		}
+		return nil
+	}
+	showIsaoChoices = func(code string, group int) error {
+		groups, found := isaoChoiceGroups[code]
+		if !found || group < 0 || group >= len(groups) {
+			return fmt.Errorf("Isao %s choice group %d is unavailable", code, group)
+		}
+		choices := append([]scripts.PuppetChoice(nil), groups[group]...)
+		if code == "ring" && len(choices) == 2 {
+			if inventoryOwners["ring"] == "isao" {
+				choices = choices[:1]
+			} else {
+				choices = choices[1:]
+			}
+		}
+		if len(choices) == 0 {
+			return fmt.Errorf("Isao %s choice group %d is empty", code, group)
+		}
+		isaoCurrentCode, isaoActiveChoices = code, choices
+		isaoChoiceBase, isaoChoicePressActive = currentFrame, false
+		isaoChoicePressIndex, isaoChoiceOutline = -1, -1
+		if err := drawIsaoChoices(-1); err != nil {
+			return err
+		}
+		isaoInteractionStage = isaoInteractionPuppetChoices
+		return nil
+	}
+	startIsaoSpeech = func(calls []string, nextCode string, nextGroup int, finishRun bool) error {
+		if isaoDialogue != nil {
+			if err := isaoDialogue.Close(); err != nil {
+				return err
+			}
+		}
+		dialogue, err := engine.NewPuppetDialogue(isaoPuppet, isaoPuppetTable.Entries, calls, audioContext)
+		if err != nil {
+			return err
+		}
+		frame, err := dialogue.Start(isaoConversationBase, scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
+		if err != nil {
+			_ = dialogue.Close()
+			return err
+		}
+		isaoDialogue, isaoNextCode, isaoNextChoiceGroup, isaoSpeechFinishesRun = dialogue, nextCode, nextGroup, finishRun
+		isaoInteractionStage = isaoInteractionPuppetSpeaking
+		currentFrame, stageFrame = frame, frame
+		if *debug {
+			log.Printf("puppet=isao speech-lines=%d next-code=%s next-choice-group=%d finish-run=%t", len(calls), nextCode, nextGroup, finishRun)
+		}
+		return nil
+	}
+	buildIsaoConversationBase = func() error {
+		if isaoPuppet == nil {
+			return fmt.Errorf("Isao PUP is unavailable")
+		}
+		dialogueBackground, _, err := render.CompositeWorldActors(backgroundFrame, worldPoint, worldActors)
+		if err != nil {
+			return fmt.Errorf("render Isao dialogue actors: %w", err)
+		}
+		panel, err := render.StageFrame(stage, currentPixels.Pixels)
+		if err != nil {
+			return fmt.Errorf("render Isao dialogue panel: %w", err)
+		}
+		base, err := composeMainPanel(dialogueBackground, panel)
+		if err != nil {
+			return fmt.Errorf("compose Isao dialogue background: %w", err)
+		}
+		base.Palette, err = isaoPuppet.Palette()
+		if err != nil {
+			return fmt.Errorf("load Isao PUP CLUT: %w", err)
+		}
+		idleFrame, err := isaoPuppet.Frame(0, 0)
+		if err != nil {
+			return fmt.Errorf("load Isao initial PUP frame: %w", err)
+		}
+		isaoConversationBase, err = render.CompositePuppetFrame(base, idleFrame, idleFrame.Origin)
+		if err != nil {
+			return fmt.Errorf("compose Isao initial PUP frame: %w", err)
+		}
+		return nil
+	}
+	finishIsaoPuppetRun = func() error {
+		if isaoDialogue != nil {
+			if err := isaoDialogue.Close(); err != nil {
+				return err
+			}
+			isaoDialogue = nil
+		}
+		if !isaoSecondRun {
+			isaoActorValue++
+			isaoPhase, isaoSecondRun = 999, true
+			isaoDelayUntil = scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) + 60
+			isaoInteractionStage = isaoInteractionPuppetDelay
+			return nil
+		}
+		isaoActorValue++
+		isaoSecondRun, isaoInteractionStage = false, isaoInteractionIdle
+		actorPoses["isao"] = "stand"
+		if isaoVisible && activeSetName == "sallower" {
+			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "isao", Callback: "isaoidle", Remaining: 2}); status != 0 {
+				return fmt.Errorf("register Isao idle loop after dialogue returned status %#x", status)
+			}
+		}
+		if *debug {
+			log.Printf("actor=isao mousedown-complete actorvalue=%d isaophase=%d visible=%t", isaoActorValue, isaoPhase, isaoVisible)
+		}
+		return refreshWorldScene()
+	}
+	startIsaoEventResponse = func(event int32) error {
+		state := scripts.IsaoState{Day: gameDay, Clock: gameClock, Phase: gamePhase, IsaoPhase: isaoPhase, OonaActorValue: oonaActorValue, RingOwner: inventoryOwners["ring"]}
+		randomChoice := uint32(0)
+		if isaoCurrentCode == "whoareyou" && event == 102 {
+			randomChoice = nativeRandom.Inclusive(3)
+		}
+		step, err := scripts.IsaoPuppetResponse(isaoCurrentCode, event, state, randomChoice)
+		if err != nil {
+			return err
+		}
+		if step.OpenInventory {
+			return fmt.Errorf("Isao event %d requests the native inventory selector, which is not yet wired to this PUP", event)
+		}
+		if len(step.Speech) > 0 {
+			return startIsaoSpeech(step.Speech, step.NextCode, step.NextGroup, step.Finish)
+		}
+		if step.NextCode != "" {
+			return showIsaoChoices(step.NextCode, step.NextGroup)
+		}
+		if step.Finish {
+			return finishIsaoPuppetRun()
+		}
+		return nil
+	}
+	startIsaoConversation = func() error {
+		if err := openIsaoPuppet(); err != nil {
+			return fmt.Errorf("open Isao dialogue: %w", err)
+		}
+		if err := buildIsaoConversationBase(); err != nil {
+			return err
+		}
+		state := scripts.IsaoState{Day: gameDay, Clock: gameClock, Phase: gamePhase, IsaoPhase: isaoPhase, OonaActorValue: oonaActorValue, RingOwner: inventoryOwners["ring"]}
+		step := scripts.IsaoEntry(state)
+		if step.SetIsaoPhaseValid {
+			isaoPhase = step.SetIsaoPhase
+			isaoSecondRun = true
+		}
+		if len(step.Speech) > 0 {
+			return startIsaoSpeech(step.Speech, "", -1, true)
+		}
+		if *debug {
+			log.Printf("puppet=isao entry-code=%s day=%d clock=%d phase=%d isaophase=%d oonapvalue=%d", step.Code, gameDay, gameClock, gamePhase, isaoPhase, oonaActorValue)
+		}
+		return showIsaoChoices(step.Code, 0)
+	}
+	beginIsaoPuppetTalk := func() (bool, error) {
+		if activeSetName != "sallower" || !isaoVisible || isaoInteractionStage != isaoInteractionIdle {
+			return false, nil
+		}
+		camera := render.NativeActorCameraPosition(worldPoint)
+		player := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
+		distance := scripts.NativeActorDistance2D(isaoPosition, player)
+		if distance >= townActorHotDistance {
+			if *debug {
+				log.Printf("actor=isao mousedown=ignored distance=%d hotdist=%d", distance, townActorHotDistance)
+			}
+			return false, nil
+		}
+		nativeLoops.Stop(2, "isao")
+		isaoInteractionStage = isaoInteractionPuppetPending
+		if *debug {
+			log.Printf("actor=isao mousedown=accepted distance=%d point=%v", distance, worldPoint)
+		}
+		return true, nil
+	}
 	var drawJonesChoices func(int) error
 	var showJonesChoices func(int) error
 	var finishJonesDialogue func() error
@@ -1796,10 +2122,10 @@ func run() error {
 			var handChoice scripts.PuppetChoice
 			var found bool
 			var err error
-			if marieHandFlag == 1 && len(marieHandBevelChoices) > 0 {
+			if handFlag == 1 && len(marieHandBevelChoices) > 0 {
 				handChoice, found = marieHandBevelChoices[0], true
 			} else {
-				handChoice, found, err = scripts.PuppetBevelChoiceInCase(marieInventoryProgram, "addhandbevel", "handitem", marieHandItem)
+				handChoice, found, err = scripts.PuppetBevelChoiceInCase(marieInventoryProgram, "addhandbevel", "handitem", handItem)
 			}
 			if err != nil {
 				return err
@@ -1820,6 +2146,62 @@ func run() error {
 		marieInteractionStage = marieInteractionPuppetChoices
 		return nil
 	}
+	renderMarieInventory := func() error {
+		lease, err := stage.AcquireSceneFrameResource(2)
+		if err != nil {
+			return err
+		}
+		data, err := lease.Bytes()
+		if closeErr := lease.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return err
+		}
+		pixels, decodeErr := render.DecodeMoviePixels(data, currentPixels.Pixels)
+		if len(pixels.Pixels) == 0 {
+			return fmt.Errorf("decode avatar inventory flat: %w", decodeErr)
+		}
+		if decodeErr != nil && *debug {
+			log.Printf("scene=avatar partial-frame: %v", decodeErr)
+		}
+		base, err := render.StageFrame(stage, pixels.Pixels)
+		if err != nil {
+			return err
+		}
+		props := make([]render.FlatPropSprite, 0, len(inventoryPropOrder))
+		for _, key := range inventoryPropOrder {
+			if inventoryOwners[key] != "stranger" {
+				continue
+			}
+			anchor, found := inventoryAnchors[key]
+			if !found {
+				continue
+			}
+			viewName := "PANEL"
+			if strings.EqualFold(handItem, inventoryHandNames[key]) {
+				viewName = "HILITE"
+			}
+			props = append(props, render.FlatPropSprite{Name: inventoryHandNames[key], PropName: inventoryPropNames[key], ViewName: viewName, Anchor: anchor, Archive: inventoryArchive})
+		}
+		frame, projected, err := render.CompositeFlatProps(base, props)
+		if err != nil {
+			return fmt.Errorf("draw avatar inventory props: %w", err)
+		}
+		currentScene, currentPixels = 2, pixels
+		currentFrame, stageFrame = frame, frame
+		marieInventoryProjected = projected
+		if *debug {
+			log.Printf("flat=avatar props=%d handitem=%q", len(projected), handItem)
+		}
+		return nil
+	}
+	openMarieInventory := func() error {
+		handFlag = 0
+		marieInteractionStage = marieInteractionInventory
+		return renderMarieInventory()
+	}
+	var buildMarieConversationBase func() error
 	startMarieSpeech = func(calls []string, nextGroup int, setPhase, putDown bool) error {
 		if marieDialogue != nil {
 			if err := marieDialogue.Close(); err != nil {
@@ -1898,10 +2280,22 @@ func run() error {
 			case 202:
 				nextGroup, setPhase, putDown = -1, true, true
 			case 55555:
-				if *debug {
-					log.Printf("actor=marie hand-item selection is not translated handitem=%q", marieHandItem)
+				if handItem == "" || handFlag == 1 {
+					return openMarieInventory()
 				}
-				return showMarieChoices(2)
+				response, found := scripts.MarieGift(handItem, 0, marieGiftCounter)
+				if !found {
+					return fmt.Errorf("Marie gift script has no counter case %d for %q", marieGiftCounter, handItem)
+				}
+				giftedItem := handItem
+				handItem, marieGiftCounter = "", response.Counter
+				if err := buildMarieConversationBase(); err != nil {
+					return err
+				}
+				if *debug {
+					log.Printf("puppet=marie gift=%s lines=%d counter=%d", giftedItem, len(response.Speech), marieGiftCounter)
+				}
+				return startMarieSpeech(response.Speech, 2, false, false)
 			default:
 				return fmt.Errorf("Marie twonite group 2 returned event %d", event)
 			}
@@ -1914,21 +2308,9 @@ func run() error {
 		}
 		return startMarieSpeech(calls, nextGroup, setPhase, putDown)
 	}
-	startMarieConversation := func() error {
-		if err := openMariePuppet(); err != nil {
-			return fmt.Errorf("open Marie dialogue: %w", err)
-		}
-		if gameClock != 3 || mariePhase != 0 {
-			marieInteractionStage = marieInteractionIdle
-			if *debug {
-				log.Printf("puppet=marie blocked day=%d clock=%d mariephase=%d", gameDay, gameClock, mariePhase)
-			}
-			if marieVisible && activeSetName == "town" {
-				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "marie", Callback: "marieidle", Remaining: 17}); status != 0 {
-					return fmt.Errorf("register Marie idle loop after unsupported dialogue returned status %#x", status)
-				}
-			}
-			return nil
+	buildMarieConversationBase = func() error {
+		if mariePuppet == nil {
+			return fmt.Errorf("Marie PUP is unavailable")
 		}
 		dialogueActors := make([]render.WorldActorSprite, 0, len(worldActors))
 		for _, actor := range worldActors {
@@ -1953,6 +2335,34 @@ func run() error {
 			return fmt.Errorf("load Marie PUP CLUT: %w", err)
 		}
 		marieConversationBase.Palette = palette
+		return nil
+	}
+	resumeMarieInventory := func() error {
+		if err := buildMarieConversationBase(); err != nil {
+			return err
+		}
+		currentFrame, stageFrame = marieConversationBase, marieConversationBase
+		return showMarieChoices(2)
+	}
+	startMarieConversation := func() error {
+		if err := openMariePuppet(); err != nil {
+			return fmt.Errorf("open Marie dialogue: %w", err)
+		}
+		if gameClock != 3 || mariePhase != 0 {
+			marieInteractionStage = marieInteractionIdle
+			if *debug {
+				log.Printf("puppet=marie blocked day=%d clock=%d mariephase=%d", gameDay, gameClock, mariePhase)
+			}
+			if marieVisible && activeSetName == "town" {
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "marie", Callback: "marieidle", Remaining: 17}); status != 0 {
+					return fmt.Errorf("register Marie idle loop after unsupported dialogue returned status %#x", status)
+				}
+			}
+			return nil
+		}
+		if err := buildMarieConversationBase(); err != nil {
+			return err
+		}
 		marieFlag1, marieFlag2, marieFlag3 = false, false, false
 		calls, err := scripts.PuppetSpeechCalls(mariePuppetProgram, "twonite", scripts.LookupOpcode("puppetclear"))
 		if err != nil {
@@ -2012,19 +2422,7 @@ func run() error {
 			helpPhase = helpPendingResult.Phase
 		}
 		if helpPendingResult.GiveRing {
-			info, err := ringLargeView.FrameInfo(0, 0)
-			if err != nil {
-				return fmt.Errorf("select Ring inventory frame: %w", err)
-			}
-			data, err := inventoryArchive.Resource(info.Resource)
-			if err != nil {
-				return fmt.Errorf("read Ring inventory frame %d: %w", info.Resource, err)
-			}
-			ringInventoryFrame, err = render.DecodePuppetFrame(data)
-			if err != nil {
-				return fmt.Errorf("decode Ring inventory frame %d: %w", info.Resource, err)
-			}
-			ringInInventory = true
+			inventoryOwners["ring"], handItem = "stranger", "ring"
 			if err := soundBank.Play(audioContext, "inven", 1); err != nil {
 				return fmt.Errorf("play Ring inventory sound: %w", err)
 			}
@@ -2499,6 +2897,59 @@ func run() error {
 			}
 			return true, nil
 		}
+		if !serviceAmbient && isaoInteractionStage == isaoInteractionPuppetPending {
+			if err := startIsaoConversation(); err != nil {
+				return false, err
+			}
+			return true, nil
+		}
+		if !serviceAmbient && isaoInteractionStage == isaoInteractionPuppetSpeaking {
+			if isaoDialogue == nil {
+				return false, fmt.Errorf("Isao dialogue state is missing its puppet player")
+			}
+			frameTick := scripts.NativeFrameUnits(scripts.NativeTickMilliseconds())
+			var frame render.IndexedFrame
+			var changed bool
+			var err error
+			if isaoDialogueSkip {
+				frame, changed, err = isaoDialogue.Skip()
+				isaoDialogueSkip = false
+			} else {
+				frame, changed, err = isaoDialogue.Update(frameTick)
+			}
+			if err != nil {
+				return false, fmt.Errorf("advance Isao dialogue: %w", err)
+			}
+			if changed {
+				currentFrame, stageFrame = frame, frame
+				if !isaoDialogue.Active() {
+					if err := finishIsaoSpeech(); err != nil {
+						return false, fmt.Errorf("finish Isao dialogue: %w", err)
+					}
+				}
+				return true, nil
+			}
+			if displayChanged {
+				frame, err = isaoDialogue.Frame()
+				if err != nil {
+					return false, fmt.Errorf("refresh Isao dialogue frame: %w", err)
+				}
+				currentFrame, stageFrame = frame, frame
+				return true, nil
+			}
+		}
+		if !serviceAmbient && displayChanged && isaoInteractionStage == isaoInteractionPuppetChoices {
+			if err := drawIsaoChoices(isaoChoiceOutline); err != nil {
+				return false, fmt.Errorf("refresh Isao choices: %w", err)
+			}
+			return true, nil
+		}
+		if !serviceAmbient && isaoInteractionStage == isaoInteractionPuppetDelay && scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) >= isaoDelayUntil {
+			if err := startIsaoConversation(); err != nil {
+				return false, fmt.Errorf("start Isao follow-up: %w", err)
+			}
+			return true, nil
+		}
 		if !serviceAmbient && jonesInteractionStage == jonesInteractionPuppetPending {
 			if err := startJonesConversation(); err != nil {
 				return false, err
@@ -2747,11 +3198,23 @@ func run() error {
 					cursor = "touch"
 				}
 			}
+			if isaoInteractionStage == isaoInteractionPuppetChoices {
+				if _, found := scripts.NativePuppetChoiceAt(point, isaoActiveChoices); found {
+					cursor = "touch"
+				}
+			}
 			if marieInteractionStage == marieInteractionPuppetChoices {
 				if _, found := scripts.NativePuppetChoiceAt(point, marieActiveChoices); found {
 					cursor = "touch"
 				}
 			}
+			if marieInteractionStage == marieInteractionInventory && currentScene == 2 {
+				if _, found := render.HitTestFlatProps(marieInventoryProjected, image.Pt(int(int16(point>>16)), int(int16(point)))); found {
+					cursor = "touch"
+				}
+			}
+		} else if _, found, _ := stage.HitTestSceneHandler(currentScene, point); found {
+			cursor = "touch"
 		}
 		setNativeCursor(cursor)
 	}
@@ -2928,6 +3391,13 @@ func run() error {
 				if transitionMode == 2 {
 					stageFrame = currentFrame
 					transitionMode = 0
+					if marieInventoryReturnPending {
+						marieInventoryReturnPending = false
+						if err := resumeMarieInventory(); err != nil {
+							return render.IndexedFrame{}, false, err
+						}
+						return currentFrame, true, nil
+					}
 					return currentFrame, true, nil
 				}
 			}
@@ -3087,6 +3557,15 @@ func run() error {
 			}
 			return
 		}
+		if isaoInteractionStage == isaoInteractionPuppetSpeaking {
+			if key == ebiten.KeySpace || key == ebiten.KeyEscape || key == ebiten.KeyQ || key == ebiten.KeyPeriod {
+				isaoDialogueSkip = true
+			}
+			return
+		}
+		if isaoInteractionStage != isaoInteractionIdle {
+			return
+		}
 		if jonesInteractionStage == jonesInteractionPuppetSpeaking {
 			if key == ebiten.KeySpace || key == ebiten.KeyEscape || key == ebiten.KeyQ || key == ebiten.KeyPeriod {
 				jonesDialogueSkip = true
@@ -3218,8 +3697,35 @@ func run() error {
 			jonesChoicePressIndex = (int(int16(point)) - 264) / 24
 			return currentFrame, false, nil
 		}
+		if isaoInteractionStage == isaoInteractionPuppetChoices {
+			if mouseEvent.Button != ebiten.MouseButtonLeft {
+				return currentFrame, false, nil
+			}
+			event, found := scripts.NativePuppetChoiceAt(point, isaoActiveChoices)
+			if !found {
+				return currentFrame, false, nil
+			}
+			isaoChoicePressActive, isaoChoicePressEvent = true, event
+			isaoChoicePressIndex = (int(int16(point)) - 264) / 24
+			return currentFrame, false, nil
+		}
+		if isaoInteractionStage != isaoInteractionIdle {
+			return currentFrame, false, nil
+		}
 		if jonesInteractionStage != jonesInteractionIdle {
 			return currentFrame, false, nil
+		}
+		if marieInteractionStage == marieInteractionInventory && currentScene == 2 && mouseEvent.Button == ebiten.MouseButtonLeft {
+			if name, found := render.HitTestFlatProps(marieInventoryProjected, image.Pt(int(int16(point>>16)), int(int16(point)))); found {
+				handItem = name
+				if err := renderMarieInventory(); err != nil {
+					return render.IndexedFrame{}, false, err
+				}
+				if *debug {
+					log.Printf("inventory-select item=%s owner=%s flat=avatar", handItem, inventoryOwners[strings.ToLower(handItem)])
+				}
+				return currentFrame, true, nil
+			}
 		}
 		if marieInteractionStage == marieInteractionPuppetChoices {
 			if mouseEvent.Button != ebiten.MouseButtonLeft {
@@ -3233,7 +3739,7 @@ func run() error {
 			marieChoicePressIndex = (int(int16(point)) - 264) / 24
 			return currentFrame, false, nil
 		}
-		if marieInteractionStage != marieInteractionIdle {
+		if marieInteractionStage != marieInteractionIdle && marieInteractionStage != marieInteractionInventory {
 			return currentFrame, false, nil
 		}
 		if leroyInteractionStage != leroyInteractionIdle && leroyInteractionStage != leroyInteractionPuppetChoices {
@@ -3277,7 +3783,7 @@ func run() error {
 			}
 		}
 		if !hit && currentScene == 0 {
-			if boneInInventory && !boneDragging && mouseEvent.Button == ebiten.MouseButtonLeft {
+			if boneInInventory && strings.EqualFold(handItem, "Bone") && !boneDragging && mouseEvent.Button == ebiten.MouseButtonLeft {
 				mousePoint := image.Pt(int(int16(point>>16)), int(int16(point)))
 				hitBone, err := render.HitTestPuppetFrame(boneInventoryFrame, image.Pt(316, 320), mousePoint)
 				if err != nil {
@@ -3350,24 +3856,20 @@ func run() error {
 				if *debug {
 					log.Printf("world-actor-hit=%s", actorName)
 				}
+				if strings.EqualFold(actorName, "Isao") {
+					started, err := beginIsaoPuppetTalk()
+					if err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+					return currentFrame, started, nil
+				}
 				if strings.EqualFold(actorName, "Bone") && boneWorldProp.Visible && boneOwner == "none" {
 					camera := render.NativeActorCameraPosition(worldPoint)
 					playerPosition := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
 					distance := scripts.NativeActorDistance2D(boneWorldProp.Position, playerPosition)
 					if distance < 512 {
-						info, err := boneLargeView.FrameInfo(0, boneWorldProp.Heading)
-						if err != nil {
-							return render.IndexedFrame{}, false, fmt.Errorf("select Bone inventory frame: %w", err)
-						}
-						data, err := inventoryArchive.Resource(info.Resource)
-						if err != nil {
-							return render.IndexedFrame{}, false, fmt.Errorf("read Bone inventory frame %d: %w", info.Resource, err)
-						}
-						boneInventoryFrame, err = render.DecodePuppetFrame(data)
-						if err != nil {
-							return render.IndexedFrame{}, false, fmt.Errorf("decode Bone inventory frame %d: %w", info.Resource, err)
-						}
-						boneInInventory, boneOwner, boneWorldProp.View, boneWorldProp.Visible = true, "stranger", boneLargeView, false
+						boneInventoryFrame = inventoryLargeFrames["bone"]
+						boneInInventory, boneOwner, inventoryOwners["bone"], handItem, boneWorldProp.View, boneWorldProp.Visible = true, "stranger", "stranger", "Bone", boneLargeView, false
 						if err := soundBank.Play(audioContext, "inven", 1); err != nil {
 							return render.IndexedFrame{}, false, fmt.Errorf("play Bone inventory sound: %w", err)
 						}
@@ -3532,6 +4034,9 @@ func run() error {
 			}
 		}
 		currentScene, currentPixels = target, nextPixels
+		if marieInteractionStage == marieInteractionInventory && target == 0 {
+			marieInventoryReturnPending, marieInteractionStage = true, marieInteractionInventoryReturning
+		}
 		if action.VisualEffect != 0 {
 			if _, err := runNativeScheduler(true); err != nil {
 				return render.IndexedFrame{}, false, err
@@ -3544,22 +4049,45 @@ func run() error {
 			case scripts.LookupOpcode("barndoorclose"):
 				effectName = "barndoorclose"
 				transition, err = render.NewBarndoorClose(currentFrame, nextFrame, action.Duration)
+			case scripts.LookupOpcode("plain"):
+				effectName = "plain"
+				if action.Duration > 0 {
+					transition, err = render.NewFadeEffect(currentFrame, nextFrame, action.Duration)
+				} else {
+					currentFrame = nextFrame
+				}
 			default:
 				return render.IndexedFrame{}, false, fmt.Errorf("button script resource %d uses unsupported visual effect %d", handler.ScriptResource, action.VisualEffect)
 			}
 			if err != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("start %s transition: %w", effectName, err)
 			}
-			if err := soundBank.Play(audioContext, "pageturn", 4); err != nil {
-				return render.IndexedFrame{}, false, fmt.Errorf("play page-turn sound: %w", err)
+			if effectName != "plain" {
+				if err := soundBank.Play(audioContext, "pageturn", 4); err != nil {
+					return render.IndexedFrame{}, false, fmt.Errorf("play page-turn sound: %w", err)
+				}
 			}
 			if *debug {
 				log.Printf("visualeffect=%s duration=%d", effectName, action.Duration)
-				log.Printf("sound=pageturn active-players=%d", soundBank.ActivePlayers())
+				if effectName != "plain" {
+					log.Printf("sound=pageturn active-players=%d", soundBank.ActivePlayers())
+				}
 			}
-			return transition.CurrentFrame(), true, nil
+			if transition != nil {
+				if effectName == "plain" || marieInventoryReturnPending {
+					transitionMode = 2
+				}
+				return transition.CurrentFrame(), true, nil
+			}
 		}
 		currentFrame = nextFrame
+		if marieInventoryReturnPending {
+			marieInventoryReturnPending = false
+			if err := resumeMarieInventory(); err != nil {
+				return render.IndexedFrame{}, false, err
+			}
+			return currentFrame, true, nil
+		}
 		if *debug {
 			log.Printf("scene transition=%s resource=%d", stage.Scenes[target].Name[1:], stage.Scenes[target].Fields[1])
 		}
@@ -3593,6 +4121,41 @@ func run() error {
 				}
 				if helpChoiceOutline >= 0 {
 					if err := drawHelpChoices(-1); err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+					return currentFrame, true, nil
+				}
+				return currentFrame, false, nil
+			}
+			return currentFrame, false, nil
+		}
+		if isaoInteractionStage == isaoInteractionPuppetChoices && isaoChoicePressActive {
+			event, found := scripts.NativePuppetChoiceAt(state.Point, isaoActiveChoices)
+			outline := -1
+			if found && event == isaoChoicePressEvent {
+				outline = (int(int16(state.Point)) - 264) / 24
+			}
+			if state.LeftDown {
+				if outline == isaoChoiceOutline {
+					return currentFrame, false, nil
+				}
+				if err := drawIsaoChoices(outline); err != nil {
+					return render.IndexedFrame{}, false, err
+				}
+				return currentFrame, true, nil
+			}
+			if state.LeftReleased {
+				selected := outline >= 0 && outline == isaoChoicePressIndex
+				selectedEvent := isaoChoicePressEvent
+				isaoChoicePressActive, isaoChoicePressIndex = false, -1
+				if selected {
+					if err := startIsaoEventResponse(selectedEvent); err != nil {
+						return render.IndexedFrame{}, false, fmt.Errorf("run Isao choice %d: %w", selectedEvent, err)
+					}
+					return currentFrame, true, nil
+				}
+				if isaoChoiceOutline >= 0 {
+					if err := drawIsaoChoices(-1); err != nil {
 						return render.IndexedFrame{}, false, err
 					}
 					return currentFrame, true, nil
@@ -3693,6 +4256,7 @@ func run() error {
 				actorName, hit := render.HitTestWorldActors(projectedActors, point)
 				if hit && strings.EqualFold(actorName, "dog") && boneInInventory && boneOwner == "stranger" && gameDay != 5 {
 					boneInInventory, boneOwner, boneWorldProp.Visible = false, "none", false
+					inventoryOwners["bone"], handItem = "none", ""
 					dogVisibleState, dog2OfferStage = false, dog2OfferMovie
 					nativeLoops.Stop(2, "dog")
 					if _, err := setWorldView("Scene G12", assets.SetDirectionNorth); err != nil {

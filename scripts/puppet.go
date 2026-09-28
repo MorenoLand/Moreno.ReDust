@@ -299,3 +299,33 @@ func LeroyBySignResponseTransition(event int32, day int) (PuppetResponseTransiti
 		return PuppetResponseTransition{}, false
 	}
 }
+
+type MarieGiftResponse struct {
+	Speech  []string
+	Counter int32
+}
+
+func MarieGift(what string, hankerchiefDegree int16, counter int32) (MarieGiftResponse, bool) {
+	switch strings.ToLower(what) {
+	case "sugarcubes":
+		return MarieGiftResponse{Speech: []string{"marie.1", "marie.2"}, Counter: counter}, true
+	case "flowers":
+		return MarieGiftResponse{Speech: []string{"marie.3", "marie.4", "marie.5"}, Counter: counter}, true
+	case "history":
+		return MarieGiftResponse{Speech: []string{"marie.6"}, Counter: counter}, true
+	case "hankerchief":
+		if hankerchiefDegree == 0 {
+			return MarieGiftResponse{Speech: []string{"marie.8", "marie.121"}, Counter: counter}, true
+		}
+	}
+	switch counter {
+	case 0:
+		return MarieGiftResponse{Speech: []string{"marie.8"}, Counter: 1}, true
+	case 1:
+		return MarieGiftResponse{Speech: []string{"marie.9", "marie.8"}, Counter: 2}, true
+	case 2:
+		return MarieGiftResponse{Speech: []string{"marie.8", "marie.10"}, Counter: 0}, true
+	default:
+		return MarieGiftResponse{}, false
+	}
+}

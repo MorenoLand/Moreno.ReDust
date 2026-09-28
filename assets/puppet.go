@@ -35,6 +35,10 @@ func (s PuppetSpeech) SubtitleText() string {
 	return DecodePuppetText(s.Subtitle)
 }
 
+func (s PuppetSpeech) HasSubtitle() bool {
+	return len(s.Subtitle) > 0 && s.Subtitle[0] != '*'
+}
+
 func DecodePuppetText(data []byte) string {
 	text := make([]byte, len(data))
 	for index, value := range data {

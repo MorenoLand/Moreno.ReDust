@@ -237,7 +237,7 @@ func (d *PuppetDialogue) frame() (render.IndexedFrame, error) {
 	}
 	frame := d.canvas.Frame()
 	var err error
-	if d.active && d.lineIndex < len(d.lines) {
+	if d.active && d.lineIndex < len(d.lines) && d.lines[d.lineIndex].HasSubtitle() {
 		frame, err = render.DrawNativeSubtitle(frame, d.lines[d.lineIndex].SubtitleText())
 	}
 	return frame, err

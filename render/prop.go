@@ -3,6 +3,8 @@ package render
 import (
 	"fmt"
 	"image"
+	"image/color"
+	"image/draw"
 	"strings"
 
 	"redust/assets"
@@ -19,6 +21,102 @@ type WorldPropSprite struct {
 	Archive  *assets.PropArchive
 	View     assets.PropView
 	Visible  bool
+}
+
+type FlatPropSprite struct {
+	Name     string
+	PropName string
+	ViewName string
+	Anchor   image.Point
+	Archive  *assets.PropArchive
+	Frame    int
+}
+
+type ProjectedFlatProp struct {
+	Name   string
+	Bounds image.Rectangle
+	pixels []byte
+	mask   []bool
+}
+
+func CompositeFlatProps(background IndexedFrame, props []FlatPropSprite) (IndexedFrame, []ProjectedFlatProp, error) {
+	if background.Width < 1 || background.Height < 1 || len(background.Palette) != 256 {
+		return IndexedFrame{}, nil, fmt.Errorf("flat prop background is invalid")
+	}
+	base, err := background.rgbaImage()
+	if err != nil {
+		return IndexedFrame{}, nil, err
+	}
+	composite := image.NewRGBA(base.Bounds())
+	draw.Draw(composite, composite.Bounds(), base, image.Point{}, draw.Src)
+	projected := make([]ProjectedFlatProp, 0, len(props))
+	for _, prop := range props {
+		if prop.Archive == nil {
+			return IndexedFrame{}, nil, fmt.Errorf("flat prop %q has no archive", prop.Name)
+		}
+		info, err := prop.Archive.FrameInfo(prop.PropName, prop.ViewName, prop.Frame, 0)
+		if err != nil {
+			return IndexedFrame{}, nil, fmt.Errorf("select flat prop %q frame: %w", prop.Name, err)
+		}
+		data, err := prop.Archive.Resource(info.Resource)
+		if err != nil {
+			return IndexedFrame{}, nil, fmt.Errorf("read flat prop %q frame %d: %w", prop.Name, info.Resource, err)
+		}
+		frame, err := DecodePuppetFrame(data)
+		if err != nil {
+			return IndexedFrame{}, nil, fmt.Errorf("decode flat prop %q frame %d: %w", prop.Name, info.Resource, err)
+		}
+		width, height := int(info.Right-info.Left), int(info.Bottom-info.Top)
+		if width < 1 || height < 1 || frame.Width != height || frame.Height != width {
+			return IndexedFrame{}, nil, fmt.Errorf("flat prop %q frame %d has encoded %dx%d pixels for native %dx%d extents", prop.Name, info.Resource, frame.Width, frame.Height, width, height)
+		}
+		pixels, mask, err := decodeWorldActorFrame(frame)
+		if err != nil {
+			return IndexedFrame{}, nil, fmt.Errorf("decode flat prop %q frame %d pixels: %w", prop.Name, info.Resource, err)
+		}
+		transposedPixels, transposedMask := make([]byte, width*height), make([]bool, width*height)
+		for y := 0; y < frame.Height; y++ {
+			for x := 0; x < frame.Width; x++ {
+				source, destination := y*frame.Width+x, x*width+y
+				transposedPixels[destination], transposedMask[destination] = pixels[source], mask[source]
+			}
+		}
+		bounds := image.Rect(prop.Anchor.X-int(info.OriginX), prop.Anchor.Y-int(info.OriginY), prop.Anchor.X-int(info.OriginX)+width, prop.Anchor.Y-int(info.OriginY)+height)
+		visible := bounds.Intersect(composite.Bounds())
+		if visible.Empty() {
+			continue
+		}
+		clippedPixels, clippedMask := make([]byte, visible.Dx()*visible.Dy()), make([]bool, visible.Dx()*visible.Dy())
+		for y := 0; y < visible.Dy(); y++ {
+			for x := 0; x < visible.Dx(); x++ {
+				source := (visible.Min.Y-bounds.Min.Y+y)*width + visible.Min.X - bounds.Min.X + x
+				destination := y*visible.Dx() + x
+				clippedPixels[destination], clippedMask[destination] = transposedPixels[source], transposedMask[source]
+				if clippedMask[destination] {
+					value := color.RGBAModel.Convert(background.Palette[clippedPixels[destination]]).(color.RGBA)
+					composite.SetRGBA(visible.Min.X+x, visible.Min.Y+y, value)
+				}
+			}
+		}
+		projected = append(projected, ProjectedFlatProp{Name: prop.Name, Bounds: visible, pixels: clippedPixels, mask: clippedMask})
+	}
+	frame := background
+	frame.rgba = composite
+	return frame, projected, nil
+}
+
+func HitTestFlatProps(props []ProjectedFlatProp, point image.Point) (string, bool) {
+	for index := len(props) - 1; index >= 0; index-- {
+		prop := props[index]
+		if !point.In(prop.Bounds) {
+			continue
+		}
+		offset := (point.Y-prop.Bounds.Min.Y)*prop.Bounds.Dx() + point.X - prop.Bounds.Min.X
+		if offset >= 0 && offset < len(prop.mask) && prop.mask[offset] {
+			return prop.Name, true
+		}
+	}
+	return "", false
 }
 
 func projectWorldProp(background IndexedFrame, point [3]int16, activeSet string, prop WorldPropSprite) (ProjectedWorldActor, bool, error) {
