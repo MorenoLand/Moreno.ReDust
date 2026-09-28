@@ -2646,6 +2646,11 @@ func run() error {
 		return displayChanged, nil
 	}
 	startSceneMovie := func(name string) error {
+		if currentScene == 0 {
+			if err := refreshWorldScene(); err != nil {
+				return fmt.Errorf("refresh scene before movie %s: %w", name, err)
+			}
+		}
 		if movieAudio != nil {
 			if err := movieAudio.Close(); err != nil {
 				return fmt.Errorf("stop current movie soundtrack: %w", err)
@@ -3140,22 +3145,19 @@ func run() error {
 							return
 						}
 					}
-					dogVisible, dogDistance := false, 1<<30
+					dogVisible := false
 					for _, actor := range worldActors {
 						if strings.EqualFold(actor.Name, "dog") && actor.Visible {
 							dogVisible = true
-							camera := render.NativeActorCameraPosition(worldPoint)
-							player := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
-							dogDistance = scripts.NativeActorDistance2D(actor.Position, player)
 							break
 						}
 					}
-					if name, blocked := scripts.NiteDogGateMovieAtDistance(view.Resource, worldPoint[2], gameDay, dogVisible, dogDistance, 512); blocked {
+					if name, blocked := scripts.NiteDogGateMovieInView(view.Resource, worldPoint[2], gameDay, dogVisible); blocked {
 						pendingMovement = 0
 						pendingSceneMovie = name
 						dogMovieNeedsHelp = true
 						if *debug {
-							log.Printf("event=NITE.SET/key-down dog-gate point=%v distance=%d movie=%s", worldPoint, dogDistance, name)
+							log.Printf("event=NITE.SET/key-down dog-gate point=%v movie=%s", worldPoint, name)
 						}
 						return
 					}
@@ -3386,58 +3388,36 @@ func run() error {
 					}
 					return currentFrame, started, nil
 				}
-				if sceneName, handlesClick := scripts.CastActorMouseDownScene(actorName); handlesClick && activeSetName == "town" {
-					nextView, found := activeSet.FindView(sceneName)
-					if !found {
-						return render.IndexedFrame{}, false, fmt.Errorf("%s has no view %q", activeSetName, sceneName)
-					}
-					nextPoint := [3]int16{int16(nextView.DirectionID), int16(nextView.SceneID), worldPoint[2]}
-					frameResource, found, err := activeSet.BackgroundResourceForDirection(nextView, nextPoint[2])
-					if err != nil || !found {
-						if err != nil {
-							return render.IndexedFrame{}, false, fmt.Errorf("resolve %s background: %w", sceneName, err)
+				if strings.EqualFold(actorName, "dog") && activeSetName == "town" {
+					camera := render.NativeActorCameraPosition(worldPoint)
+					player := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
+					dogDistance := 1 << 30
+					for _, actor := range worldActors {
+						if strings.EqualFold(actor.Name, "dog") {
+							dogDistance = scripts.NativeActorDistance2D(actor.Position, player)
+							break
 						}
-						return render.IndexedFrame{}, false, fmt.Errorf("%s has no background for direction %d", sceneName, nextPoint[2])
 					}
-					backgroundData, err := activeSet.Resource(frameResource)
-					if err != nil {
-						return render.IndexedFrame{}, false, fmt.Errorf("read %s background resource %d: %w", sceneName, frameResource, err)
+					sceneName, handlesClick := scripts.CastActorMouseDownScene(actorName, gameDay, dogDistance, townActorHotDistance)
+					if !handlesClick {
+						if *debug {
+							log.Printf("actor=dog mousedown=ignored day=%d distance=%d hotdist=%d", gameDay, dogDistance, townActorHotDistance)
+						}
+						return currentFrame, false, nil
 					}
-					backgroundPixels, decodeErr := render.DecodeMoviePixels(backgroundData, nil)
-					if len(backgroundPixels.Pixels) == 0 {
-						return render.IndexedFrame{}, false, fmt.Errorf("decode %s background resource %d: %w", sceneName, frameResource, decodeErr)
-					}
-					if decodeErr != nil && *debug {
-						log.Printf("scene=%s resource=%d partial-frame: %v", sceneName, frameResource, decodeErr)
-					}
-					nextBackground, err := render.StageFrame(&assets.Stage{Width: uint16(backgroundPixels.Width), Height: uint16(backgroundPixels.Height), PaletteRaw: activeSet.Palette()}, backgroundPixels.Pixels)
-					if err != nil {
-						return render.IndexedFrame{}, false, fmt.Errorf("render %s background: %w", sceneName, err)
-					}
-					nextActors, err := loadWorldActors(nextPoint)
+					nextFrame, err := setWorldView(sceneName, worldPoint[2])
 					if err != nil {
 						return render.IndexedFrame{}, false, err
 					}
-					nextWorldBackground, nextProjectedActors, err := compositeWorld(nextBackground, nextPoint, nextActors)
-					if err != nil {
-						return render.IndexedFrame{}, false, fmt.Errorf("render %s actors: %w", sceneName, err)
-					}
-					panel, err := render.StageFrame(stage, currentPixels.Pixels)
-					if err != nil {
-						return render.IndexedFrame{}, false, fmt.Errorf("render mainpanel over %s: %w", sceneName, err)
-					}
-					nextFrame, err := composeMainPanel(nextWorldBackground, panel)
-					if err != nil {
-						return render.IndexedFrame{}, false, fmt.Errorf("compose %s scene: %w", sceneName, err)
-					}
-					view, worldPoint, backgroundFrame = nextView, nextPoint, nextBackground
-					worldActors, projectedActors = nextActors, nextProjectedActors
-					stageFrame, currentFrame = nextFrame, nextFrame
-					if *debug {
-						log.Printf("scene=%s direction=%d frame-resource=%d", view.Name[1:], worldPoint[2], frameResource)
-						for _, actor := range projectedActors {
-							log.Printf("world-actor=%s depth=%d bounds=%d,%d,%d,%d", actor.Name, actor.Depth, actor.Bounds.Min.X, actor.Bounds.Min.Y, actor.Bounds.Max.X, actor.Bounds.Max.Y)
+					if name, triggered := scripts.NiteDogGateMovieInView(view.Resource, worldPoint[2], gameDay, dogVisibleState); triggered {
+						dogMovieNeedsHelp = true
+						if err := startSceneMovie(name); err != nil {
+							return render.IndexedFrame{}, false, err
 						}
+						if *debug {
+							log.Printf("actor=dog mousedown=G12-keydown-up movie=%s", name)
+						}
+						return playback.CurrentFrame(), true, nil
 					}
 					return nextFrame, true, nil
 				}

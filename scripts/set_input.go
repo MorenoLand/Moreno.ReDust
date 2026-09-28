@@ -14,8 +14,8 @@ func NiteDogGateMovie(direction int16, day int, dogVisible bool) (string, bool) 
 	return "MOVIES/DOG1.MOV", true
 }
 
-func NiteDogGateMovieAtDistance(viewResource uint32, direction int16, day int, dogVisible bool, distance, hotDistance int) (string, bool) {
-	if viewResource != 135 || distance >= hotDistance {
+func NiteDogGateMovieInView(viewResource uint32, direction int16, day int, dogVisible bool) (string, bool) {
+	if viewResource != 135 {
 		return "", false
 	}
 	return NiteDogGateMovie(direction, day, dogVisible)

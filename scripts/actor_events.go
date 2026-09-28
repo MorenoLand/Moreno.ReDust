@@ -12,8 +12,8 @@ type ActorIdleStep struct {
 	ClearAttention bool
 }
 
-func CastActorMouseDownScene(actorName string) (string, bool) {
-	if strings.EqualFold(actorName, "dog") {
+func CastActorMouseDownScene(actorName string, day, distance, hotDistance int) (string, bool) {
+	if strings.EqualFold(actorName, "dog") && day != 5 && distance < hotDistance {
 		return "Scene G12", true
 	}
 	return "", false
