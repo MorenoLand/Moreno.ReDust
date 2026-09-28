@@ -123,6 +123,13 @@ func PuppetBevelChoiceGroups(program Program, codeName string) ([][]PuppetChoice
 }
 
 func PuppetEventSpeechCalls(program Program, codeName string, event int32) ([]string, error) {
+	return PuppetEventSpeechCallsOccurrence(program, codeName, event, 0)
+}
+
+func PuppetEventSpeechCallsOccurrence(program Program, codeName string, event int32, occurrence int) ([]string, error) {
+	if occurrence < 0 {
+		return nil, fmt.Errorf("event %d occurrence %d is negative", event, occurrence)
+	}
 	start, err := FindCode(program, codeName)
 	if err != nil {
 		return nil, err
@@ -135,21 +142,25 @@ func PuppetEventSpeechCalls(program Program, codeName string, event int32) ([]st
 	if length >= 0 {
 		end = start + int(length)
 	}
-	active, lines := false, []string{}
+	active, lines, matches := false, []string{}, [][]string{}
 	for index := start + 2; index < end; index++ {
 		record := program.Records[index]
 		if record.Kind == LookupOpcode("case") {
 			if active {
-				break
+				matches = append(matches, lines)
+				active, lines = false, nil
 			}
 			if index+1 < end && program.Records[index+1].Kind == 4 && int32(program.Records[index+1].Data) == event {
 				active = true
+				lines = []string{}
 				index++
 			}
 			continue
 		}
 		if active && record.Kind == LookupOpcode("endswitch") {
-			break
+			matches = append(matches, lines)
+			active, lines = false, nil
+			continue
 		}
 		if !active || record.Kind != LookupOpcode("puppetspeak") {
 			continue
@@ -164,10 +175,13 @@ func PuppetEventSpeechCalls(program Program, codeName string, event int32) ([]st
 		lines = append(lines, string(literal[1:]))
 		index += 3
 	}
-	if !active {
-		return nil, fmt.Errorf("event %d has no case in %s", event, codeName)
+	if active {
+		matches = append(matches, lines)
 	}
-	return lines, nil
+	if occurrence >= len(matches) {
+		return nil, fmt.Errorf("event %d occurrence %d has no case in %s", event, occurrence, codeName)
+	}
+	return matches[occurrence], nil
 }
 
 func NativePuppetChoiceAt(point uint32, choices []PuppetChoice) (int32, bool) {

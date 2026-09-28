@@ -237,10 +237,33 @@ func run() error {
 		stage.Close()
 		return fmt.Errorf("resolve Jones bar position: %w", err)
 	}
-	actorPoses := map[string]string{"leroy": "stand", "dog": "stand", "help": "stand", "jones": "stand", "isao": "stand"}
-	actorHeadings := map[string]int16{"leroy": 0, "dog": 32, "help": 0, "jones": 0, "isao": 64}
-	actorTurnTargets := map[string]int16{"leroy": 0, "help": 0, "jones": 0, "isao": 64}
+	buickPosition, hasBuick, err := nightSet.ResolveLocation("town.blood1")
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("resolve Town Buick position: %w", err)
+	}
+	mariePosition, hasMarie, err := nightSet.ResolveLocation("town.jones2")
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("resolve Town Marie position: %w", err)
+	}
+	buickSecondPosition, hasBuickSecond, err := nightSet.ResolveLocation("town.blood2")
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("resolve Town Buick idle position: %w", err)
+	}
+	marieSecondPosition, hasMarieSecond, err := nightSet.ResolveLocation("town.marie1")
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("resolve Town Marie idle position: %w", err)
+	}
+	actorPoses := map[string]string{"leroy": "stand", "dog": "stand", "help": "stand", "jones": "stand", "buick": "stand", "marie": "stand", "isao": "stand"}
+	actorHeadings := map[string]int16{"leroy": 0, "dog": 32, "help": 0, "jones": 0, "buick": 0, "marie": 128, "isao": 64}
+	actorTurnTargets := map[string]int16{"leroy": 0, "help": 0, "jones": 0, "buick": 0, "marie": 128, "isao": 64}
 	actorTurnActive, helpTurnActive, jonesTurnActive := false, false, false
+	buickVisible, marieVisible := gameClock == 3, gameClock == 3
+	buickTurnActive, marieTurnActive := false, false
+	buickStar, marieStar := "town.blood1", "town.jones2"
 	helpVisible, helpPhase, helpAttention := false, int16(0), int32(0)
 	jonesPosition, jonesVisible := jonesStartPosition, false
 	var isaoPosition [3]int16
@@ -251,6 +274,7 @@ func run() error {
 	const helpTurnRate int16 = 7
 	const jonesWalkRate int16 = 3
 	const jonesTurnRate int16 = 7
+	const townCastWalkRate int16 = 3
 	const townActorHotDistance = 384
 	const (
 		leroyInteractionIdle uint8 = iota
@@ -301,6 +325,8 @@ func run() error {
 	helpActorPosition, helpReturnPosition := helpPosition, helpPosition
 	var helpWalk *scripts.NativeActorWalkJob
 	var jonesWalk *scripts.NativeActorWalkJob
+	var buickWalk, marieWalk *scripts.NativeActorWalkJob
+	var buickWalkTarget, marieWalkTarget string
 	var jonesPuppet *render.Puppet
 	var jonesPuppetTable assets.PuppetSpeechTable
 	var jonesPuppetProgram scripts.Program
@@ -413,6 +439,20 @@ func run() error {
 				sprite, err := render.LoadCastActorFrame(workspace, gangCast, actor, actorPoses["jones"], 0, 1450, render.NativeActorViewAngle(jonesPosition, point, actorHeadings["jones"]), 32)
 				if err != nil {
 					return nil, fmt.Errorf("load G15 actor %s: %w", actor.Name, err)
+				}
+				actors = append(actors, sprite)
+			} else if buickVisible && hasBuick && strings.EqualFold(actor.Name, "Buick") {
+				actor.Position, actor.Located = buickPosition, true
+				sprite, err := render.LoadCastActorFrame(workspace, gangCast, actor, actorPoses["buick"], 0, 1450, render.NativeActorViewAngle(buickPosition, point, actorHeadings["buick"]), 32)
+				if err != nil {
+					return nil, fmt.Errorf("load Town actor %s: %w", actor.Name, err)
+				}
+				actors = append(actors, sprite)
+			} else if marieVisible && hasMarie && strings.EqualFold(actor.Name, "Marie") {
+				actor.Position, actor.Located = mariePosition, true
+				sprite, err := render.LoadCastActorFrame(workspace, gangCast, actor, actorPoses["marie"], 0, 1450, render.NativeActorViewAngle(mariePosition, point, actorHeadings["marie"]), 32)
+				if err != nil {
+					return nil, fmt.Errorf("load Town actor %s: %w", actor.Name, err)
 				}
 				actors = append(actors, sprite)
 			}
@@ -766,12 +806,14 @@ func run() error {
 		if previousName == "town" && semanticName != "town" {
 			townReturnScene = string(view.Name[1:])
 			nativeLoops.Stop(1, "scene g14")
-			for _, owner := range []string{"leroy", "dog", "help", "jones", "isao"} {
+			for _, owner := range []string{"leroy", "dog", "help", "jones", "buick", "marie", "isao"} {
 				nativeLoops.Stop(2, owner)
 			}
 			leroyWalk, helpWalk, jonesWalk = nil, nil, nil
+			buickWalk, marieWalk = nil, nil
 			actorPoses["leroy"], actorPoses["help"], actorPoses["jones"] = "stand", "stand", "stand"
 			actorTurnActive, helpTurnActive, jonesTurnActive = false, false, false
+			buickTurnActive, marieTurnActive = false, false
 		}
 		activeSet, activeSetName, activeSetOwned = nextSet, semanticName, nextOwned
 		view, worldPoint, backgroundFrame = nextView, nextPoint, background
@@ -811,6 +853,16 @@ func run() error {
 			if gameClock == 3 {
 				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "leroy", Callback: "leroyidle", Remaining: 20}); status != 0 {
 					return render.IndexedFrame{}, fmt.Errorf("register Leroy idle loop after town return returned status %#x", status)
+				}
+			}
+			if buickVisible {
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "buick", Callback: "buickidle", Remaining: 21}); status != 0 {
+					return render.IndexedFrame{}, fmt.Errorf("register Buick idle loop after town return returned status %#x", status)
+				}
+			}
+			if marieVisible {
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "marie", Callback: "marieidle", Remaining: 17}); status != 0 {
+					return render.IndexedFrame{}, fmt.Errorf("register Marie idle loop after town return returned status %#x", status)
 				}
 			}
 			if gameDay == 1 && dogVisibleState {
@@ -1741,6 +1793,68 @@ func run() error {
 				if *debug {
 					log.Printf("actor=help pose=%s next=%s ticks=%d attention=%d", step.Pose, step.Callback, step.Remaining, helpAttention)
 				}
+			case "buickidle", "marieidle":
+				name := strings.TrimSuffix(loop.Callback, "idle")
+				star, position, moving, visible := "", [3]int16{}, false, false
+				interval := int32(17)
+				switch name {
+				case "buick":
+					star, position, moving, visible, interval = buickStar, buickPosition, buickWalk != nil, buickVisible, 21
+				case "marie":
+					star, position, moving, visible = marieStar, mariePosition, marieWalk != nil, marieVisible
+				}
+				if !visible {
+					return 0, fmt.Errorf("%s idle loop ran while actor is hidden", name)
+				}
+				loop.Remaining = interval
+				if moving {
+					break
+				}
+				step, found := scripts.TownCastIdleStep(loop.Callback, star, &nativeRandom)
+				if !found {
+					return 0, fmt.Errorf("unknown Town cast idle callback %q", loop.Callback)
+				}
+				loop.Remaining = step.Remaining
+				camera := render.NativeActorCameraPosition(worldPoint)
+				player := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
+				if scripts.NativeActorDistance2D(position, player) < townActorHotDistance {
+					actorTurnTargets[name] = render.NativeActorHeadingToPoint(position, player)
+					if name == "buick" {
+						buickTurnActive = actorHeadings[name] != actorTurnTargets[name]
+					} else {
+						marieTurnActive = actorHeadings[name] != actorTurnTargets[name]
+					}
+				}
+				if step.Star != star {
+					var destination [3]int16
+					var found bool
+					switch step.Star {
+					case "town.blood1":
+						destination, found = buickPosition, hasBuick
+					case "town.blood2":
+						destination, found = buickSecondPosition, hasBuickSecond
+					case "town.jones1":
+						destination, found = jonesStartPosition, hasJonesStart
+					case "town.jones2":
+						destination, found = jonesTargetPosition, hasJonesTarget
+					case "town.marie1":
+						destination, found = marieSecondPosition, hasMarieSecond
+					}
+					if !found {
+						return 0, fmt.Errorf("%s idle selected missing Town star %q", name, step.Star)
+					}
+					heading := render.NativeActorHeadingToPoint(position, destination)
+					walk := scripts.NewNativeActorWalkJob(position, destination, heading, townCastWalkRate)
+					if name == "buick" {
+						buickWalk, buickWalkTarget, actorPoses[name] = &walk, step.Star, "walk"
+					} else {
+						marieWalk, marieWalkTarget, actorPoses[name] = &walk, step.Star, "walk"
+					}
+					displayChanged = displayChanged || currentScene == 0
+					if *debug {
+						log.Printf("actor=%s idle-move from=%s to=%s ticks=%d", name, star, step.Star, step.Remaining)
+					}
+				}
 			case "jonesidle":
 				camera := render.NativeActorCameraPosition(worldPoint)
 				player := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
@@ -1815,6 +1929,16 @@ func run() error {
 			if *debug {
 				log.Printf("actor=jones turn heading=%d target=%d active=%t", actorHeadings["jones"], actorTurnTargets["jones"], jonesTurnActive)
 			}
+		}
+		if !serviceAmbient && buickTurnActive {
+			actorHeadings["buick"] = scripts.NativeTurnStep(actorHeadings["buick"], actorTurnTargets["buick"], jonesTurnRate)
+			buickTurnActive = actorHeadings["buick"] != actorTurnTargets["buick"]
+			displayChanged = displayChanged || currentScene == 0
+		}
+		if !serviceAmbient && marieTurnActive {
+			actorHeadings["marie"] = scripts.NativeTurnStep(actorHeadings["marie"], actorTurnTargets["marie"], jonesTurnRate)
+			marieTurnActive = actorHeadings["marie"] != actorTurnTargets["marie"]
+			displayChanged = displayChanged || currentScene == 0
 		}
 		if !serviceAmbient && jonesInteractionStage == jonesInteractionFacing && !jonesTurnActive {
 			jonesInteractionStage = jonesInteractionPuppetPending
@@ -1903,6 +2027,32 @@ func run() error {
 				displayChanged = true
 				if *debug {
 					log.Printf("actor=jones endwalk point=%v pose=stand idle=jonesidle", jonesPosition)
+				}
+			}
+		}
+		if buickWalk != nil {
+			previousPosition, previousHeading := buickPosition, actorHeadings["buick"]
+			var walking bool
+			buickPosition, actorHeadings["buick"], walking = buickWalk.Pass(buickPosition, actorHeadings["buick"], jonesTurnRate)
+			displayChanged = displayChanged || buickPosition != previousPosition || actorHeadings["buick"] != previousHeading
+			if !walking {
+				buickWalk = nil
+				buickStar, buickWalkTarget, actorPoses["buick"] = buickWalkTarget, "", "stand"
+				if *debug {
+					log.Printf("actor=buick endwalk star=%s point=%v", buickStar, buickPosition)
+				}
+			}
+		}
+		if marieWalk != nil {
+			previousPosition, previousHeading := mariePosition, actorHeadings["marie"]
+			var walking bool
+			mariePosition, actorHeadings["marie"], walking = marieWalk.Pass(mariePosition, actorHeadings["marie"], jonesTurnRate)
+			displayChanged = displayChanged || mariePosition != previousPosition || actorHeadings["marie"] != previousHeading
+			if !walking {
+				marieWalk = nil
+				marieStar, marieWalkTarget, actorPoses["marie"] = marieWalkTarget, "", "stand"
+				if *debug {
+					log.Printf("actor=marie endwalk star=%s point=%v", marieStar, mariePosition)
 				}
 			}
 		}
@@ -2451,6 +2601,16 @@ func run() error {
 					if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "dog", Callback: step.Callback, Remaining: step.Remaining}); status != 0 {
 						return render.IndexedFrame{}, false, fmt.Errorf("register dog idle loop returned status %#x", status)
 					}
+				}
+			}
+			if buickVisible {
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "buick", Callback: "buickidle", Remaining: 21}); status != 0 {
+					return render.IndexedFrame{}, false, fmt.Errorf("register Buick idle loop returned status %#x", status)
+				}
+			}
+			if marieVisible {
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "marie", Callback: "marieidle", Remaining: 17}); status != 0 {
+					return render.IndexedFrame{}, false, fmt.Errorf("register Marie idle loop returned status %#x", status)
 				}
 			}
 			if currentThemeName == "nightwind3" {

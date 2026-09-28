@@ -178,3 +178,52 @@ func NativeIntegerSqrt(value uint64) uint64 {
 	}
 	return result
 }
+
+type TownCastIdleResult struct {
+	Star      string
+	Remaining int32
+}
+
+func TownCastIdleStep(callback, star string, random *NativeRandom) (TownCastIdleResult, bool) {
+	if random == nil {
+		return TownCastIdleResult{}, false
+	}
+	step := TownCastIdleResult{Star: star, Remaining: 17}
+	switch strings.ToLower(callback) {
+	case "buickidle":
+		step.Remaining = 21
+		if random.Inclusive(100) < 6 {
+			switch strings.ToLower(star) {
+			case "town.blood1":
+				step.Star = "town.blood2"
+			case "town.blood2":
+				step.Star = "town.blood1"
+			}
+		}
+	case "marieidle":
+		if random.Inclusive(100) < 6 {
+			if random.Inclusive(2) == 1 {
+				switch strings.ToLower(star) {
+				case "town.jones1":
+					step.Star = "town.jones2"
+				case "town.jones2":
+					step.Star = "town.marie1"
+				case "town.marie1":
+					step.Star = "town.jones1"
+				}
+			} else {
+				switch strings.ToLower(star) {
+				case "town.jones1":
+					step.Star = "town.marie1"
+				case "town.jones2":
+					step.Star = "town.jones1"
+				case "town.marie1":
+					step.Star = "town.jones2"
+				}
+			}
+		}
+	default:
+		return TownCastIdleResult{}, false
+	}
+	return step, true
+}
