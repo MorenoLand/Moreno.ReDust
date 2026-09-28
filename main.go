@@ -251,6 +251,7 @@ func run() error {
 	const helpTurnRate int16 = 7
 	const jonesWalkRate int16 = 3
 	const jonesTurnRate int16 = 7
+	const townActorHotDistance = 384
 	const (
 		leroyInteractionIdle uint8 = iota
 		leroyInteractionMoving
@@ -270,6 +271,14 @@ func run() error {
 		helpInteractionPuppetDelay
 		helpInteractionReturning
 	)
+	const (
+		jonesInteractionIdle uint8 = iota
+		jonesInteractionMoving
+		jonesInteractionFacing
+		jonesInteractionPuppetPending
+		jonesInteractionPuppetSpeaking
+		jonesInteractionPuppetChoices
+	)
 	leroyPhase, leroyInteractionStage := int16(0), leroyInteractionIdle
 	var leroyWalk *scripts.NativeActorWalkJob
 	var leroyReturnPosition [3]int16
@@ -286,9 +295,26 @@ func run() error {
 	var leroyConversationBase render.IndexedFrame
 	var leroyChoiceBase render.IndexedFrame
 	helpInteractionStage := helpInteractionIdle
+	jonesInteractionStage := jonesInteractionIdle
+	jonesPhase, laurelPhase := int16(0), int16(0)
+	jonesActorValue := int32(0)
 	helpActorPosition, helpReturnPosition := helpPosition, helpPosition
 	var helpWalk *scripts.NativeActorWalkJob
 	var jonesWalk *scripts.NativeActorWalkJob
+	var jonesPuppet *render.Puppet
+	var jonesPuppetTable assets.PuppetSpeechTable
+	var jonesPuppetProgram scripts.Program
+	var jonesDialogue *engine.PuppetDialogue
+	var jonesConversationBase, jonesChoiceBase render.IndexedFrame
+	var jonesChoiceGroups [][]scripts.PuppetChoice
+	var jonesActiveChoices []scripts.PuppetChoice
+	var jonesChoiceGroup int
+	var jonesDialogueSkip bool
+	var jonesChoicePressActive bool
+	var jonesChoicePressEvent int32
+	jonesChoicePressIndex, jonesChoiceOutline := -1, -1
+	jonesNextChoiceGroup := -1
+	var jonesSetPhaseOnFinish bool
 	var helpPuppet *render.Puppet
 	var helpPuppetTable assets.PuppetSpeechTable
 	var helpPuppetProgram scripts.Program
@@ -317,6 +343,12 @@ func run() error {
 	var boneDragLast image.Point
 	var dog2PhaseAfterHelp bool
 	defer func() {
+		if jonesDialogue != nil {
+			_ = jonesDialogue.Close()
+		}
+		if jonesPuppet != nil {
+			_ = jonesPuppet.Close()
+		}
 		if leroyDialogue != nil {
 			_ = leroyDialogue.Close()
 		}
@@ -1285,6 +1317,270 @@ func run() error {
 		helpWalk, helpInteractionStage = &walk, helpInteractionReturning
 		return nil
 	}
+	openJonesPuppet := func() error {
+		if jonesPuppet != nil {
+			return nil
+		}
+		puppet, err := render.OpenPuppet(workspace, "PUPPETS/JONES.PUP")
+		if err != nil {
+			return err
+		}
+		cache, err := workspace.OpenResourceCache("PUPPETS/JONES.PUP")
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		defer cache.Close()
+		lease, err := cache.Acquire(74)
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		data, err := lease.Bytes()
+		if closeErr := lease.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		program, err := scripts.ParseProgram(data)
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		groups, err := scripts.PuppetBevelChoiceGroups(program, "threenite")
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		table, err := workspace.OpenPuppetSpeechTable("PUPPETS/JONES.PUP")
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		jonesPuppet, jonesPuppetTable, jonesPuppetProgram, jonesChoiceGroups = puppet, table, program, groups
+		return nil
+	}
+	var drawJonesChoices func(int) error
+	var showJonesChoices func(int) error
+	var finishJonesDialogue func() error
+	var startJonesSpeech func([]string, int, bool) error
+	drawJonesChoices = func(outline int) error {
+		labels := make([]string, len(jonesActiveChoices))
+		for index, choice := range jonesActiveChoices {
+			labels[index] = choice.Text
+		}
+		frame, err := jonesPuppet.ChoiceFrame(jonesChoiceBase, jonesPuppetTable.PanelResource, labels)
+		if err != nil {
+			return fmt.Errorf("render Jones choice panel: %w", err)
+		}
+		if outline >= 0 {
+			frame, err = render.DrawNativePuppetChoiceBevel(frame, outline)
+			if err != nil {
+				return fmt.Errorf("render Jones choice bevel: %w", err)
+			}
+		}
+		currentFrame, stageFrame = frame, frame
+		jonesChoiceOutline = outline
+		return nil
+	}
+	showJonesChoices = func(group int) error {
+		if group < 0 || group >= len(jonesChoiceGroups) {
+			return fmt.Errorf("Jones threenite choice group %d is outside %d groups", group, len(jonesChoiceGroups))
+		}
+		choices := jonesChoiceGroups[group]
+		if group == 0 && len(choices) == 3 {
+			if laurelPhase == 1 {
+				choices = []scripts.PuppetChoice{choices[0], choices[2]}
+			} else {
+				choices = []scripts.PuppetChoice{choices[1], choices[2]}
+			}
+		}
+		jonesActiveChoices = append(jonesActiveChoices[:0], choices...)
+		if len(jonesActiveChoices) == 0 {
+			return fmt.Errorf("Jones threenite group %d has no native choices", group)
+		}
+		jonesChoiceGroup = group
+		jonesChoiceBase, jonesChoicePressActive = currentFrame, false
+		jonesChoicePressIndex, jonesChoiceOutline = -1, -1
+		if err := drawJonesChoices(-1); err != nil {
+			return err
+		}
+		jonesInteractionStage = jonesInteractionPuppetChoices
+		return nil
+	}
+	startJonesSpeech = func(calls []string, nextGroup int, setPhase bool) error {
+		if jonesDialogue != nil {
+			if err := jonesDialogue.Close(); err != nil {
+				return err
+			}
+		}
+		dialogue, err := engine.NewPuppetDialogue(jonesPuppet, jonesPuppetTable.Entries, calls, audioContext)
+		if err != nil {
+			return err
+		}
+		frame, err := dialogue.Start(jonesConversationBase, scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
+		if err != nil {
+			_ = dialogue.Close()
+			return err
+		}
+		jonesDialogue, jonesNextChoiceGroup, jonesSetPhaseOnFinish = dialogue, nextGroup, setPhase
+		jonesInteractionStage = jonesInteractionPuppetSpeaking
+		currentFrame, stageFrame = frame, frame
+		if *debug {
+			log.Printf("puppet=jones speech-lines=%d next-choice-group=%d phase-on-finish=%t", len(calls), nextGroup, setPhase)
+		}
+		return nil
+	}
+	finishJonesDialogue = func() error {
+		jonesActorValue++
+		if jonesSetPhaseOnFinish {
+			jonesPhase, jonesSetPhaseOnFinish = 1, false
+		}
+		if jonesDialogue != nil {
+			if err := jonesDialogue.Close(); err != nil {
+				return err
+			}
+			jonesDialogue = nil
+		}
+		if jonesNextChoiceGroup >= 0 {
+			group := jonesNextChoiceGroup
+			jonesNextChoiceGroup = -1
+			return showJonesChoices(group)
+		}
+		jonesInteractionStage = jonesInteractionIdle
+		actorPoses["jones"] = "stand"
+		if jonesVisible && activeSetName == "town" {
+			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "jones", Callback: "jonesidle", Remaining: 17}); status != 0 {
+				return fmt.Errorf("register Jones idle loop after dialogue returned status %#x", status)
+			}
+		}
+		if *debug {
+			log.Printf("actor=jones mousedown-complete actorvalue=%d jonesphase=%d", jonesActorValue, jonesPhase)
+		}
+		return refreshWorldScene()
+	}
+	startJonesEventResponse := func(event int32) error {
+		var nextGroup int
+		setPhase := false
+		switch jonesChoiceGroup {
+		case 0:
+			if event != 101 {
+				return fmt.Errorf("Jones threenite group 0 returned event %d", event)
+			}
+			nextGroup = 1
+		case 1:
+			if event != 102 {
+				return fmt.Errorf("Jones threenite group 1 returned event %d", event)
+			}
+			nextGroup = 2
+		case 2:
+			if event != 201 {
+				return fmt.Errorf("Jones threenite group 2 returned event %d", event)
+			}
+			nextGroup, setPhase = -1, true
+		default:
+			return fmt.Errorf("Jones threenite has unsupported choice group %d", jonesChoiceGroup)
+		}
+		calls, err := scripts.PuppetEventSpeechCalls(jonesPuppetProgram, "threenite", event)
+		if err != nil {
+			return err
+		}
+		return startJonesSpeech(calls, nextGroup, setPhase)
+	}
+	startJonesConversation := func() error {
+		if err := openJonesPuppet(); err != nil {
+			return fmt.Errorf("open Jones dialogue: %w", err)
+		}
+		if gameClock != 3 {
+			jonesInteractionStage = jonesInteractionIdle
+			if *debug {
+				log.Printf("puppet=jones blocked clock=%d jonesphase=%d", gameClock, jonesPhase)
+			}
+			if jonesVisible && activeSetName == "town" {
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "jones", Callback: "jonesidle", Remaining: 17}); status != 0 {
+					return fmt.Errorf("register Jones idle loop after unsupported dialogue returned status %#x", status)
+				}
+			}
+			return nil
+		}
+		dialogueActors := make([]render.WorldActorSprite, 0, len(worldActors))
+		for _, actor := range worldActors {
+			if !strings.EqualFold(actor.Name, "jones") {
+				dialogueActors = append(dialogueActors, actor)
+			}
+		}
+		dialogueBackground, _, err := compositeWorld(backgroundFrame, worldPoint, dialogueActors)
+		if err != nil {
+			return fmt.Errorf("hide Jones world sprite for dialogue: %w", err)
+		}
+		panel, err := render.StageFrame(stage, currentPixels.Pixels)
+		if err != nil {
+			return fmt.Errorf("render Jones dialogue panel: %w", err)
+		}
+		jonesConversationBase, err = composeMainPanel(dialogueBackground, panel)
+		if err != nil {
+			return fmt.Errorf("compose Jones dialogue background: %w", err)
+		}
+		palette, err := jonesPuppet.Palette()
+		if err != nil {
+			return fmt.Errorf("load Jones PUP CLUT: %w", err)
+		}
+		jonesConversationBase.Palette = palette
+		if jonesPhase == 0 {
+			calls, err := scripts.PuppetSpeechCalls(jonesPuppetProgram, "threenite", scripts.LookupOpcode("puppetclear"))
+			if err != nil {
+				return err
+			}
+			return startJonesSpeech(calls, 0, false)
+		}
+		if jonesPhase == 1 && laurelPhase != 2 {
+			return startJonesSpeech([]string{"jones.122", "jones.123", "jones.124"}, -1, false)
+		}
+		jonesInteractionStage = jonesInteractionIdle
+		if *debug {
+			log.Printf("puppet=jones blocked jonesphase=%d laurelphase=%d", jonesPhase, laurelPhase)
+		}
+		if jonesVisible && activeSetName == "town" {
+			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "jones", Callback: "jonesidle", Remaining: 17}); status != 0 {
+				return fmt.Errorf("register Jones idle loop after unsupported state returned status %#x", status)
+			}
+		}
+		return refreshWorldScene()
+	}
+	beginJonesPuppetTalk := func() (bool, error) {
+		if activeSetName != "town" || !jonesVisible || jonesInteractionStage != jonesInteractionIdle || jonesWalk != nil {
+			return false, nil
+		}
+		if gameClock != 3 || jonesPhase == 1 && laurelPhase == 2 {
+			if *debug {
+				log.Printf("puppet=jones unavailable clock=%d jonesphase=%d laurelphase=%d", gameClock, jonesPhase, laurelPhase)
+			}
+			return false, nil
+		}
+		camera := render.NativeActorCameraPosition(worldPoint)
+		playerPosition := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
+		nativeLoops.Stop(2, "jones")
+		jonesTurnActive = false
+		if scripts.NativeActorDistance2D(jonesPosition, playerPosition) >= townActorHotDistance {
+			destination := [3]int16{playerPosition[0], playerPosition[1], 0}
+			routeHeading := render.NativeActorHeadingToPoint(jonesPosition, destination)
+			walk := scripts.NewNativeActorWalkJob(jonesPosition, destination, routeHeading, jonesWalkRate)
+			jonesWalk, jonesInteractionStage = &walk, jonesInteractionMoving
+			if *debug {
+				log.Printf("actor=jones walktopuppet destination=%v heading=%d", destination, routeHeading)
+			}
+			return true, nil
+		}
+		actorTurnTargets["jones"] = render.NativeActorHeadingToPoint(jonesPosition, playerPosition)
+		jonesTurnActive = actorHeadings["jones"] != actorTurnTargets["jones"]
+		jonesInteractionStage = jonesInteractionFacing
+		if !jonesTurnActive {
+			jonesInteractionStage = jonesInteractionPuppetPending
+		}
+		return true, nil
+	}
 	setupJonesBarActor := func() error {
 		if !hasJonesStart || !hasJonesTarget {
 			return fmt.Errorf("NITE.SET lacks town.jones1 or town.jones2")
@@ -1520,6 +1816,9 @@ func run() error {
 				log.Printf("actor=jones turn heading=%d target=%d active=%t", actorHeadings["jones"], actorTurnTargets["jones"], jonesTurnActive)
 			}
 		}
+		if !serviceAmbient && jonesInteractionStage == jonesInteractionFacing && !jonesTurnActive {
+			jonesInteractionStage = jonesInteractionPuppetPending
+		}
 		if !serviceAmbient && helpInteractionStage == helpInteractionFacing && !helpTurnActive {
 			helpInteractionStage = helpInteractionPuppetPending
 		}
@@ -1589,7 +1888,16 @@ func run() error {
 			if !walking {
 				jonesWalk = nil
 				actorPoses["jones"] = "stand"
-				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "jones", Callback: "jonesidle", Remaining: 17}); status != 0 {
+				if jonesInteractionStage == jonesInteractionMoving {
+					camera := render.NativeActorCameraPosition(worldPoint)
+					player := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
+					actorTurnTargets["jones"] = render.NativeActorHeadingToPoint(jonesPosition, player)
+					jonesTurnActive = actorHeadings["jones"] != actorTurnTargets["jones"]
+					jonesInteractionStage = jonesInteractionFacing
+					if !jonesTurnActive {
+						jonesInteractionStage = jonesInteractionPuppetPending
+					}
+				} else if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "jones", Callback: "jonesidle", Remaining: 17}); status != 0 {
 					return false, fmt.Errorf("register Jones idle loop returned status %#x", status)
 				}
 				displayChanged = true
@@ -1664,6 +1972,53 @@ func run() error {
 		if !serviceAmbient && displayChanged && helpInteractionStage == helpInteractionPuppetChoices {
 			if err := showHelpChoices(helpPage); err != nil {
 				return false, fmt.Errorf("refresh Help choice panel: %w", err)
+			}
+			return true, nil
+		}
+		if !serviceAmbient && jonesInteractionStage == jonesInteractionPuppetPending {
+			if err := startJonesConversation(); err != nil {
+				return false, err
+			}
+			return true, nil
+		}
+		if !serviceAmbient && jonesInteractionStage == jonesInteractionPuppetSpeaking {
+			if jonesDialogue == nil {
+				return false, fmt.Errorf("Jones dialogue state is missing its puppet player")
+			}
+			frameTick := scripts.NativeFrameUnits(scripts.NativeTickMilliseconds())
+			var frame render.IndexedFrame
+			var changed bool
+			var err error
+			if jonesDialogueSkip {
+				frame, changed, err = jonesDialogue.Skip()
+				jonesDialogueSkip = false
+			} else {
+				frame, changed, err = jonesDialogue.Update(frameTick)
+			}
+			if err != nil {
+				return false, fmt.Errorf("advance Jones dialogue: %w", err)
+			}
+			if changed {
+				currentFrame, stageFrame = frame, frame
+				if !jonesDialogue.Active() {
+					if err := finishJonesDialogue(); err != nil {
+						return false, fmt.Errorf("finish Jones dialogue: %w", err)
+					}
+				}
+				return true, nil
+			}
+			if displayChanged {
+				frame, err = jonesDialogue.Frame()
+				if err != nil {
+					return false, fmt.Errorf("refresh Jones dialogue frame: %w", err)
+				}
+				currentFrame, stageFrame = frame, frame
+				return true, nil
+			}
+		}
+		if !serviceAmbient && displayChanged && jonesInteractionStage == jonesInteractionPuppetChoices {
+			if err := showJonesChoices(jonesChoiceGroup); err != nil {
+				return false, fmt.Errorf("refresh Jones choice panel: %w", err)
 			}
 			return true, nil
 		}
@@ -1808,6 +2163,11 @@ func run() error {
 			}
 			if leroyInteractionStage == leroyInteractionPuppetChoices {
 				if _, found := scripts.NativePuppetChoiceAt(point, leroyActiveChoices); found {
+					cursor = "touch"
+				}
+			}
+			if jonesInteractionStage == jonesInteractionPuppetChoices {
+				if _, found := scripts.NativePuppetChoiceAt(point, jonesActiveChoices); found {
 					cursor = "touch"
 				}
 			}
@@ -2136,6 +2496,15 @@ func run() error {
 			}
 			return
 		}
+		if jonesInteractionStage == jonesInteractionPuppetSpeaking {
+			if key == ebiten.KeySpace || key == ebiten.KeyEscape || key == ebiten.KeyQ || key == ebiten.KeyPeriod {
+				jonesDialogueSkip = true
+			}
+			return
+		}
+		if jonesInteractionStage != jonesInteractionIdle {
+			return
+		}
 		if pendingSceneMovie != "" {
 			return
 		}
@@ -2238,6 +2607,21 @@ func run() error {
 			}
 			helpChoicePressActive, helpChoicePressEvent = true, event
 			helpChoicePressIndex = (int(int16(point)) - 264) / 24
+			return currentFrame, false, nil
+		}
+		if jonesInteractionStage == jonesInteractionPuppetChoices {
+			if mouseEvent.Button != ebiten.MouseButtonLeft {
+				return currentFrame, false, nil
+			}
+			event, found := scripts.NativePuppetChoiceAt(point, jonesActiveChoices)
+			if !found {
+				return currentFrame, false, nil
+			}
+			jonesChoicePressActive, jonesChoicePressEvent = true, event
+			jonesChoicePressIndex = (int(int16(point)) - 264) / 24
+			return currentFrame, false, nil
+		}
+		if jonesInteractionStage != jonesInteractionIdle {
 			return currentFrame, false, nil
 		}
 		if leroyInteractionStage != leroyInteractionIdle && leroyInteractionStage != leroyInteractionPuppetChoices {
@@ -2451,7 +2835,7 @@ func run() error {
 					playerWorld := render.NativeActorCameraPosition(worldPoint)
 					playerPosition := [3]int16{int16(playerWorld[0]), int16(playerWorld[1]), int16(playerWorld[2])}
 					distance := scripts.NativeActorDistance2D(leroyPosition, playerPosition)
-					if scripts.LeroyMouseDownAction(gameDay, distance, 512) {
+					if scripts.LeroyMouseDownAction(gameDay, distance, townActorHotDistance) {
 						if !scripts.NativeWalktopuppetAxisAligned(leroyPosition, playerPosition) {
 							if *debug {
 								log.Printf("actor=leroy walktopuppet=blocked-axis-alignment actor=%v player=%v", leroyPosition, playerPosition)
@@ -2470,6 +2854,13 @@ func run() error {
 						}
 						return currentFrame, true, nil
 					}
+				}
+				if strings.EqualFold(actorName, "Jones") && jonesInteractionStage == jonesInteractionIdle {
+					started, err := beginJonesPuppetTalk()
+					if err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+					return currentFrame, started, nil
 				}
 			}
 		}
@@ -2605,6 +2996,41 @@ func run() error {
 				}
 				if helpChoiceOutline >= 0 {
 					if err := drawHelpChoices(-1); err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+					return currentFrame, true, nil
+				}
+				return currentFrame, false, nil
+			}
+			return currentFrame, false, nil
+		}
+		if jonesInteractionStage == jonesInteractionPuppetChoices && jonesChoicePressActive {
+			event, found := scripts.NativePuppetChoiceAt(state.Point, jonesActiveChoices)
+			outline := -1
+			if found && event == jonesChoicePressEvent {
+				outline = (int(int16(state.Point)) - 264) / 24
+			}
+			if state.LeftDown {
+				if outline == jonesChoiceOutline {
+					return currentFrame, false, nil
+				}
+				if err := drawJonesChoices(outline); err != nil {
+					return render.IndexedFrame{}, false, err
+				}
+				return currentFrame, true, nil
+			}
+			if state.LeftReleased {
+				selected := outline >= 0 && outline == jonesChoicePressIndex
+				selectedEvent := jonesChoicePressEvent
+				jonesChoicePressActive, jonesChoicePressIndex = false, -1
+				if selected {
+					if err := startJonesEventResponse(selectedEvent); err != nil {
+						return render.IndexedFrame{}, false, fmt.Errorf("run Jones choice %d: %w", selectedEvent, err)
+					}
+					return currentFrame, true, nil
+				}
+				if jonesChoiceOutline >= 0 {
+					if err := drawJonesChoices(-1); err != nil {
 						return render.IndexedFrame{}, false, err
 					}
 					return currentFrame, true, nil

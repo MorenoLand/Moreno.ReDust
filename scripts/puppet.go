@@ -81,6 +81,95 @@ func PuppetBevelChoices(program Program, codeName string) ([]PuppetChoice, error
 	return choices, nil
 }
 
+func PuppetBevelChoiceGroups(program Program, codeName string) ([][]PuppetChoice, error) {
+	start, err := FindCode(program, codeName)
+	if err != nil {
+		return nil, err
+	}
+	length, err := NextCodeOffset(program.Records, start)
+	if err != nil {
+		return nil, err
+	}
+	end := len(program.Records)
+	if length >= 0 {
+		end = start + int(length)
+	}
+	groups, current := [][]PuppetChoice{}, []PuppetChoice{}
+	for index := start + 2; index < end; index++ {
+		if program.Records[index].Kind == LookupOpcode("puppetevent") {
+			if len(current) > 0 {
+				groups = append(groups, current)
+				current = []PuppetChoice{}
+			}
+			continue
+		}
+		if program.Records[index].Kind != LookupOpcode("puppetbevel") {
+			continue
+		}
+		if index+5 >= end || program.Records[index+1].Kind != LookupOpcode("(") || program.Records[index+2].Kind != 3 || program.Records[index+3].Kind != LookupOpcode(",") || program.Records[index+4].Kind != 4 || program.Records[index+5].Kind != LookupOpcode(")") {
+			return nil, fmt.Errorf("puppetbevel call at record %d does not match its literal/event call form", index)
+		}
+		literal, err := program.LiteralPascal(index + 2)
+		if err != nil {
+			return nil, err
+		}
+		current = append(current, PuppetChoice{Text: assets.DecodePuppetText(literal[1:]), EventID: int32(program.Records[index+4].Data)})
+		index += 5
+	}
+	if len(current) > 0 {
+		groups = append(groups, current)
+	}
+	return groups, nil
+}
+
+func PuppetEventSpeechCalls(program Program, codeName string, event int32) ([]string, error) {
+	start, err := FindCode(program, codeName)
+	if err != nil {
+		return nil, err
+	}
+	length, err := NextCodeOffset(program.Records, start)
+	if err != nil {
+		return nil, err
+	}
+	end := len(program.Records)
+	if length >= 0 {
+		end = start + int(length)
+	}
+	active, lines := false, []string{}
+	for index := start + 2; index < end; index++ {
+		record := program.Records[index]
+		if record.Kind == LookupOpcode("case") {
+			if active {
+				break
+			}
+			if index+1 < end && program.Records[index+1].Kind == 4 && int32(program.Records[index+1].Data) == event {
+				active = true
+				index++
+			}
+			continue
+		}
+		if active && record.Kind == LookupOpcode("endswitch") {
+			break
+		}
+		if !active || record.Kind != LookupOpcode("puppetspeak") {
+			continue
+		}
+		if index+3 >= end || program.Records[index+1].Kind != LookupOpcode("(") || program.Records[index+2].Kind != 3 || program.Records[index+3].Kind != LookupOpcode(")") {
+			return nil, fmt.Errorf("puppetspeak call at record %d does not match its literal call form", index)
+		}
+		literal, err := program.LiteralPascal(index + 2)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, string(literal[1:]))
+		index += 3
+	}
+	if !active {
+		return nil, fmt.Errorf("event %d has no case in %s", event, codeName)
+	}
+	return lines, nil
+}
+
 func NativePuppetChoiceAt(point uint32, choices []PuppetChoice) (int32, bool) {
 	position := image.Pt(int(int16(point>>16)), int(int16(point)))
 	for index, choice := range choices {
