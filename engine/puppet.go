@@ -22,7 +22,7 @@ type PuppetDialogue struct {
 	canvas     *render.PuppetCanvas
 	cues       []render.PuppetCueRow
 	baseClip   image.Rectangle
-	voice      *ebitenaudio.Player
+	voice      *audio.Player
 	startFrame uint32
 	currentCue int
 	active     bool

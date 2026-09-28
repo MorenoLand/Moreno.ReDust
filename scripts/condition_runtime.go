@@ -33,6 +33,9 @@ func (s *ConditionCodeSession) DispatchStatement(start int) (uint16, error) {
 	if start >= 0 && start < len(s.Frame.Program.Records) && s.Frame.Program.Records[start].Kind == LookupOpcode("path") {
 		return s.Runtime.DispatchPathStatement(s.Frame.Context, s.Frame.Program, start, s.Frame.VariableScope)
 	}
+	if start >= 0 && start < len(s.Frame.Program.Records) && s.Frame.Program.Records[start].Kind == LookupOpcode("wavevolume") {
+		return s.Runtime.DispatchWaveVolumeStatement(s.Frame.Context, s.Frame.Program, start, s.Frame.VariableScope)
+	}
 	if s.Dispatch == nil {
 		return 0, ErrNoStatementDispatcher
 	}

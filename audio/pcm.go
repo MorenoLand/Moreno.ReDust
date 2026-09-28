@@ -107,7 +107,7 @@ func ToStereoPCM16(input []byte, format PCMFormat) ([]byte, error) {
 	return output, nil
 }
 
-func NewPlayer(context *ebitenaudio.Context, input []byte, format PCMFormat) (*ebitenaudio.Player, error) {
+func NewPlayer(context *ebitenaudio.Context, input []byte, format PCMFormat) (*Player, error) {
 	if context == nil {
 		return nil, fmt.Errorf("audio context is nil")
 	}
@@ -115,10 +115,10 @@ func NewPlayer(context *ebitenaudio.Context, input []byte, format PCMFormat) (*e
 	if err != nil {
 		return nil, err
 	}
-	return context.NewPlayerFromBytes(pcm), nil
+	return newPlayer(context.NewPlayerFromBytes(pcm)), nil
 }
 
-func NewNativePlaylist(context *ebitenaudio.Context, tracks []NativeSound, events []int, loopIndex int) (*ebitenaudio.Player, error) {
+func NewNativePlaylist(context *ebitenaudio.Context, tracks []NativeSound, events []int, loopIndex int) (*Player, error) {
 	if context == nil {
 		return nil, fmt.Errorf("audio context is nil")
 	}
@@ -157,8 +157,9 @@ func NewNativePlaylist(context *ebitenaudio.Context, tracks []NativeSound, event
 	if err != nil {
 		return nil, err
 	}
-	player.Play()
-	return player, nil
+	managed := newPlayer(player)
+	managed.Play()
+	return managed, nil
 }
 
 func stereoPCMAtRate(input []byte, format PCMFormat, targetRate int) ([]byte, error) {

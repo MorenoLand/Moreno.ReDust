@@ -89,7 +89,7 @@ func (b *SoundBank) LoadTheme(name string) (NativeTheme, error) {
 	return NativeTheme{Name: themeName, Tracks: tracks, Events: events}, nil
 }
 
-func (t NativeTheme) Play(context *ebitenaudio.Context) (*ebitenaudio.Player, error) {
+func (t NativeTheme) Play(context *ebitenaudio.Context) (*Player, error) {
 	player, err := NewNativePlaylist(context, t.Tracks, t.Events, 0)
 	if err != nil {
 		return nil, err

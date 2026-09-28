@@ -73,7 +73,7 @@ func run() error {
 	}
 	var soundBank *audio.SoundBank
 	var themeBank *audio.SoundBank
-	var themePlayer *ebitenaudio.Player
+	var themePlayer *audio.Player
 	var audioContext *ebitenaudio.Context
 	var nativeLoops scripts.LoopScheduler
 	var nativeRandom scripts.NativeRandom
@@ -701,7 +701,7 @@ func run() error {
 		stage.Close()
 		return fmt.Errorf("start startup movie %s: %w", movieNames[movieIndex], err)
 	}
-	startMovieAudio := func(movie *render.Movie) (*ebitenaudio.Player, int, int, error) {
+	startMovieAudio := func(movie *render.Movie) (*audio.Player, int, int, error) {
 		resources, loopIndex := movie.SoundtrackResources()
 		if len(resources) == 0 {
 			return nil, 0, loopIndex, nil
@@ -3812,6 +3812,37 @@ func run() error {
 		}
 		return stageFrame, true, nil
 	}, func(key ebiten.Key) {
+		waveVolume := -1
+		switch key {
+		case ebiten.Key0:
+			waveVolume = 0
+		case ebiten.Key1:
+			waveVolume = 1
+		case ebiten.Key2:
+			waveVolume = 2
+		case ebiten.Key3:
+			waveVolume = 3
+		case ebiten.Key4:
+			waveVolume = 4
+		case ebiten.Key5:
+			waveVolume = 5
+		case ebiten.Key6:
+			waveVolume = 6
+		case ebiten.Key7:
+			waveVolume = 7
+		case ebiten.Key8:
+			waveVolume = 8
+		case ebiten.Key9:
+			waveVolume = 9
+		}
+		if waveVolume >= 0 {
+			if err := audio.SetWaveVolume(waveVolume); err != nil {
+				log.Printf("set wave volume: %v", err)
+			} else if *debug {
+				log.Printf("wavevolume=%d", waveVolume)
+			}
+			return
+		}
 		if helpInteractionStage == helpInteractionPuppetSpeaking {
 			if key == ebiten.KeySpace || key == ebiten.KeyEscape || key == ebiten.KeyQ || key == ebiten.KeyPeriod {
 				helpDialogueSkip = true

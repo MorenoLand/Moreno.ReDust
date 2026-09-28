@@ -8,6 +8,8 @@ type ExpressionAtomServices struct {
 	ReadContextPascal func(context any, offset int) ([]byte, error)
 	CallBlock         ExpressionAtomHook
 	DispatchValue     ExpressionAtomHook
+	GetWaveVolume     func() int
+	SetWaveVolume     func(int) error
 }
 
 type ExpressionValueParser struct {
@@ -25,6 +27,19 @@ func (p *ExpressionValueParser) Parse(program Program, start int) (Record, uint3
 		return Record{}, 0, 0, fmt.Errorf("expression value index %d is out of range", start)
 	}
 	kind := program.Records[start].Kind
+	if kind == LookupOpcode("wavevolume") {
+		if p.Services.GetWaveVolume == nil {
+			return Record{}, 0, 0, fmt.Errorf("wave volume getter is unavailable")
+		}
+		if kindAt(program, start+1) != LookupOpcode("(") || kindAt(program, start+2) != LookupOpcode(")") {
+			return Record{}, 0, 2, nil
+		}
+		level := p.Services.GetWaveVolume()
+		if level < 0 || level > 9 {
+			return Record{}, 0, 10, nil
+		}
+		return Record{Kind: 4, Data: uint32(level)}, 3, 0, nil
+	}
 	if kind == LookupOpcode("path") {
 		return p.parsePathValue(program, start)
 	}
