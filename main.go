@@ -455,7 +455,7 @@ func run() error {
 	var helpDelayReady bool
 	var helpActorValue int32
 	var helpInitialPage bool
-	boneWorldProp := render.WorldPropSprite{Name: "Bone", Set: "town", Position: bonePosition, Heading: 32, Scale: 1200, Archive: inventoryArchive, View: boneSmallView}
+	boneWorldProp := render.WorldPropSprite{Name: "Bone", Set: "town", Position: bonePosition, Heading: 32, Scale: 1000, Archive: inventoryArchive, View: boneSmallView}
 	boneOwner := "none"
 	var boneInventoryFrame render.PuppetFrame
 	var boneInInventory bool
@@ -2593,7 +2593,7 @@ func run() error {
 			}
 		}
 		if helpPendingResult.GiveBone {
-			boneWorldProp.Position, boneWorldProp.Heading, boneWorldProp.Scale = bonePosition, 32, 1200
+			boneWorldProp.Position, boneWorldProp.Heading, boneWorldProp.Scale = bonePosition, 32, 1000
 			boneWorldProp.View, boneWorldProp.Visible, boneOwner = boneSmallView, true, "none"
 			if *debug {
 				log.Printf("prop=Bone setup=street owner=%s view=small point=%v degree=%d scale=%d", boneOwner, boneWorldProp.Position, boneWorldProp.Heading, boneWorldProp.Scale)
