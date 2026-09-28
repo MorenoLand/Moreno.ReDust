@@ -26,6 +26,7 @@ type Movie struct {
 	resources           *assets.ResourceCache
 	frames              []MovieFrameDescriptor
 	paletteRaw          []byte
+	actionFrameMarkers  [2]int16
 	defaultTick         uint32
 	soundtrackResources []uint32
 	soundtrackLoop      int
@@ -39,6 +40,7 @@ type MoviePlayback struct {
 	elapsed      int
 	duration     int
 	mode         uint16
+	actionFrames uint16
 	dibPixels    []byte
 	screenPixels []byte
 	baseRGBA     *image.RGBA
@@ -128,7 +130,7 @@ func OpenMovie(workspace assets.Workspace, name string) (*Movie, error) {
 			return nil, fmt.Errorf("movie frame %d references resource %d outside %d entries", index, frames[index].ResourceIndex, header.CountB)
 		}
 	}
-	return &Movie{resources: resources, frames: frames, paletteRaw: append([]byte(nil), data[0x3e:0x83e]...), defaultTick: binary.LittleEndian.Uint32(data[0x26:0x2a]), soundtrackResources: soundtrackResources, soundtrackLoop: int(loopTarget)}, nil
+	return &Movie{resources: resources, frames: frames, paletteRaw: append([]byte(nil), data[0x3e:0x83e]...), actionFrameMarkers: [2]int16{int16(binary.LittleEndian.Uint16(data[0x2e:0x30])), int16(binary.LittleEndian.Uint16(data[0x30:0x32]))}, defaultTick: binary.LittleEndian.Uint32(data[0x26:0x2a]), soundtrackResources: soundtrackResources, soundtrackLoop: int(loopTarget)}, nil
 }
 
 func (m *Movie) FrameCount() int {
@@ -253,6 +255,16 @@ func (p *MoviePlayback) CurrentFrame() IndexedFrame {
 
 func (p *MoviePlayback) Done() bool { return p == nil || p.done }
 
+func (p *MoviePlayback) ActionFrame(index int) (bool, error) {
+	if p == nil || p.movie == nil {
+		return false, fmt.Errorf("movie playback is unavailable")
+	}
+	if index < 1 || index > 2 {
+		return false, fmt.Errorf("actionframe argument %d is invalid", index)
+	}
+	return p.actionFrames&(1<<uint(index-1)) != 0, nil
+}
+
 func (p *MoviePlayback) Skip() {
 	if p != nil {
 		p.done = true
@@ -339,6 +351,11 @@ func (p *MoviePlayback) loadFrame(index int) error {
 		}
 	}
 	p.frame, p.elapsed, p.duration, p.mode = index, 0, duration, descriptor.Mode
+	for marker, frame := range p.movie.actionFrameMarkers {
+		if frame >= 0 && int(frame) == index {
+			p.actionFrames |= 1 << uint(marker)
+		}
+	}
 	if descriptor.Mode == 17 {
 		p.fadeFrom, p.fadeTo = p.palette, p.blackPalette
 	} else if descriptor.Mode == 18 {
