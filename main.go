@@ -32,6 +32,14 @@ func loadInventoryFrame(archive *assets.PropArchive, propName, viewName string, 
 	return render.DecodePuppetFrame(data)
 }
 
+func nativeDogSpotMovie(name string) (string, bool) {
+	name = strings.ToUpper(filepath.Base(strings.ReplaceAll(strings.TrimSpace(name), `\`, `/`)))
+	if name != "DOG1.MOV" && name != "DOG2.MOV" {
+		return "", false
+	}
+	return "MOVIES/" + name, true
+}
+
 func run() error {
 	work := flag.String("work", "bin", "work directory; assets are read from its assets child")
 	debug := flag.Bool("debug", false, "enable diagnostics")
@@ -3251,10 +3259,14 @@ func run() error {
 		return displayChanged, nil
 	}
 	startSceneMovie := func(name string) error {
-		if !spotMovieStarting && (strings.EqualFold(name, "MOVIES/DOG1.MOV") || strings.EqualFold(name, "MOVIES/DOG2.MOV")) {
-			pendingSpotMovie = name
+		movieName, dogSpotMovie := nativeDogSpotMovie(name)
+		if !dogSpotMovie {
+			movieName = name
+		}
+		if !spotMovieStarting && dogSpotMovie {
+			pendingSpotMovie = movieName
 			if *debug {
-				log.Printf("movie=%s routed=spotmovie", name)
+				log.Printf("movie=%s routed=spotmovie", movieName)
 			}
 			return nil
 		}
@@ -3274,16 +3286,23 @@ func run() error {
 				return fmt.Errorf("close current movie: %w", err)
 			}
 		}
-		movieNames, movieIndex = []string{name}, 0
+		movieNames, movieIndex = []string{movieName}, 0
 		movieWarningCount, movieWarningSample = []int{0}, []string{""}
-		movie, err = render.OpenMovie(workspace, name)
+		movie, err = render.OpenMovie(workspace, movieName)
 		if err != nil {
-			return fmt.Errorf("open scene movie %s: %w", name, err)
+			return fmt.Errorf("open scene movie %s: %w", movieName, err)
 		}
 		movieRestorePalette = activeSet.Palette()
-		playback, err = render.NewMoviePlayback(movie, currentFrame, movieRestorePalette)
+		movieBase := currentFrame
+		if dogSpotMovie {
+			movieBase = blackFrame
+			if *debug {
+				log.Printf("movie=%s base=blackscreen", movieName)
+			}
+		}
+		playback, err = render.NewMoviePlayback(movie, movieBase, movieRestorePalette)
 		if err != nil {
-			return fmt.Errorf("start scene movie %s: %w", name, err)
+			return fmt.Errorf("start scene movie %s: %w", movieName, err)
 		}
 		movieAudio, movieAudioEvents, movieAudioLoop, err = startMovieAudio(movie)
 		if err != nil {
