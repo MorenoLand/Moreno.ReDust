@@ -3240,23 +3240,11 @@ func run() error {
 		}
 		return displayChanged, nil
 	}
-	dogMoviePanelFrame := render.IndexedFrame{}
-	dogMoviePanelTop, dogMoviePanelActive := 0, false
-	movieOutputFrame := func(frame render.IndexedFrame) (render.IndexedFrame, error) {
-		if !dogMoviePanelActive {
-			return frame, nil
-		}
-		return render.CompositePanel(frame, dogMoviePanelFrame, dogMoviePanelTop)
-	}
 	startSceneMovie := func(name string) error {
 		if currentScene == 0 && !spotMovieStarting {
 			if err := refreshWorldScene(); err != nil {
 				return fmt.Errorf("refresh scene before movie %s: %w", name, err)
 			}
-		}
-		dogMoviePanelActive = strings.EqualFold(name, "MOVIES/DOG1.MOV") || strings.EqualFold(name, "MOVIES/DOG2.MOV")
-		if dogMoviePanelActive {
-			dogMoviePanelFrame, dogMoviePanelTop = stageFrame, backgroundFrame.Height
 		}
 		if movieAudio != nil {
 			if err := movieAudio.Close(); err != nil {
@@ -3417,11 +3405,7 @@ func run() error {
 			if err := startSceneMovie(name); err != nil {
 				return render.IndexedFrame{}, false, err
 			}
-			frame, err := movieOutputFrame(playback.CurrentFrame())
-			if err != nil {
-				return render.IndexedFrame{}, false, err
-			}
-			return frame, true, nil
+			return playback.CurrentFrame(), true, nil
 		}
 		if playback == nil && transition == nil {
 			changed, err := runNativeScheduler(false)
@@ -3554,11 +3538,7 @@ func run() error {
 					if err != nil {
 						return render.IndexedFrame{}, false, fmt.Errorf("start spotmovie %s: %w", spotMovieName, err)
 					}
-					frame, err := movieOutputFrame(playback.CurrentFrame())
-					if err != nil {
-						return render.IndexedFrame{}, false, err
-					}
-					return frame, true, nil
+					return playback.CurrentFrame(), true, nil
 				}
 				if transitionMode == 3 {
 					completedSpotMovie := spotMovieName
@@ -3661,10 +3641,6 @@ func run() error {
 		if err != nil {
 			return render.IndexedFrame{}, false, fmt.Errorf("advance startup movie %s: %w", movieNames[movieIndex], err)
 		}
-		movieFrame, err = movieOutputFrame(movieFrame)
-		if err != nil {
-			return render.IndexedFrame{}, false, fmt.Errorf("restore Dog movie panel: %w", err)
-		}
 		if warning := playback.TakeDecodeWarning(); warning != nil {
 			movieWarningCount[movieIndex]++
 			if movieWarningSample[movieIndex] == "" {
@@ -3680,7 +3656,6 @@ func run() error {
 				return render.IndexedFrame{}, false, fmt.Errorf("read spotmovie actionframe(1): %w", err)
 			}
 		}
-		dogMoviePanelActive = false
 		if *debug && movieWarningCount[movieIndex] > 0 {
 			log.Printf("movie=%s decode-warnings=%d first=%s", movieNames[movieIndex], movieWarningCount[movieIndex], movieWarningSample[movieIndex])
 		}
