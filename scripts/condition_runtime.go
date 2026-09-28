@@ -69,6 +69,7 @@ func (s *ConditionCodeSession) Close() {
 type ConditionRuntime struct {
 	Expressions            *ExpressionState
 	Strings                *StringRegisters
+	ContextPages           *ScriptContextPages
 	Global                 *VariableTable
 	EscapeInterruptEnabled uint16
 	EscapeKeyPressed       func() bool
@@ -146,7 +147,7 @@ func (r *ConditionRuntime) EvaluateValue(context any, program Program, recordInd
 	defer func() {
 		r.Expressions.Strings = previousStrings
 	}()
-	parser := ExpressionValueParser{Context: context, Local: local, Global: r.Global, State: r.Expressions, Strings: strings, Services: r.Services}
+	parser := ExpressionValueParser{Context: context, Local: local, Global: r.Global, State: r.Expressions, Strings: strings, ContextPages: r.ContextPages, Services: r.Services}
 	value, consumed, status, err := r.Expressions.Evaluate(program, recordIndex, parser.Parse)
 	if err != nil {
 		return ExpressionValue{}, consumed, status, err

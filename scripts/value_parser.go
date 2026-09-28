@@ -11,12 +11,13 @@ type ExpressionAtomServices struct {
 }
 
 type ExpressionValueParser struct {
-	Context  any
-	Local    *VariableTable
-	Global   *VariableTable
-	State    *ExpressionState
-	Strings  *StringRegisters
-	Services ExpressionAtomServices
+	Context      any
+	Local        *VariableTable
+	Global       *VariableTable
+	State        *ExpressionState
+	Strings      *StringRegisters
+	ContextPages *ScriptContextPages
+	Services     ExpressionAtomServices
 }
 
 func (p *ExpressionValueParser) Parse(program Program, start int) (Record, uint32, uint32, error) {
@@ -24,6 +25,9 @@ func (p *ExpressionValueParser) Parse(program Program, start int) (Record, uint3
 		return Record{}, 0, 0, fmt.Errorf("expression value index %d is out of range", start)
 	}
 	kind := program.Records[start].Kind
+	if kind == LookupOpcode("path") {
+		return p.parsePathValue(program, start)
+	}
 	switch kind {
 	case 4018:
 		if p.State == nil {
@@ -118,6 +122,35 @@ func (p *ExpressionValueParser) Parse(program Program, start int) (Record, uint3
 	}
 	value, status, err = readVariableValue(p.Global, name, &program.Records[start], p.Strings)
 	return value, 1, uint32(status), err
+}
+
+func (p *ExpressionValueParser) parsePathValue(program Program, start int) (Record, uint32, uint32, error) {
+	if p.ContextPages == nil || p.Strings == nil {
+		return Record{}, 0, 0, fmt.Errorf("native script context pages or string registers are unavailable")
+	}
+	if kindAt(program, start+1) != LookupOpcode("(") {
+		return Record{}, 0, 2, nil
+	}
+	index, consumed, status, err := p.Parse(program, start+2)
+	if err != nil || status != 0 {
+		return Record{}, 0, status, err
+	}
+	if index.Kind != 4 {
+		return Record{}, 0, 14, nil
+	}
+	if kindAt(program, start+2+int(consumed)) != LookupOpcode(")") {
+		return Record{}, 0, 2, nil
+	}
+	contextIndex := int(int32(index.Data))
+	if contextIndex <= 0 || contextIndex >= nativeScriptContextCount {
+		return Record{}, 0, 10, nil
+	}
+	pascal, err := p.ContextPages.Restore(contextIndex)
+	if err != nil {
+		return Record{}, 0, 0, err
+	}
+	value, stringStatus, err := p.Strings.Store(pascal)
+	return value, consumed + 3, uint32(stringStatus), err
 }
 
 func readVariableValue(table *VariableTable, name []byte, cache *Record, strings *StringRegisters) (Record, uint16, error) {
