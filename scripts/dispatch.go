@@ -32,9 +32,15 @@ const (
 )
 
 func ClassifyDispatch(opcode uint16) DispatchRoute {
-	switch {
-	case opcode > 11999 && opcode < 0x2f3a:
+	// The 12000 range is bounded by the verified FUN_00424890 switch
+	// (12012..12088), not by a guessed 12000..12089 span. Opcodes outside the
+	// verified range are not dispatched there and return native status 1, so
+	// they must not be routed to Route00424890.
+	switch ClassifyCommandRange(opcode) {
+	case CommandRangePrimary, CommandRangeSpecial, CommandRangeSecondary:
 		return Route00424890
+	}
+	switch {
 	case opcode > 19999 && opcode < 0x4e8e:
 		return Route004137B0
 	case opcode > 15999 && opcode < 0x3eb7:
