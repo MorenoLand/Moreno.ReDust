@@ -3294,13 +3294,14 @@ func run() error {
 		}
 		movieRestorePalette = activeSet.Palette()
 		movieBase := currentFrame
+		moviePaletteBase := movieRestorePalette
 		if dogSpotMovie {
-			movieBase = blackFrame
+			movieBase, moviePaletteBase = blackFrame, render.BlackPaletteRaw()
 			if *debug {
-				log.Printf("movie=%s base=blackscreen", movieName)
+				log.Printf("movie=%s base=blackscreen palette=black", movieName)
 			}
 		}
-		playback, err = render.NewMoviePlayback(movie, movieBase, movieRestorePalette)
+		playback, err = render.NewMoviePlayback(movie, movieBase, moviePaletteBase)
 		if err != nil {
 			return fmt.Errorf("start scene movie %s: %w", movieName, err)
 		}
