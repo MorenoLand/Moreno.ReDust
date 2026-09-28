@@ -139,10 +139,10 @@ func run() error {
 		stage.Close()
 		return fmt.Errorf("read startup game position: %w", err)
 	}
-	gameClock, gameDay := scripts.NativeAdvanceClockFields(2, 1, 0)
-	gamePhase, dogVisibleState := int16(0), gameDay == 1
+	gameClock, gameDay, phase := scripts.NativeAdvanceClockFields(2, 1, 0)
+	gamePhase, dogVisibleState := int16(phase), gameDay == 1
 	if *debug {
-		log.Printf("game-time=day:%d clock:%d phase:0 source=NEW.FLT/advanceday", gameDay, gameClock)
+		log.Printf("game-time=day:%d clock:%d phase:%d source=NEW.FLT/advanceday", gameDay, gameClock, gamePhase)
 	}
 	propArchive, err := workspace.OpenPropArchive("DATA/HOUSE.PRP")
 	if err != nil {
@@ -1796,6 +1796,10 @@ func run() error {
 				if _, found := scripts.SallowerDoorAt(view.Resource, worldPoint[2], point); found {
 					cursor = "touch"
 				}
+			} else if activeSetName == "hotlower" {
+				if _, found := scripts.HotLowerDoorAt(view.Resource, worldPoint[2], point); found {
+					cursor = "touch"
+				}
 			}
 			if helpInteractionStage == helpInteractionPuppetChoices {
 				if _, found := scripts.NativePuppetChoiceAt(point, helpActiveChoices); found {
@@ -2154,6 +2158,8 @@ func run() error {
 							if scripts.SallowerExitToTown(worldPoint[2], doorOwner) {
 								direction = "east"
 							}
+						case "hotlower":
+							direction, _ = scripts.HotLowerExitToTown(view.Resource, worldPoint[2], doorOwner)
 						case "store", "livery":
 							if worldPoint[2] == assets.SetDirectionEast && (activeSetName == "store" && doorOwner == "shop" || activeSetName == "livery" && doorOwner == "horse") {
 								direction = "west"
@@ -2332,6 +2338,14 @@ func run() error {
 					doorOwner = owner
 					if *debug {
 						log.Printf("door=%s owner=door set=sallower direction=%d", owner, worldPoint[2])
+					}
+					return currentFrame, false, nil
+				}
+			} else if mouseEvent.Button == ebiten.MouseButtonLeft && activeSetName == "hotlower" {
+				if owner, found := scripts.HotLowerDoorAt(view.Resource, worldPoint[2], point); found {
+					doorOwner = owner
+					if *debug {
+						log.Printf("door=%s owner=door set=hotlower direction=%d", owner, worldPoint[2])
 					}
 					return currentFrame, false, nil
 				}
