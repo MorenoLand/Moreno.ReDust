@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
+	"redust/render"
 	"redust/scripts"
 )
 
@@ -48,6 +49,14 @@ func (r Resource0) EntryTableBytes() ([]byte, error) {
 		return nil, fmt.Errorf("save resource 0 has %d bytes, want at least %#x", len(r.data), resource0PrefixSize)
 	}
 	return append([]byte(nil), r.data[resource0EntryOffset:resource0EntryOffset+resource0EntrySize]...), nil
+}
+
+func (r Resource0) PaletteState() (render.PaletteState, error) {
+	entries, err := r.EntryTableBytes()
+	if err != nil {
+		return render.PaletteState{}, err
+	}
+	return render.PaletteStateFromRaw(entries)
 }
 
 func (r Resource0) ContextPages() (scripts.ScriptContextPages, error) {

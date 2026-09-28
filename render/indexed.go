@@ -197,14 +197,14 @@ func indexedFrame(width, height int, pixels, paletteRaw []byte) (IndexedFrame, e
 	if width <= 0 || height <= 0 || len(pixels) != width*height {
 		return IndexedFrame{}, fmt.Errorf("indexed frame data does not match %dx%d", width, height)
 	}
-	palette, err := paletteStateFromRaw(paletteRaw)
+	palette, err := PaletteStateFromRaw(paletteRaw)
 	if err != nil {
 		return IndexedFrame{}, err
 	}
 	return IndexedFrame{Width: width, Height: height, Pixels: append([]byte(nil), pixels...), Palette: palette.Colors()}, nil
 }
 
-func paletteStateFromRaw(paletteRaw []byte) (PaletteState, error) {
+func PaletteStateFromRaw(paletteRaw []byte) (PaletteState, error) {
 	if len(paletteRaw) != 0x800 {
 		return PaletteState{}, fmt.Errorf("indexed palette has %d bytes, want 2048", len(paletteRaw))
 	}

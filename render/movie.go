@@ -222,11 +222,11 @@ func NewMoviePlayback(movie *Movie, base IndexedFrame, basePaletteRaw []byte) (*
 	if movie == nil || movie.resources == nil || base.Width <= 0 || base.Height <= 0 || len(base.Pixels) != base.Width*base.Height {
 		return nil, fmt.Errorf("movie playback input is incomplete")
 	}
-	moviePalette, err := paletteStateFromRaw(movie.paletteRaw)
+	moviePalette, err := PaletteStateFromRaw(movie.paletteRaw)
 	if err != nil {
 		return nil, err
 	}
-	basePalette, err := paletteStateFromRaw(basePaletteRaw)
+	basePalette, err := PaletteStateFromRaw(basePaletteRaw)
 	if err != nil {
 		return nil, err
 	}
