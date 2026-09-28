@@ -1084,6 +1084,8 @@ func run() error {
 		}
 		if helpPendingResult.HideHelp {
 			helpVisible = false
+			helpWalk = nil
+			helpInteractionStage = helpInteractionIdle
 			nativeLoops.Stop(2, "help")
 		}
 		if helpPendingResult.GiveBone {
@@ -1102,6 +1104,10 @@ func run() error {
 			return startHelpPage(nextPage)
 		}
 		if helpPendingResult.Complete {
+			if helpPendingResult.HideHelp {
+				helpPendingResult = scripts.HelpChoiceResult{}
+				return refreshWorldScene()
+			}
 			return returnHelpToStar()
 		}
 		return fmt.Errorf("HELP1.PUP page %s has no verified continuation", helpPage)
@@ -1449,6 +1455,45 @@ func run() error {
 	)
 	dog2OfferStage := dog2OfferIdle
 	var dog2OfferUntil uint32
+	nativeCursor := ""
+	setNativeCursor := func(name string) {
+		if *silent || nativeCursor == name {
+			return
+		}
+		nativeCursor = name
+		if strings.EqualFold(name, "touch") {
+			ebiten.SetCursorShape(ebiten.CursorShapePointer)
+		} else {
+			ebiten.SetCursorShape(ebiten.CursorShapeDefault)
+		}
+	}
+	updateNativeCursor := func(point uint32) {
+		cursor := "arrow"
+		if currentScene == 0 {
+			if _, found, _ := stage.HitTestSceneHandler(currentScene, point); found {
+				cursor = "touch"
+			}
+			if _, found := render.HitTestWorldActors(projectedActors, image.Pt(int(int16(point>>16)), int(int16(point)))); found {
+				cursor = "touch"
+			}
+			if strings.EqualFold(string(view.Name[1:]), "Scene G15") {
+				if _, found := scripts.NiteNorthObjectAction(worldPoint[2], point, gameClock); found {
+					cursor = "touch"
+				}
+			}
+			if helpInteractionStage == helpInteractionPuppetChoices {
+				if _, found := scripts.NativePuppetChoiceAt(point, helpActiveChoices); found {
+					cursor = "touch"
+				}
+			}
+			if leroyInteractionStage == leroyInteractionPuppetChoices {
+				if _, found := scripts.NativePuppetChoiceAt(point, leroyActiveChoices); found {
+					cursor = "touch"
+				}
+			}
+		}
+		setNativeCursor(cursor)
+	}
 	var transition *render.BarndoorEffect
 	runErr := engine.Run(playback.CurrentFrame(), func() (render.IndexedFrame, bool, error) {
 		if playback == nil && transition == nil && pendingSceneMovie != "" {
@@ -1728,19 +1773,22 @@ func run() error {
 			if currentScene == 0 && transition == nil {
 				switch key {
 				case ebiten.KeyArrowUp:
-					dogVisible := false
+					dogVisible, dogDistance := false, 1<<30
 					for _, actor := range worldActors {
 						if strings.EqualFold(actor.Name, "dog") && actor.Visible {
 							dogVisible = true
+							camera := render.NativeActorCameraPosition(worldPoint)
+							player := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
+							dogDistance = scripts.NativeActorDistance2D(actor.Position, player)
 							break
 						}
 					}
-					if name, blocked := scripts.NiteDogGateMovie(worldPoint[2], gameDay, dogVisible); blocked {
+					if name, blocked := scripts.NiteDogGateMovieAtDistance(view.Resource, worldPoint[2], gameDay, dogVisible, dogDistance, 512); blocked {
 						pendingMovement = 0
 						pendingSceneMovie = name
 						dogMovieNeedsHelp = true
 						if *debug {
-							log.Printf("event=NITE.SET/key-down dog-gate point=%v movie=%s", worldPoint, name)
+							log.Printf("event=NITE.SET/key-down dog-gate point=%v distance=%d movie=%s", worldPoint, dogDistance, name)
 						}
 						return
 					}
@@ -2087,6 +2135,7 @@ func run() error {
 		}
 		return nextFrame, true, nil
 	}, func(state engine.MouseState) (render.IndexedFrame, bool, error) {
+		updateNativeCursor(state.Point)
 		if helpInteractionStage == helpInteractionPuppetChoices && helpChoicePressActive {
 			event, found := scripts.NativePuppetChoiceAt(state.Point, helpActiveChoices)
 			outline := -1

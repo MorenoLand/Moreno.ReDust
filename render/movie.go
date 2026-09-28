@@ -3,6 +3,8 @@ package render
 import (
 	"encoding/binary"
 	"fmt"
+	"image"
+	"image/color"
 	"math/bits"
 
 	"redust/assets"
@@ -39,6 +41,9 @@ type MoviePlayback struct {
 	mode         uint16
 	dibPixels    []byte
 	screenPixels []byte
+	baseRGBA     *image.RGBA
+	screenRGBA   *image.RGBA
+	covered      []bool
 	palette      PaletteState
 	moviePalette PaletteState
 	blackPalette PaletteState
@@ -219,8 +224,12 @@ func NewMoviePlayback(movie *Movie, base IndexedFrame) (*MoviePlayback, error) {
 	if err != nil {
 		return nil, err
 	}
+	baseRGBA, err := base.rgbaImage()
+	if err != nil {
+		return nil, err
+	}
 	blackPalette := blackPaletteState()
-	playback := &MoviePlayback{movie: movie, width: base.Width, height: base.Height, screenPixels: append([]byte(nil), base.Pixels...), palette: blackPalette, blackPalette: blackPalette, moviePalette: moviePalette}
+	playback := &MoviePlayback{movie: movie, width: base.Width, height: base.Height, screenPixels: append([]byte(nil), base.Pixels...), baseRGBA: clonePuppetRGBA(baseRGBA), screenRGBA: clonePuppetRGBA(baseRGBA), covered: make([]bool, base.Width*base.Height), palette: blackPalette, blackPalette: blackPalette, moviePalette: moviePalette}
 	if err := playback.loadFrame(0); err != nil {
 		return nil, err
 	}
@@ -239,7 +248,7 @@ func (p *MoviePlayback) CurrentFrame() IndexedFrame {
 	if p == nil {
 		return IndexedFrame{}
 	}
-	return IndexedFrame{Width: p.width, Height: p.height, Pixels: p.screenPixels, Palette: p.palette.Colors()}
+	return IndexedFrame{Width: p.width, Height: p.height, Pixels: p.screenPixels, Palette: p.palette.Colors(), rgba: p.screenRGBA}
 }
 
 func (p *MoviePlayback) Done() bool { return p == nil || p.done }
@@ -269,6 +278,7 @@ func (p *MoviePlayback) Update() (IndexedFrame, bool, bool, error) {
 	changed := false
 	if p.mode == 17 || p.mode == 18 {
 		p.palette = interpolatePalette(p.fadeFrom, p.fadeTo, p.elapsed, p.duration-1)
+		p.rebuildRGBA()
 		changed = true
 	}
 	p.elapsed++
@@ -323,6 +333,9 @@ func (p *MoviePlayback) loadFrame(index int) error {
 			source := y*pixels.Pitch + left
 			destination := y*p.width + left
 			copy(p.screenPixels[destination:destination+right-left], pixels.Pixels[source:source+right-left])
+			for x := left; x < right; x++ {
+				p.covered[destination+x-left] = true
+			}
 		}
 	}
 	p.frame, p.elapsed, p.duration, p.mode = index, 0, duration, descriptor.Mode
@@ -333,7 +346,21 @@ func (p *MoviePlayback) loadFrame(index int) error {
 	} else {
 		p.palette = p.moviePalette
 	}
+	p.rebuildRGBA()
 	return nil
+}
+
+func (p *MoviePlayback) rebuildRGBA() {
+	copy(p.screenRGBA.Pix, p.baseRGBA.Pix)
+	colors := p.palette.Colors()
+	for index, covered := range p.covered {
+		if !covered {
+			continue
+		}
+		value := color.RGBAModel.Convert(colors[p.screenPixels[index]]).(color.RGBA)
+		offset := index * 4
+		p.screenRGBA.Pix[offset], p.screenRGBA.Pix[offset+1], p.screenRGBA.Pix[offset+2], p.screenRGBA.Pix[offset+3] = value.R, value.G, value.B, value.A
+	}
 }
 
 func DecodeMoviePixels(data, previous []byte) (MoviePixels, error) {
