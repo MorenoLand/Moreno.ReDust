@@ -3,6 +3,7 @@ package scripts
 import (
 	"fmt"
 	"image"
+	"strings"
 
 	"redust/assets"
 )
@@ -182,6 +183,76 @@ func PuppetEventSpeechCallsOccurrence(program Program, codeName string, event in
 		return nil, fmt.Errorf("event %d occurrence %d has no case in %s", event, occurrence, codeName)
 	}
 	return matches[occurrence], nil
+}
+
+func PuppetBevelChoiceInCase(program Program, codeName, switchName, caseName string) (PuppetChoice, bool, error) {
+	start, err := FindCode(program, codeName)
+	if err != nil {
+		return PuppetChoice{}, false, err
+	}
+	length, err := NextCodeOffset(program.Records, start)
+	if err != nil {
+		return PuppetChoice{}, false, err
+	}
+	end := len(program.Records)
+	if length >= 0 {
+		end = start + int(length)
+	}
+	for index := start + 2; index+1 < end; index++ {
+		if program.Records[index].Kind != LookupOpcode("switch") || program.Records[index+1].Kind != 5 {
+			continue
+		}
+		variable, err := program.IdentifierPascal(index + 1)
+		if err != nil || !strings.EqualFold(string(variable[1:]), switchName) {
+			continue
+		}
+		for caseIndex := index + 2; caseIndex < end; caseIndex++ {
+			if program.Records[caseIndex].Kind == LookupOpcode("endswitch") {
+				break
+			}
+			if program.Records[caseIndex].Kind != LookupOpcode("case") || caseIndex+1 >= end {
+				continue
+			}
+			value, valueEnd, found := puppetCaseValue(program, caseIndex+1, end)
+			if !found || !strings.EqualFold(value, caseName) {
+				continue
+			}
+			for choiceIndex := valueEnd; choiceIndex < end; choiceIndex++ {
+				if program.Records[choiceIndex].Kind == LookupOpcode("case") || program.Records[choiceIndex].Kind == LookupOpcode("endswitch") {
+					break
+				}
+				if program.Records[choiceIndex].Kind != LookupOpcode("puppetbevel") {
+					continue
+				}
+				if choiceIndex+5 >= end || program.Records[choiceIndex+1].Kind != LookupOpcode("(") || program.Records[choiceIndex+2].Kind != 3 || program.Records[choiceIndex+3].Kind != LookupOpcode(",") || program.Records[choiceIndex+4].Kind != 4 || program.Records[choiceIndex+5].Kind != LookupOpcode(")") {
+					return PuppetChoice{}, false, fmt.Errorf("puppetbevel call at record %d does not match its literal/event call form", choiceIndex)
+				}
+				literal, err := program.LiteralPascal(choiceIndex + 2)
+				if err != nil {
+					return PuppetChoice{}, false, err
+				}
+				return PuppetChoice{Text: assets.DecodePuppetText(literal[1:]), EventID: int32(program.Records[choiceIndex+4].Data)}, true, nil
+			}
+		}
+	}
+	return PuppetChoice{}, false, nil
+}
+
+func puppetCaseValue(program Program, index, end int) (string, int, bool) {
+	if index >= end {
+		return "", index, false
+	}
+	if program.Records[index].Kind == 3 {
+		value, err := program.LiteralPascal(index)
+		return string(value[1:]), index + 1, err == nil
+	}
+	if program.Records[index].Kind == 4 {
+		return fmt.Sprint(program.Records[index].Data), index + 1, true
+	}
+	if program.Records[index].Kind == LookupOpcode("-") && index+1 < end && program.Records[index+1].Kind == 4 {
+		return fmt.Sprint(-int32(program.Records[index+1].Data)), index + 2, true
+	}
+	return "", index, false
 }
 
 func NativePuppetChoiceAt(point uint32, choices []PuppetChoice) (int32, bool) {

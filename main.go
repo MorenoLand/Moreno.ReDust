@@ -303,6 +303,14 @@ func run() error {
 		jonesInteractionPuppetSpeaking
 		jonesInteractionPuppetChoices
 	)
+	const (
+		marieInteractionIdle uint8 = iota
+		marieInteractionMoving
+		marieInteractionFacing
+		marieInteractionPuppetPending
+		marieInteractionPuppetSpeaking
+		marieInteractionPuppetChoices
+	)
 	leroyPhase, leroyInteractionStage := int16(0), leroyInteractionIdle
 	var leroyWalk *scripts.NativeActorWalkJob
 	var leroyReturnPosition [3]int16
@@ -341,6 +349,26 @@ func run() error {
 	jonesChoicePressIndex, jonesChoiceOutline := -1, -1
 	jonesNextChoiceGroup := -1
 	var jonesSetPhaseOnFinish bool
+	marieInteractionStage := marieInteractionIdle
+	mariePhase, marieFlag1, marieFlag2, marieFlag3 := int16(0), false, false, false
+	marieActorValue := int32(0)
+	marieHandItem, marieHandFlag := "", int16(0)
+	var mariePuppet *render.Puppet
+	var mariePuppetTable assets.PuppetSpeechTable
+	var mariePuppetProgram, marieInventoryProgram scripts.Program
+	var marieHandBevelChoices []scripts.PuppetChoice
+	var marieDialogue *engine.PuppetDialogue
+	var marieConversationBase, marieChoiceBase render.IndexedFrame
+	var marieChoiceGroups [][]scripts.PuppetChoice
+	var marieActiveChoices []scripts.PuppetChoice
+	var marieChoiceGroup int
+	var marieDialogueSkip bool
+	var marieChoicePressActive bool
+	var marieChoicePressEvent int32
+	marieChoicePressIndex, marieChoiceOutline := -1, -1
+	marieNextChoiceGroup := -1
+	var marieSetPhaseOnFinish bool
+	var marieFinishNPC bool
 	var helpPuppet *render.Puppet
 	var helpPuppetTable assets.PuppetSpeechTable
 	var helpPuppetProgram scripts.Program
@@ -369,6 +397,12 @@ func run() error {
 	var boneDragLast image.Point
 	var dog2PhaseAfterHelp bool
 	defer func() {
+		if marieDialogue != nil {
+			_ = marieDialogue.Close()
+		}
+		if mariePuppet != nil {
+			_ = mariePuppet.Close()
+		}
 		if jonesDialogue != nil {
 			_ = jonesDialogue.Close()
 		}
@@ -1486,7 +1520,6 @@ func run() error {
 		return nil
 	}
 	finishJonesDialogue = func() error {
-		jonesActorValue++
 		if jonesSetPhaseOnFinish {
 			jonesPhase, jonesSetPhaseOnFinish = 1, false
 		}
@@ -1501,6 +1534,7 @@ func run() error {
 			jonesNextChoiceGroup = -1
 			return showJonesChoices(group)
 		}
+		jonesActorValue++
 		jonesInteractionStage = jonesInteractionIdle
 		actorPoses["jones"] = "stand"
 		if jonesVisible && activeSetName == "town" {
@@ -1630,6 +1664,331 @@ func run() error {
 		jonesInteractionStage = jonesInteractionFacing
 		if !jonesTurnActive {
 			jonesInteractionStage = jonesInteractionPuppetPending
+		}
+		return true, nil
+	}
+	openMariePuppet := func() error {
+		if mariePuppet != nil {
+			return nil
+		}
+		puppet, err := render.OpenPuppet(workspace, "PUPPETS/MARIE.PUP")
+		if err != nil {
+			return err
+		}
+		cache, err := workspace.OpenResourceCache("PUPPETS/MARIE.PUP")
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		lease, err := cache.Acquire(54)
+		if err != nil {
+			_ = cache.Close()
+			_ = puppet.Close()
+			return err
+		}
+		data, err := lease.Bytes()
+		if closeErr := lease.Close(); err == nil {
+			err = closeErr
+		}
+		if closeErr := cache.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		program, err := scripts.ParseProgram(data)
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		groups, err := scripts.PuppetBevelChoiceGroups(program, "twonite")
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		table, err := workspace.OpenPuppetSpeechTable("PUPPETS/MARIE.PUP")
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		inventoryCache, err := workspace.OpenResourceCache("DATA/INVEN.PRP")
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		inventoryLease, err := inventoryCache.Acquire(1)
+		if err != nil {
+			_ = inventoryCache.Close()
+			_ = puppet.Close()
+			return err
+		}
+		inventoryData, err := inventoryLease.Bytes()
+		if closeErr := inventoryLease.Close(); err == nil {
+			err = closeErr
+		}
+		if closeErr := inventoryCache.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		inventoryProgram, err := scripts.ParseProgram(inventoryData)
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		handChoices, err := scripts.PuppetBevelChoices(inventoryProgram, "addhandbevel")
+		if err != nil {
+			_ = puppet.Close()
+			return err
+		}
+		mariePuppet, mariePuppetTable, mariePuppetProgram, marieInventoryProgram = puppet, table, program, inventoryProgram
+		marieChoiceGroups, marieHandBevelChoices = groups, handChoices
+		return nil
+	}
+	var drawMarieChoices func(int) error
+	var showMarieChoices func(int) error
+	var finishMarieDialogue func() error
+	var startMarieSpeech func([]string, int, bool, bool) error
+	drawMarieChoices = func(outline int) error {
+		labels := make([]string, len(marieActiveChoices))
+		for index, choice := range marieActiveChoices {
+			labels[index] = choice.Text
+		}
+		frame, err := mariePuppet.ChoiceFrame(marieChoiceBase, mariePuppetTable.PanelResource, labels)
+		if err != nil {
+			return fmt.Errorf("render Marie choice panel: %w", err)
+		}
+		if outline >= 0 {
+			frame, err = render.DrawNativePuppetChoiceBevel(frame, outline)
+			if err != nil {
+				return fmt.Errorf("render Marie choice bevel: %w", err)
+			}
+		}
+		currentFrame, stageFrame = frame, frame
+		marieChoiceOutline = outline
+		return nil
+	}
+	showMarieChoices = func(group int) error {
+		if group < 0 || group >= len(marieChoiceGroups) {
+			return fmt.Errorf("Marie twonite choice group %d is outside %d groups", group, len(marieChoiceGroups))
+		}
+		marieActiveChoices = marieActiveChoices[:0]
+		for _, choice := range marieChoiceGroups[group] {
+			include := true
+			if group == 2 {
+				switch choice.EventID {
+				case 203:
+					include = !marieFlag1
+				case 102:
+					include = !marieFlag2
+				case 103:
+					include = !marieFlag3
+				}
+			}
+			if include {
+				marieActiveChoices = append(marieActiveChoices, choice)
+			}
+		}
+		if group == 2 && len(marieActiveChoices) <= 3 {
+			var handChoice scripts.PuppetChoice
+			var found bool
+			var err error
+			if marieHandFlag == 1 && len(marieHandBevelChoices) > 0 {
+				handChoice, found = marieHandBevelChoices[0], true
+			} else {
+				handChoice, found, err = scripts.PuppetBevelChoiceInCase(marieInventoryProgram, "addhandbevel", "handitem", marieHandItem)
+			}
+			if err != nil {
+				return err
+			}
+			if found {
+				marieActiveChoices = append(marieActiveChoices, handChoice)
+			}
+		}
+		if len(marieActiveChoices) == 0 {
+			return fmt.Errorf("Marie twonite group %d has no native choices", group)
+		}
+		marieChoiceGroup = group
+		marieChoiceBase, marieChoicePressActive = currentFrame, false
+		marieChoicePressIndex, marieChoiceOutline = -1, -1
+		if err := drawMarieChoices(-1); err != nil {
+			return err
+		}
+		marieInteractionStage = marieInteractionPuppetChoices
+		return nil
+	}
+	startMarieSpeech = func(calls []string, nextGroup int, setPhase, putDown bool) error {
+		if marieDialogue != nil {
+			if err := marieDialogue.Close(); err != nil {
+				return err
+			}
+		}
+		dialogue, err := engine.NewPuppetDialogue(mariePuppet, mariePuppetTable.Entries, calls, audioContext)
+		if err != nil {
+			return err
+		}
+		frame, err := dialogue.Start(marieConversationBase, scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
+		if err != nil {
+			_ = dialogue.Close()
+			return err
+		}
+		marieDialogue, marieNextChoiceGroup, marieSetPhaseOnFinish, marieFinishNPC = dialogue, nextGroup, setPhase, putDown
+		marieInteractionStage = marieInteractionPuppetSpeaking
+		currentFrame, stageFrame = frame, frame
+		if *debug {
+			log.Printf("puppet=marie speech-lines=%d next-choice-group=%d phase-on-finish=%t putdown=%t", len(calls), nextGroup, setPhase, putDown)
+		}
+		return nil
+	}
+	finishMarieDialogue = func() error {
+		if marieSetPhaseOnFinish {
+			mariePhase, marieSetPhaseOnFinish = 1, false
+		}
+		if marieDialogue != nil {
+			if err := marieDialogue.Close(); err != nil {
+				return err
+			}
+			marieDialogue = nil
+		}
+		if marieNextChoiceGroup >= 0 {
+			group := marieNextChoiceGroup
+			marieNextChoiceGroup = -1
+			return showMarieChoices(group)
+		}
+		marieActorValue++
+		marieInteractionStage = marieInteractionIdle
+		actorPoses["marie"] = "stand"
+		if marieFinishNPC {
+			marieVisible, marieFinishNPC = false, false
+			nativeLoops.Stop(2, "marie")
+		} else if marieVisible && activeSetName == "town" {
+			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "marie", Callback: "marieidle", Remaining: 17}); status != 0 {
+				return fmt.Errorf("register Marie idle loop after dialogue returned status %#x", status)
+			}
+		}
+		if *debug {
+			log.Printf("actor=marie mousedown-complete actorvalue=%d mariephase=%d visible=%t", marieActorValue, mariePhase, marieVisible)
+		}
+		return refreshWorldScene()
+	}
+	startMarieEventResponse := func(event int32) error {
+		nextGroup, setPhase, putDown, occurrence := 2, false, false, 0
+		switch marieChoiceGroup {
+		case 0:
+			if event != 102 {
+				return fmt.Errorf("Marie twonite group 0 returned event %d", event)
+			}
+			nextGroup, occurrence = 1, 0
+		case 1:
+			if event != 101 {
+				return fmt.Errorf("Marie twonite group 1 returned event %d", event)
+			}
+			nextGroup, occurrence = 2, 0
+		case 2:
+			switch event {
+			case 203:
+				marieFlag1 = true
+			case 102:
+				marieFlag2, occurrence = true, 1
+			case 103:
+				marieFlag3 = true
+			case 202:
+				nextGroup, setPhase, putDown = -1, true, true
+			case 55555:
+				if *debug {
+					log.Printf("actor=marie hand-item selection is not translated handitem=%q", marieHandItem)
+				}
+				return showMarieChoices(2)
+			default:
+				return fmt.Errorf("Marie twonite group 2 returned event %d", event)
+			}
+		default:
+			return fmt.Errorf("Marie twonite has unsupported choice group %d", marieChoiceGroup)
+		}
+		calls, err := scripts.PuppetEventSpeechCallsOccurrence(mariePuppetProgram, "twonite", event, occurrence)
+		if err != nil {
+			return err
+		}
+		return startMarieSpeech(calls, nextGroup, setPhase, putDown)
+	}
+	startMarieConversation := func() error {
+		if err := openMariePuppet(); err != nil {
+			return fmt.Errorf("open Marie dialogue: %w", err)
+		}
+		if gameClock != 3 || mariePhase != 0 {
+			marieInteractionStage = marieInteractionIdle
+			if *debug {
+				log.Printf("puppet=marie blocked day=%d clock=%d mariephase=%d", gameDay, gameClock, mariePhase)
+			}
+			if marieVisible && activeSetName == "town" {
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "marie", Callback: "marieidle", Remaining: 17}); status != 0 {
+					return fmt.Errorf("register Marie idle loop after unsupported dialogue returned status %#x", status)
+				}
+			}
+			return nil
+		}
+		dialogueActors := make([]render.WorldActorSprite, 0, len(worldActors))
+		for _, actor := range worldActors {
+			if !strings.EqualFold(actor.Name, "marie") {
+				dialogueActors = append(dialogueActors, actor)
+			}
+		}
+		dialogueBackground, _, err := compositeWorld(backgroundFrame, worldPoint, dialogueActors)
+		if err != nil {
+			return fmt.Errorf("hide Marie world sprite for dialogue: %w", err)
+		}
+		panel, err := render.StageFrame(stage, currentPixels.Pixels)
+		if err != nil {
+			return fmt.Errorf("render Marie dialogue panel: %w", err)
+		}
+		marieConversationBase, err = composeMainPanel(dialogueBackground, panel)
+		if err != nil {
+			return fmt.Errorf("compose Marie dialogue background: %w", err)
+		}
+		palette, err := mariePuppet.Palette()
+		if err != nil {
+			return fmt.Errorf("load Marie PUP CLUT: %w", err)
+		}
+		marieConversationBase.Palette = palette
+		marieFlag1, marieFlag2, marieFlag3 = false, false, false
+		calls, err := scripts.PuppetSpeechCalls(mariePuppetProgram, "twonite", scripts.LookupOpcode("puppetclear"))
+		if err != nil {
+			return err
+		}
+		return startMarieSpeech(calls, 0, false, false)
+	}
+	beginMariePuppetTalk := func() (bool, error) {
+		if activeSetName != "town" || !marieVisible || marieInteractionStage != marieInteractionIdle || marieWalk != nil {
+			return false, nil
+		}
+		if gameDay == 5 || gameClock != 3 || mariePhase != 0 {
+			if *debug {
+				log.Printf("puppet=marie unavailable day=%d clock=%d mariephase=%d", gameDay, gameClock, mariePhase)
+			}
+			return false, nil
+		}
+		camera := render.NativeActorCameraPosition(worldPoint)
+		player := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
+		nativeLoops.Stop(2, "marie")
+		marieTurnActive = false
+		if scripts.NativeActorDistance2D(mariePosition, player) >= townActorHotDistance {
+			destination := [3]int16{player[0], player[1], 0}
+			heading := render.NativeActorHeadingToPoint(mariePosition, destination)
+			walk := scripts.NewNativeActorWalkJob(mariePosition, destination, heading, townCastWalkRate)
+			marieWalk, marieWalkTarget, marieInteractionStage = &walk, "", marieInteractionMoving
+			if *debug {
+				log.Printf("actor=marie walktopuppet destination=%v heading=%d", destination, heading)
+			}
+			return true, nil
+		}
+		actorTurnTargets["marie"] = render.NativeActorHeadingToPoint(mariePosition, player)
+		marieTurnActive = actorHeadings["marie"] != actorTurnTargets["marie"]
+		marieInteractionStage = marieInteractionFacing
+		if !marieTurnActive {
+			marieInteractionStage = marieInteractionPuppetPending
 		}
 		return true, nil
 	}
@@ -1940,6 +2299,9 @@ func run() error {
 			marieTurnActive = actorHeadings["marie"] != actorTurnTargets["marie"]
 			displayChanged = displayChanged || currentScene == 0
 		}
+		if !serviceAmbient && marieInteractionStage == marieInteractionFacing && !marieTurnActive {
+			marieInteractionStage = marieInteractionPuppetPending
+		}
 		if !serviceAmbient && jonesInteractionStage == jonesInteractionFacing && !jonesTurnActive {
 			jonesInteractionStage = jonesInteractionPuppetPending
 		}
@@ -2050,7 +2412,19 @@ func run() error {
 			displayChanged = displayChanged || mariePosition != previousPosition || actorHeadings["marie"] != previousHeading
 			if !walking {
 				marieWalk = nil
-				marieStar, marieWalkTarget, actorPoses["marie"] = marieWalkTarget, "", "stand"
+				actorPoses["marie"] = "stand"
+				if marieInteractionStage == marieInteractionMoving {
+					camera := render.NativeActorCameraPosition(worldPoint)
+					player := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
+					actorTurnTargets["marie"] = render.NativeActorHeadingToPoint(mariePosition, player)
+					marieTurnActive = actorHeadings["marie"] != actorTurnTargets["marie"]
+					marieInteractionStage = marieInteractionFacing
+					if !marieTurnActive {
+						marieInteractionStage = marieInteractionPuppetPending
+					}
+				} else {
+					marieStar, marieWalkTarget = marieWalkTarget, ""
+				}
 				if *debug {
 					log.Printf("actor=marie endwalk star=%s point=%v", marieStar, mariePosition)
 				}
@@ -2169,6 +2543,53 @@ func run() error {
 		if !serviceAmbient && displayChanged && jonesInteractionStage == jonesInteractionPuppetChoices {
 			if err := showJonesChoices(jonesChoiceGroup); err != nil {
 				return false, fmt.Errorf("refresh Jones choice panel: %w", err)
+			}
+			return true, nil
+		}
+		if !serviceAmbient && marieInteractionStage == marieInteractionPuppetPending {
+			if err := startMarieConversation(); err != nil {
+				return false, err
+			}
+			return true, nil
+		}
+		if !serviceAmbient && marieInteractionStage == marieInteractionPuppetSpeaking {
+			if marieDialogue == nil {
+				return false, fmt.Errorf("Marie dialogue state is missing its puppet player")
+			}
+			frameTick := scripts.NativeFrameUnits(scripts.NativeTickMilliseconds())
+			var frame render.IndexedFrame
+			var changed bool
+			var err error
+			if marieDialogueSkip {
+				frame, changed, err = marieDialogue.Skip()
+				marieDialogueSkip = false
+			} else {
+				frame, changed, err = marieDialogue.Update(frameTick)
+			}
+			if err != nil {
+				return false, fmt.Errorf("advance Marie dialogue: %w", err)
+			}
+			if changed {
+				currentFrame, stageFrame = frame, frame
+				if !marieDialogue.Active() {
+					if err := finishMarieDialogue(); err != nil {
+						return false, fmt.Errorf("finish Marie dialogue: %w", err)
+					}
+				}
+				return true, nil
+			}
+			if displayChanged {
+				frame, err = marieDialogue.Frame()
+				if err != nil {
+					return false, fmt.Errorf("refresh Marie dialogue frame: %w", err)
+				}
+				currentFrame, stageFrame = frame, frame
+				return true, nil
+			}
+		}
+		if !serviceAmbient && displayChanged && marieInteractionStage == marieInteractionPuppetChoices {
+			if err := showMarieChoices(marieChoiceGroup); err != nil {
+				return false, fmt.Errorf("refresh Marie choice panel: %w", err)
 			}
 			return true, nil
 		}
@@ -2318,6 +2739,11 @@ func run() error {
 			}
 			if jonesInteractionStage == jonesInteractionPuppetChoices {
 				if _, found := scripts.NativePuppetChoiceAt(point, jonesActiveChoices); found {
+					cursor = "touch"
+				}
+			}
+			if marieInteractionStage == marieInteractionPuppetChoices {
+				if _, found := scripts.NativePuppetChoiceAt(point, marieActiveChoices); found {
 					cursor = "touch"
 				}
 			}
@@ -2665,6 +3091,15 @@ func run() error {
 		if jonesInteractionStage != jonesInteractionIdle {
 			return
 		}
+		if marieInteractionStage == marieInteractionPuppetSpeaking {
+			if key == ebiten.KeySpace || key == ebiten.KeyEscape || key == ebiten.KeyQ || key == ebiten.KeyPeriod {
+				marieDialogueSkip = true
+			}
+			return
+		}
+		if marieInteractionStage != marieInteractionIdle {
+			return
+		}
 		if pendingSceneMovie != "" {
 			return
 		}
@@ -2782,6 +3217,21 @@ func run() error {
 			return currentFrame, false, nil
 		}
 		if jonesInteractionStage != jonesInteractionIdle {
+			return currentFrame, false, nil
+		}
+		if marieInteractionStage == marieInteractionPuppetChoices {
+			if mouseEvent.Button != ebiten.MouseButtonLeft {
+				return currentFrame, false, nil
+			}
+			event, found := scripts.NativePuppetChoiceAt(point, marieActiveChoices)
+			if !found {
+				return currentFrame, false, nil
+			}
+			marieChoicePressActive, marieChoicePressEvent = true, event
+			marieChoicePressIndex = (int(int16(point)) - 264) / 24
+			return currentFrame, false, nil
+		}
+		if marieInteractionStage != marieInteractionIdle {
 			return currentFrame, false, nil
 		}
 		if leroyInteractionStage != leroyInteractionIdle && leroyInteractionStage != leroyInteractionPuppetChoices {
@@ -3022,6 +3472,13 @@ func run() error {
 					}
 					return currentFrame, started, nil
 				}
+				if strings.EqualFold(actorName, "Marie") && marieInteractionStage == marieInteractionIdle {
+					started, err := beginMariePuppetTalk()
+					if err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+					return currentFrame, started, nil
+				}
 			}
 		}
 		if !hit {
@@ -3191,6 +3648,41 @@ func run() error {
 				}
 				if jonesChoiceOutline >= 0 {
 					if err := drawJonesChoices(-1); err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+					return currentFrame, true, nil
+				}
+				return currentFrame, false, nil
+			}
+			return currentFrame, false, nil
+		}
+		if marieInteractionStage == marieInteractionPuppetChoices && marieChoicePressActive {
+			event, found := scripts.NativePuppetChoiceAt(state.Point, marieActiveChoices)
+			outline := -1
+			if found && event == marieChoicePressEvent {
+				outline = (int(int16(state.Point)) - 264) / 24
+			}
+			if state.LeftDown {
+				if outline == marieChoiceOutline {
+					return currentFrame, false, nil
+				}
+				if err := drawMarieChoices(outline); err != nil {
+					return render.IndexedFrame{}, false, err
+				}
+				return currentFrame, true, nil
+			}
+			if state.LeftReleased {
+				selected := outline >= 0 && outline == marieChoicePressIndex
+				selectedEvent := marieChoicePressEvent
+				marieChoicePressActive, marieChoicePressIndex = false, -1
+				if selected {
+					if err := startMarieEventResponse(selectedEvent); err != nil {
+						return render.IndexedFrame{}, false, fmt.Errorf("run Marie choice %d: %w", selectedEvent, err)
+					}
+					return currentFrame, true, nil
+				}
+				if marieChoiceOutline >= 0 {
+					if err := drawMarieChoices(-1); err != nil {
 						return render.IndexedFrame{}, false, err
 					}
 					return currentFrame, true, nil
