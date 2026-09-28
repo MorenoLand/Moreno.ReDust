@@ -3251,6 +3251,13 @@ func run() error {
 		return displayChanged, nil
 	}
 	startSceneMovie := func(name string) error {
+		if !spotMovieStarting && (strings.EqualFold(name, "MOVIES/DOG1.MOV") || strings.EqualFold(name, "MOVIES/DOG2.MOV")) {
+			pendingSpotMovie = name
+			if *debug {
+				log.Printf("movie=%s routed=spotmovie", name)
+			}
+			return nil
+		}
 		if currentScene == 0 && !spotMovieStarting {
 			if err := refreshWorldScene(); err != nil {
 				return fmt.Errorf("refresh scene before movie %s: %w", name, err)
