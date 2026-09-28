@@ -3843,10 +3843,13 @@ func run() error {
 			waveVolume = 9
 		}
 		if waveVolume >= 0 {
-			if err := audio.SetWaveVolume(waveVolume); err != nil {
+			slider, status, err := scripts.NativeMenuVolume(waveVolume, audio.SetWaveVolume)
+			if err != nil {
 				log.Printf("set wave volume: %v", err)
+			} else if status != 0 {
+				log.Printf("set wave volume: status=%#x", status)
 			} else if *debug {
-				log.Printf("wavevolume=%d", waveVolume)
+				log.Printf("wavevolume=%d slider=%d,%d", waveVolume, slider.X, slider.Y)
 			}
 			return
 		}

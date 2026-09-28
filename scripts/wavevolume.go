@@ -5,6 +5,30 @@ import (
 	"fmt"
 )
 
+type MenuVolumeSlider struct {
+	X int
+	Y int
+}
+
+func NativeMenuVolume(level int, setWaveVolume func(int) error) (MenuVolumeSlider, uint16, error) {
+	if level < 0 || level > 9 {
+		return MenuVolumeSlider{}, 10, nil
+	}
+	if setWaveVolume == nil {
+		return MenuVolumeSlider{}, 0, fmt.Errorf("wave volume setter is unavailable")
+	}
+	if err := setWaveVolume(level); err != nil {
+		return MenuVolumeSlider{}, 0, err
+	}
+	slide := level
+	if slide == 0 {
+		slide = 1
+	} else if slide == 9 {
+		slide = 8
+	}
+	return MenuVolumeSlider{X: 117, Y: (8-slide)*14 + 225}, 0, nil
+}
+
 func (r *ConditionRuntime) DispatchWaveVolumeStatement(context any, program Program, start int, scope any) (uint16, error) {
 	if r == nil || start < 0 || start >= len(program.Records) || program.Records[start].Kind != LookupOpcode("wavevolume") {
 		return 0, fmt.Errorf("wavevolume statement index %d is invalid", start)
