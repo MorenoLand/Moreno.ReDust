@@ -219,15 +219,28 @@ func run() error {
 		stage.Close()
 		return fmt.Errorf("resolve G15 Help position: %w", err)
 	}
-	actorPoses := map[string]string{"leroy": "stand", "dog": "stand", "help": "stand"}
-	actorHeadings := map[string]int16{"leroy": 0, "dog": 32, "help": 0}
-	actorTurnTargets := map[string]int16{"leroy": 0, "help": 0}
-	actorTurnActive, helpTurnActive := false, false
+	jonesStartPosition, hasJonesStart, err := nightSet.ResolveLocation("town.jones1")
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("resolve Jones start position: %w", err)
+	}
+	jonesTargetPosition, hasJonesTarget, err := nightSet.ResolveLocation("town.jones2")
+	if err != nil {
+		stage.Close()
+		return fmt.Errorf("resolve Jones bar position: %w", err)
+	}
+	actorPoses := map[string]string{"leroy": "stand", "dog": "stand", "help": "stand", "jones": "stand"}
+	actorHeadings := map[string]int16{"leroy": 0, "dog": 32, "help": 0, "jones": 0}
+	actorTurnTargets := map[string]int16{"leroy": 0, "help": 0, "jones": 0}
+	actorTurnActive, helpTurnActive, jonesTurnActive := false, false, false
 	helpVisible, helpPhase, helpAttention := false, int16(0), int32(0)
+	jonesPosition, jonesVisible := jonesStartPosition, false
 	const leroyTurnRate int16 = 7
 	const leroyWalkRate int16 = 3
 	const helpWalkRate int16 = 3
 	const helpTurnRate int16 = 7
+	const jonesWalkRate int16 = 3
+	const jonesTurnRate int16 = 7
 	const (
 		leroyInteractionIdle uint8 = iota
 		leroyInteractionMoving
@@ -265,6 +278,7 @@ func run() error {
 	helpInteractionStage := helpInteractionIdle
 	helpActorPosition, helpReturnPosition := helpPosition, helpPosition
 	var helpWalk *scripts.NativeActorWalkJob
+	var jonesWalk *scripts.NativeActorWalkJob
 	var helpPuppet *render.Puppet
 	var helpPuppetTable assets.PuppetSpeechTable
 	var helpPuppetProgram scripts.Program
@@ -328,6 +342,13 @@ func run() error {
 				}
 				actor.Position, actor.Located = helpActorPosition, true
 				sprite, err := render.LoadCastActorFrame(workspace, gangCast, actor, actorPoses["help"], 0, 1450, render.NativeActorViewAngle(helpActorPosition, point, actorHeadings["help"]), 32)
+				if err != nil {
+					return nil, fmt.Errorf("load G15 actor %s: %w", actor.Name, err)
+				}
+				actors = append(actors, sprite)
+			} else if jonesVisible && strings.EqualFold(actor.Name, "Jones") {
+				actor.Position, actor.Located = jonesPosition, true
+				sprite, err := render.LoadCastActorFrame(workspace, gangCast, actor, actorPoses["jones"], 0, 1450, render.NativeActorViewAngle(jonesPosition, point, actorHeadings["jones"]), 32)
 				if err != nil {
 					return nil, fmt.Errorf("load G15 actor %s: %w", actor.Name, err)
 				}
@@ -1060,6 +1081,21 @@ func run() error {
 		helpWalk, helpInteractionStage = &walk, helpInteractionReturning
 		return nil
 	}
+	setupJonesBarActor := func() error {
+		if !hasJonesStart || !hasJonesTarget {
+			return fmt.Errorf("NITE.SET lacks town.jones1 or town.jones2")
+		}
+		nativeLoops.Stop(2, "jones")
+		jonesPosition, jonesVisible = jonesStartPosition, true
+		actorPoses["jones"] = "walk"
+		actorHeadings["jones"] = render.NativeActorHeadingToPoint(jonesStartPosition, jonesTargetPosition)
+		walk := scripts.NewNativeActorWalkJob(jonesStartPosition, jonesTargetPosition, actorHeadings["jones"], jonesWalkRate)
+		jonesWalk = &walk
+		if *debug {
+			log.Printf("actor=jones setup=bar set=town start=%v target=%v scale=1450 speed=%d", jonesStartPosition, jonesTargetPosition, jonesWalkRate)
+		}
+		return nil
+	}
 	finishHelpChoice := func() error {
 		if helpPendingResult.SetPhase {
 			helpPhase = helpPendingResult.Phase
@@ -1087,6 +1123,11 @@ func run() error {
 			helpWalk = nil
 			helpInteractionStage = helpInteractionIdle
 			nativeLoops.Stop(2, "help")
+		}
+		if helpPendingResult.GiveRing && helpPendingResult.HideHelp {
+			if err := setupJonesBarActor(); err != nil {
+				return fmt.Errorf("setup Jones after Ring handoff: %w", err)
+			}
 		}
 		if helpPendingResult.GiveBone {
 			boneWorldProp.Position, boneWorldProp.Heading, boneWorldProp.Scale = bonePosition, 32, 1200
@@ -1200,6 +1241,18 @@ func run() error {
 				if *debug {
 					log.Printf("actor=help pose=%s next=%s ticks=%d attention=%d", step.Pose, step.Callback, step.Remaining, helpAttention)
 				}
+			case "jonesidle":
+				camera := render.NativeActorCameraPosition(worldPoint)
+				player := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
+				if scripts.NativeActorDistance2D(jonesPosition, player) < 384 {
+					actorTurnTargets["jones"] = render.NativeActorHeadingToPoint(jonesPosition, player)
+					jonesTurnActive = actorHeadings["jones"] != actorTurnTargets["jones"]
+				}
+				loop.Remaining = 17
+				displayChanged = displayChanged || currentScene == 0
+				if *debug {
+					log.Printf("actor=jones idle=turn-check point=%v ticks=%d turn=%t", jonesPosition, loop.Remaining, jonesTurnActive)
+				}
 			default:
 				return 0, fmt.Errorf("unknown native loop callback %q", loop.Callback)
 			}
@@ -1231,6 +1284,14 @@ func run() error {
 			displayChanged = displayChanged || currentScene == 0
 			if *debug {
 				log.Printf("actor=help turn heading=%d target=%d active=%t", actorHeadings["help"], actorTurnTargets["help"], helpTurnActive)
+			}
+		}
+		if !serviceAmbient && jonesTurnActive {
+			actorHeadings["jones"] = scripts.NativeTurnStep(actorHeadings["jones"], actorTurnTargets["jones"], jonesTurnRate)
+			jonesTurnActive = actorHeadings["jones"] != actorTurnTargets["jones"]
+			displayChanged = displayChanged || currentScene == 0
+			if *debug {
+				log.Printf("actor=jones turn heading=%d target=%d active=%t", actorHeadings["jones"], actorTurnTargets["jones"], jonesTurnActive)
 			}
 		}
 		if !serviceAmbient && helpInteractionStage == helpInteractionFacing && !helpTurnActive {
@@ -1288,6 +1349,26 @@ func run() error {
 						return false, fmt.Errorf("resume Help idle callback: %w", err)
 					}
 					displayChanged = true
+				}
+			}
+		}
+		if jonesWalk != nil {
+			previousPosition, previousHeading := jonesPosition, actorHeadings["jones"]
+			var walking bool
+			jonesPosition, actorHeadings["jones"], walking = jonesWalk.Pass(jonesPosition, actorHeadings["jones"], jonesTurnRate)
+			displayChanged = displayChanged || jonesPosition != previousPosition || actorHeadings["jones"] != previousHeading
+			if *debug && (jonesPosition != previousPosition || actorHeadings["jones"] != previousHeading) {
+				log.Printf("actor=jones walk point=%v heading=%d active=%t", jonesPosition, actorHeadings["jones"], walking)
+			}
+			if !walking {
+				jonesWalk = nil
+				actorPoses["jones"] = "stand"
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "jones", Callback: "jonesidle", Remaining: 17}); status != 0 {
+					return false, fmt.Errorf("register Jones idle loop returned status %#x", status)
+				}
+				displayChanged = true
+				if *debug {
+					log.Printf("actor=jones endwalk point=%v pose=stand idle=jonesidle", jonesPosition)
 				}
 			}
 		}
