@@ -787,6 +787,56 @@ func run() error {
 		stage.Close()
 		return fmt.Errorf("render G15 actors: %w", err)
 	}
+	// # The resting pose, shared by every conversation
+	//
+	// A conversation's base deliberately leaves the speaker's own world sprite out, because
+	// the puppet stands in for it while a line plays. That left the actor present **only**
+	// while a line was playing: a choice list, or a conversation with no scripted speech,
+	// showed nobody at all.
+	//
+	// So the base gets the puppet's **starting pose** composited into it — row 0 of a cue
+	// table, which is the pose its line begins from. A line that starts later simply draws
+	// over it.
+	//
+	// Row 0 is a *per-line* pose rather than one global neutral: measured on `LEROY.PUP`, 63
+	// of 73 lines open with frame 0 in every slot and ten open in a variant. The ten are a
+	// small minority, which is why the symptom looked intermittent. Where the caller knows
+	// which line the conversation will speak it passes that name, so the pose is exactly
+	// right; where it does not, the first line in the table stands in.
+	withRestingPuppet := func(base render.IndexedFrame, puppet *render.Puppet, table assets.PuppetSpeechTable, speech []string, who string) (render.IndexedFrame, error) {
+		if puppet == nil {
+			return base, nil
+		}
+		palette, err := puppet.Palette()
+		if err != nil {
+			return render.IndexedFrame{}, fmt.Errorf("load %s PUP CLUT: %w", who, err)
+		}
+		base.Palette = palette
+		wanted := ""
+		if len(speech) > 0 {
+			wanted = speech[0]
+		}
+		cue, ok := uint32(0), false
+		for _, entry := range table.Entries {
+			if wanted == "" || strings.EqualFold(entry.Name, wanted) {
+				cue, ok = entry.CueResource, true
+				break
+			}
+		}
+		if wanted != "" && !ok {
+			return render.IndexedFrame{}, fmt.Errorf("%s speech %q is missing from the line table", who, wanted)
+		}
+		if !ok {
+			// No line to take a pose from, so the conversation shows its panel alone. That is
+			// the one case with no figure, and it is a conversation with nothing to say.
+			return base, nil
+		}
+		resting, err := puppet.RestingFrame(base, cue)
+		if err != nil {
+			return render.IndexedFrame{}, fmt.Errorf("compose %s resting pose: %w", who, err)
+		}
+		return resting, nil
+	}
 	composeMainPanel := func(worldBackground, panel render.IndexedFrame) (render.IndexedFrame, error) {
 		frame, err := render.CompositeUnderlay(worldBackground, panel)
 		if err != nil {
@@ -1438,17 +1488,7 @@ func run() error {
 		leroyPuppet, leroyPuppetTable, leroyChoices = puppet, table, choices
 		return nil
 	}
-	// leroyCueResourceFor resolves a speech name to its cue resource, which is what the
-	// resting pose is built from. Every line's row 0 is the same neutral pose, so any line
-	// in the conversation will do.
-	leroyCueResourceFor := func(table assets.PuppetSpeechTable, name string) (uint32, error) {
-		for _, speech := range table.Entries {
-			if strings.EqualFold(speech.Name, name) {
-				return speech.CueResource, nil
-			}
-		}
-		return 0, fmt.Errorf("Leroy speech %q is missing from the line table", name)
-	}
+	// leroyCueResourceFor is no longer needed: `withRestingPuppet` resolves the cue.
 	var showLeroyChoices func() error
 	startLeroyBySign := func() error {
 		if err := openLeroyPuppet(); err != nil {
@@ -1472,26 +1512,11 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("compose Leroy dialogue background: %w", err)
 		}
-		palette, err := leroyPuppet.Palette()
-		if err != nil {
-			return fmt.Errorf("load Leroy PUP CLUT: %w", err)
-		}
-		leroyConversationBase.Palette = palette
-		// **Composite the puppet's resting pose into the conversation base.** The base
-		// deliberately omits Leroy's world sprite, so without this every state that is not
-		// mid-line — the choice list, and a conversation with no scripted speech — showed
-		// nobody at all. A line that starts later draws over the pose.
 		bySign := scripts.LeroyBySignEntryForPhase(leroyPhase)
-		if len(bySign.Speech) > 0 {
-			restingCue, err := leroyCueResourceFor(leroyPuppetTable, bySign.Speech[0])
-			if err != nil {
-				return err
-			}
-			resting, err := leroyPuppet.RestingFrame(leroyConversationBase, restingCue)
-			if err != nil {
-				return fmt.Errorf("compose Leroy resting pose: %w", err)
-			}
-			leroyConversationBase = resting
+		leroyConversationBase, err = withRestingPuppet(leroyConversationBase,
+			leroyPuppet, leroyPuppetTable, bySign.Speech, "Leroy")
+		if err != nil {
+			return err
 		}
 		if leroyDialogue != nil {
 			if err := leroyDialogue.Close(); err != nil {
@@ -1755,11 +1780,11 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("compose Help dialogue background: %w", err)
 		}
-		palette, err := helpPuppet.Palette()
+		helpConversationBase, err = withRestingPuppet(helpConversationBase,
+			helpPuppet, helpPuppetTable, nil, "Help")
 		if err != nil {
-			return fmt.Errorf("load Help PUP CLUT: %w", err)
+			return err
 		}
-		helpConversationBase.Palette = palette
 		helpPendingResult = scripts.HelpChoiceResult{}
 		helpDelayReady, helpInitialPage = false, false
 		return startHelpPage(scripts.HelpPuppetEntryPage(helpPhase, dogVisibleState))
@@ -1876,6 +1901,10 @@ func run() error {
 			return fmt.Errorf("load Trotter PUP palette: %w", err)
 		}
 		base.Palette = palette
+		base, err = withRestingPuppet(base, trotterPuppet, trotterPuppetTable, nil, "Trotter")
+		if err != nil {
+			return err
+		}
 		trotterConversationBase = base
 		return nil
 	}
@@ -2153,6 +2182,10 @@ func run() error {
 		base, err := composeMainPanel(dialogueBackground, panel)
 		if err != nil {
 			return fmt.Errorf("compose Isao dialogue background: %w", err)
+		}
+		base, err = withRestingPuppet(base, isaoPuppet, isaoPuppetTable, nil, "Isao")
+		if err != nil {
+			return err
 		}
 		isaoConversationBase = base
 		return nil
@@ -2493,11 +2526,13 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("compose Jones dialogue background: %w", err)
 		}
-		palette, err := jonesPuppet.Palette()
+		// Jones's lines are resolved just below, so the pose falls back to the table's first
+		// line rather than the conversation's own. The figure is present either way.
+		jonesConversationBase, err = withRestingPuppet(jonesConversationBase,
+			jonesPuppet, jonesPuppetTable, nil, "Jones")
 		if err != nil {
-			return fmt.Errorf("load Jones PUP CLUT: %w", err)
+			return err
 		}
-		jonesConversationBase.Palette = palette
 		if jonesPhase == 0 {
 			calls, err := scripts.PuppetSpeechCalls(jonesPuppetProgram, "threenite", scripts.LookupOpcode("puppetclear"))
 			if err != nil {
@@ -2918,11 +2953,11 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("compose Marie dialogue background: %w", err)
 		}
-		palette, err := mariePuppet.Palette()
+		marieConversationBase, err = withRestingPuppet(marieConversationBase,
+			mariePuppet, mariePuppetTable, nil, "Marie")
 		if err != nil {
-			return fmt.Errorf("load Marie PUP CLUT: %w", err)
+			return err
 		}
-		marieConversationBase.Palette = palette
 		return nil
 	}
 	resumeMarieInventory := func() error {
