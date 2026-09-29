@@ -200,79 +200,135 @@ const (
 	StatusTextOutOfRangeDiag uint16 = 0x15E0
 )
 
-// PoolTextBlock holds the pool's text block and the write mark, which together are
-// what makes an offset valid.
+// PoolTextBlock holds the pool's text block, its write position and its byte limit.
 //
 // Each interned name is stored in the project's usual **Pascal** form: a length byte at
 // the offset, then the text, so an offset points at the length byte and a name of n
-// characters occupies n+1 bytes. The block is ValuePoolTextBlockBytes and the mark is a
-// **lower** bound — see Get, where the reference's comparison direction is easy to get
-// backwards.
+// characters occupies n+1 bytes.
+//
+// **The block grows upward, and `FUN_00427340` is what settles it.** Decompiling the
+// writer — the one function the previous entry had to leave as an explicit
+// approximation — shows the whole sequence:
+//
+//	used  = *(int *)(pool + 8);              // bytes written so far
+//	size  = (short)(length + 1);             // note the 16-bit truncation
+//	if (*(int *)(pool + 0xC) <= size + used) {   // the LIMIT would be reached
+//	    limit = size + 0x800 + limit;             // grow by 0x800 *plus* the text
+//	    block = GlobalReAlloc(block, limit, GMEM_MOVEABLE);
+//	}
+//	copy(name -> block + used);
+//	*(int *)(pool + 8) = used + size;        // advance
+//	return used;                              // the offset it was written at
+//
+// So the writer allocates the offset itself, returns it, and the write position moves
+// **up** past the string just written. That makes `Get`'s test — which refuses when
+// `used <= offset`, so a valid offset satisfies `offset < used` — self-consistent with
+// no gap or fudge of any kind. The earlier note's "one byte below the string" was a
+// workaround for a downward-growing model, and both the model and the workaround are
+// now gone: this file contains no approximation.
 type PoolTextBlock struct {
 	// Block is the block's contents. A real pool holds this in a second moveable
 	// allocation of ValuePoolTextBlockBytes.
 	Block []byte
-	// WriteOffset is the low-water mark of everything written, which bounds every
-	// valid offset from below.
+	// WriteOffset is **bytes written so far**, which bounds every valid offset from
+	// above. An offset is valid exactly when it is below this.
 	WriteOffset int
+	// Limit is the block's allocated size in bytes, at pool header offset `+0xC`. The
+	// writer grows the block when a new name would reach it.
+	Limit int
 }
 
-// PutAt writes a name into the text block at a caller-chosen offset and lowers the
-// block's low-water mark to it.
+// The growth rule for the text block, which is **not** the same as the slot table's.
 //
-// **The offset arithmetic is deliberately not modelled.** The function that hands out
-// offsets, `FUN_00427340`, is **not decompiled**, so how it derives an offset from the
-// write position is not established here. Two earlier attempts to infer it both
-// produced arithmetic that contradicted the reference's own bounds test: `Get` refuses
-// when `writeOffset <= offset`, so a valid offset satisfies `offset > writeOffset`, and
-// lowering the mark to a freshly written string's own offset would leave that string
-// sitting exactly on the mark and therefore refused. Rather than invent a third guess,
-// the offset is supplied by the caller and only the low-water mark is tracked.
-func (p *PoolTextBlock) PutAt(name []byte, offset int) error {
+//	limit = size + 0x800 + limit;        // grow by 0x800 plus the text's own size
+//	if (limit == 0) limit = 1;
+//
+// Two things are worth stating. The step is `0x800` rather than the slot table's
+// `0x14`, so **the two halves of one structure grow by different amounts** — a port
+// that shared one growth helper between them would mis-size the block. And the
+// overflow guard here is `if (newSize == 0) newSize = 1`, which is **a different
+// guard** from the slot table's `capacity * 0x20 == -0x14` and is *not* provably dead:
+// `size + 0x800 + limit` can wrap to zero once the limit passes about 4.29 billion, so
+// unlike its twin this one is reachable in principle. The contrast is recorded because
+// treating the two as the same idiom would mis-state one of them.
+const (
+	// ValuePoolTextGrowth is the text block's growth step, 0x800.
+	ValuePoolTextGrowth = 0x800
+	// ValuePoolTextMinSize is the overflow guard's fallback.
+	ValuePoolTextMinSize = 1
+)
+
+// RequiredTextSize reproduces the growth arithmetic for a new limit.
+//
+// **The addition is done in 32 bits on purpose.** The reference is a 32-bit binary, so
+// `size + 0x800 + limit` wraps at 2^32 — and that wrap is the *only* way its
+// `if (newSize == 0) newSize = 1` guard can fire. Computing the same expression in Go's
+// 64-bit `int` would make the guard permanently unreachable and would silently differ
+// from the reference for any limit near 4.29 billion, so the truncation is transcribed
+// rather than widened.
+func RequiredTextSize(size, limit int) int {
+	grown := int32(size) + int32(ValuePoolTextGrowth) + int32(limit)
+	if grown == 0 {
+		return ValuePoolTextMinSize
+	}
+	return int(grown)
+}
+
+// Put interns a name into the text block at the current write position and returns the
+// offset, which is what a slot stores. It reproduces FUN_00427340 including the 16-bit
+// truncation of the size and the overflow guard.
+func (p *PoolTextBlock) Put(name []byte) (int, error) {
 	if p == nil {
-		return fmt.Errorf("there is no text block")
+		return 0, fmt.Errorf("there is no text block")
 	}
 	if len(name) > 255 {
-		return fmt.Errorf("a name of %d bytes does not fit a Pascal length byte", len(name))
+		return 0, fmt.Errorf("a name of %d bytes does not fit a Pascal length byte", len(name))
 	}
-	needed := len(name) + 1
-	if offset < 0 {
-		return fmt.Errorf("the text offset %d is before the block's start", offset)
+	used := p.WriteOffset
+	// **The reference computes the size in 16 bits and stores that**, so a name long
+	// enough to overflow a short would be recorded as a smaller one. The pool's own
+	// 15-character name limit makes this unreachable, but the truncation is real
+	// arithmetic and is transcribed rather than "fixed" to a 32-bit size.
+	size := int(int16(uint16(len(name)) + 1))
+	// The limit test is `limit <= size + used`, so growing happens when the new text
+	// would *reach* the limit, not merely exceed it.
+	if p.Limit <= size+used {
+		p.Limit = RequiredTextSize(size, p.Limit)
+		if cap(p.Block) < p.Limit {
+			grown := make([]byte, p.Limit)
+			copy(grown, p.Block)
+			p.Block = grown
+		}
 	}
-	if offset+needed > len(p.Block) {
-		return fmt.Errorf("a %d byte name at +%d does not fit the %d byte block",
-			needed, offset, len(p.Block))
+	// Grow the buffer if the limit outran its capacity, which a caller-supplied block
+	// can do by raising the limit without resizing.
+	if p.WriteOffset+size > len(p.Block) {
+		grown := make([]byte, p.WriteOffset+size)
+		copy(grown, p.Block)
+		p.Block = grown
 	}
 	// Pascal form: the length byte at the offset, then the text.
+	offset := used
 	p.Block[offset] = byte(len(name))
 	copy(p.Block[offset+1:], name)
-	// The mark is the low-water mark of everything written, held **one byte below** it.
-	// The extra byte is not an approximation: the reference's test is
-	// `field <= offset` raises, so a valid offset satisfies `offset > field`, and a
-	// mark sitting exactly on the lowest written byte would refuse that very byte.
-	// This is the only place where the mark's exact value matters, and it follows from
-	// the comparison rather than from a guess about the writer.
-	if offset-1 < p.WriteOffset || p.WriteOffset == 0 {
-		p.WriteOffset = offset - 1
-	}
-	return nil
+	p.WriteOffset = used + size
+	return offset, nil
 }
 
 // Get copies out the text at an offset, applying the reference's bounds test.
 //
 // **The comparison is the reference's, and its direction is the easy thing to get
 // wrong.** `FUN_004272F0` raises the diagnostic when `*(int *)(pool + 8) <= offset`, so
-// a valid offset satisfies `offset > writeOffset` — the write mark is a *lower* bound,
-// not an upper one. An offset at or below the mark was never written and is refused.
-// That matters for a stale offset left over from before an eviction, which would sit
-// below the new mark.
+// a valid offset satisfies `offset < used` — the write position is an **upper** bound.
+// An offset at or above it was never written and is refused, which is what catches a
+// stale offset left over from before an eviction.
 func (p *PoolTextBlock) Get(offset int) (string, uint16, error) {
 	if p == nil {
 		return "", StatusTextOutOfRangeDiag, fmt.Errorf("there is no text block")
 	}
-	if offset < 0 || offset <= p.WriteOffset {
+	if offset < 0 || p.WriteOffset <= offset {
 		return "", StatusTextOutOfRangeDiag, fmt.Errorf(
-			"the text offset %d is not above the write mark %d (FUN_0042C470(0, %#x))",
+			"the text offset %d is not below the write position %d (FUN_0042C470(0, %#x))",
 			offset, p.WriteOffset, StatusTextOutOfRangeDiag)
 	}
 	if offset >= len(p.Block) {
@@ -318,27 +374,43 @@ type Eviction struct {
 	Relocated int
 	// Skipped counts the slots left alone because they held no text.
 	Skipped int
-	// NewBlockBytes is the size of the replacement block, 0x800.
+	// NewBlockBytes is the size the replacement block starts at, 0x800.
 	NewBlockBytes int
+	// NewUsed is the replacement's write position once the walk is done, which is the
+	// sum of the surviving names' sizes packed from zero.
+	NewUsed int
+	// NewLimit is the replacement's byte limit, still 0x800 unless a name forced it
+	// to grow.
+	NewLimit int
 	// OldBlockFreed records that the old block was released, which the reference does
 	// unconditionally once the walk finishes.
 	OldBlockFreed bool
 }
 
 // EvictPool compacts the text of every string slot into a fresh block, updating each
-// slot's offset and returning what was done. layout gives the slot count and text gives
-// the current contents and write offset; the slots are left in place because eviction
-// relocates text, not slots.
+// slot's offset and returning what was done.
+//
+// **With the writer mapped this is now exact rather than approximate.** The reference
+// interleaves two blocks: it points the pool at the **old** block and restores the old
+// write position to read a name out, then points it at the **new** block with the new
+// running position and calls the writer to get a fresh offset. Because the writer
+// allocates its own offset, the new block's layout is simply the names in slot order,
+// packed from zero — and the run of `uVar6` through the loop is that position being
+// read back after each write.
+//
+// The fresh block starts with a write position of **zero** and a limit of `0x800`, so a
+// compaction leaves the block no larger than a newly allocated pool's, and the writer
+// grows it again if the surviving names do not fit.
 func EvictPool(layout ValuePoolLayout, text *PoolTextBlock) (Eviction, error) {
 	if text == nil {
 		return Eviction{}, fmt.Errorf("there is no text block to evict")
 	}
 	result := Eviction{NewBlockBytes: ValuePoolTextBlockBytes}
-	fresh := &PoolTextBlock{Block: make([]byte, ValuePoolTextBlockBytes), WriteOffset: 0}
-	// The replacement's own offsets are handed out in step rather than derived, since
-	// the writer's arithmetic is not modelled; what matters is that each relocated name
-	// lands in the new block and that the old block is released.
-	cursor := 0
+	fresh := &PoolTextBlock{
+		Block:       make([]byte, ValuePoolTextBlockBytes),
+		WriteOffset: 0,
+		Limit:       ValuePoolTextBlockBytes,
+	}
 	for index := 1; index <= layout.Count; index++ {
 		kind := internedSlotKind(index)
 		if kind != ValueTypeString {
@@ -350,15 +422,16 @@ func EvictPool(layout ValuePoolLayout, text *PoolTextBlock) (Eviction, error) {
 		if err != nil {
 			return result, fmt.Errorf("slot %d: %w (status %#x)", index, err, status)
 		}
-		if err = fresh.PutAt([]byte(textOut), cursor); err != nil {
+		if _, err = fresh.Put([]byte(textOut)); err != nil {
 			return result, fmt.Errorf("slot %d: re-interning %q: %w", index, textOut, err)
 		}
-		cursor += len(textOut) + 1
 		result.Relocated++
 	}
 	// The old block is released unconditionally once the walk is done, and the pool
-	// takes the new block and its write offset.
+	// takes the new block, its write position and its limit.
 	result.OldBlockFreed = true
+	result.NewUsed = fresh.WriteOffset
+	result.NewLimit = fresh.Limit
 	return result, nil
 }
 
