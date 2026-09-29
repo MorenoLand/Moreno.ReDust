@@ -107,14 +107,16 @@ func RequireNumericArgument(kind uint16) (uint16, error) {
 // corresponding runtime slot is empty.
 //
 //	0x0045D368 -> "none"   currentflat with no active flat
-//	0x0045D07C -> "None"   currentset with no active set
+//	0x0045D07C -> "None"   the capitalised fallback, shared by currentset,
+//	                       currentpuppet and currentscene
 //	0x0045D0EC -> "actor"  the stage name hittest walks
 const (
 	// NameNone is the lowercase fallback, used by currentflat.
 	NameNone = "none"
-	// NameNoneUpper is the capitalised fallback, used by currentset. The
-	// reference stores both spellings in different slots and the difference is
-	// preserved rather than normalised, because scripts can compare against it.
+	// NameNoneUpper is the capitalised fallback, used by currentset,
+	// currentpuppet and currentscene. The reference stores both spellings and the
+	// difference is preserved rather than normalised, because a script can
+	// compare against either. See flags.go for the accessor family.
 	NameNoneUpper = "None"
 	// NameActor is the stage name the hittest handler walks.
 	NameActor = "actor"
