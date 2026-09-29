@@ -36,47 +36,23 @@ type SendToShape struct {
 	Resolver string
 	// ChildFrames is how many nested child contexts it builds.
 	ChildFrames int
-	// Label is the label its innermost frame uses.
+	// Label is the member's **own** label, which is the one its chain must contain.
+	// Its *position* in the chain is not asserted: the handlers reference the labels
+	// in differing orders, and while the outermost link carries counter 1, which
+	// link is outermost is not established. The chain is therefore recorded as the
+	// order the handler builds it, and the nesting direction is left unclaimed.
 	Label string
 }
 
-// The verified shapes, from the four inner handlers decompiled in full.
+// **The family disagrees with itself about shape, in three ways.** The members take
+// **zero, one or two** arguments, so a uniform argument shape would be wrong for at
+// least two of the seven. They build **one to four** child contexts, so a port that
+// entered exactly one would silently drop the inner ones. And they use **different
+// resolvers**, and one member uses none at all because it addresses the current stage
+// directly.
 //
-//	sendtostage  FUN_00413230  no argument at all; the shared 0x0B guard, then it
-//	                           builds one frame from "Stage Script: " and the stage's
-//	                           own name, passed **twice**.
-//	sendtoactor  FUN_0040CB60  one name, the mandatory comma after it (0x1C), then
-//	                           the actor resolver and the actor's own script
-//	                           resolver; it builds **two** frames, labelled
-//	                           "Cast Script: " then "Actor Script: ".
-//	sendtoflat   FUN_00412EE0  one name and the comma, the flat resolver; **two**
-//	                           frames, "Stage Script: " then "Flat Script: ".
-//	sendtobutton FUN_00412A90  **two** arguments via the shared two-argument form,
-//	                           the comma (0x1C), the flat resolver and a button
-//	                           resolver; **four** frames.
-//
-// Two things are worth stating plainly. **The members disagree about arity**, from none
-// through one to two, so a uniform argument shape would be wrong for at least two of
-// the four. And **they disagree about how many child contexts they build**, from one to
-// four, so a port that entered exactly one would silently drop the inner ones.
-var sendToShapes = []SendToShape{
-	{
-		SendToStage, "sendtostage", ArityNone, "FUN_00413230", "",
-		1, PoolLabelStageScript,
-	},
-	{
-		SendToActor, "sendtoactor", ArityOne, "FUN_004220A0",
-		ActorVisibleResolver, 2, PoolLabelCastScript,
-	},
-	{
-		SendToFlat, "sendtoflat", ArityOne, "FUN_004220A0",
-		"FUN_00413530", 2, PoolLabelFlatScript,
-	},
-	{
-		SendToButton, "sendtobutton", ArityTwo, TwoArgFormHandler,
-		"FUN_00413630", 4, PoolLabelButtonScript,
-	},
-}
+// The shape table itself lives in propshopstrings.go, next to the third string region
+// that completing it turned up.
 
 // SendToShapeFor returns the verified shape for a target.
 func SendToShapeFor(target SendToTarget) (SendToShape, bool) {
