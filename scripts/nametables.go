@@ -172,6 +172,57 @@ func (t NameTable) Lookup(data []byte, name string) (index int, row []byte, stat
 	return 0, nil, StatusNameNotFound, nil
 }
 
+// LookupCached reproduces the cached name lookup the engine uses for both the prop
+// table and the actor table. Verified `FUN_004213C0` and `FUN_0040D730` have the
+// same shape, differing only in their geometry:
+//
+//	if (cache < count && matches(row[cache], name)) return copy of row[cache];
+//	for (i = 0; i < count; i++)
+//	    if (matches(row[i], name)) { cache = i; return copy of row[i]; }
+//	return 0x0A;
+//
+// So the cache is checked first and **re-validated by name**, a stale index is
+// ignored rather than trusted, a scan hit replaces it, and a miss is the same
+// 0x0A the flat and scene resolvers use. Both callers were transcribed separately
+// before their shared shape was known; this is the single implementation, and
+// `LookupProp` and `LookupActor` both delegate to it.
+func LookupCached(table NameTable, records []byte, count StageObjectCount, name string, cache *PropCache) (index int, record []byte, status uint16, err error) {
+	if err = table.validate(); err != nil {
+		return 0, nil, 0, err
+	}
+	if count <= 0 {
+		return 0, nil, StatusNameNotFound, nil
+	}
+	row := func(i int) ([]byte, error) { return table.Row(records, i) }
+
+	// Step one: the cached index, if it is in range and still matches by name.
+	if cache != nil && cache.Valid && cache.Index >= 0 && cache.Index < int(count) {
+		candidate, rowErr := row(cache.Index)
+		if rowErr != nil {
+			return 0, nil, 0, rowErr
+		}
+		if equalASCIIFold(pascalTextOf(candidate[table.NameOffset:]), name) {
+			return cache.Index, candidate, 0, nil
+		}
+	}
+
+	// Step two: a linear scan, updating the cache on a hit.
+	for i := 0; i < int(count); i++ {
+		candidate, rowErr := row(i)
+		if rowErr != nil {
+			return 0, nil, 0, rowErr
+		}
+		if equalASCIIFold(pascalTextOf(candidate[table.NameOffset:]), name) {
+			if cache != nil {
+				cache.Index = i
+				cache.Valid = true
+			}
+			return i, candidate, 0, nil
+		}
+	}
+	return 0, nil, StatusNameNotFound, nil
+}
+
 // NameResolverGuard is the precondition a name resolver checks before it searches
 // its table. Both resolvers have one, and they differ: the flat table belongs to
 // an open stage while the scene table belongs to an active set.

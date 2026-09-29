@@ -84,6 +84,14 @@ var ActorTable = NameTable{
 	NameOffset:  ActorLookupNameOffset,
 }
 
+// LookupActor finds an actor record by name, reproducing FUN_0040D730. It shares
+// its implementation with the prop lookup, since the two were found to have the
+// same shape: a one-entry cache consulted first and re-validated by name, a linear
+// scan that updates the cache, and 0x0A for a miss. See LookupCached.
+func LookupActor(records []byte, count StageObjectCount, name string, cache *PropCache) (index int, record []byte, status uint16, err error) {
+	return LookupCached(ActorTable, records, count, name, cache)
+}
+
 // ActorTableMatchesTheObjectTable pins the relationship: the actor resolver and the
 // id-keyed object lookup walk the same rows, so their strides must agree, and
 // neither name offset may be confused with the other.

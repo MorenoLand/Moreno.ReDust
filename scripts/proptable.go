@@ -77,41 +77,11 @@ func (c *PropCache) Reset() {
 // one-entry cache. The cache is consulted first when its index is in range and
 // its name still matches; a scan hit updates it. A miss is status 0x0A, the same
 // not-found status the flat and scene resolvers use.
+//
+// The implementation is shared with the actor table's lookup, since the two were
+// found to have the same shape once both were mapped; see LookupCached.
 func LookupProp(table []byte, count StageObjectCount, name string, cache *PropCache) (index int, record []byte, status uint16, err error) {
-	if err = PropNameTable.validate(); err != nil {
-		return 0, nil, 0, err
-	}
-	if count <= 0 {
-		return 0, nil, StatusNameNotFound, nil
-	}
-	row := func(i int) ([]byte, error) { return PropNameTable.Row(table, i) }
-
-	// Step one: the cached index, if it is in range and still matches.
-	if cache != nil && cache.Valid && cache.Index >= 0 && cache.Index < int(count) {
-		candidate, rowErr := row(cache.Index)
-		if rowErr != nil {
-			return 0, nil, 0, rowErr
-		}
-		if equalASCIIFold(pascalTextOf(candidate[PropNameOffset:]), name) {
-			return cache.Index, candidate, 0, nil
-		}
-	}
-
-	// Step two: a linear scan, updating the cache on a hit.
-	for i := 0; i < int(count); i++ {
-		candidate, rowErr := row(i)
-		if rowErr != nil {
-			return 0, nil, 0, rowErr
-		}
-		if equalASCIIFold(pascalTextOf(candidate[PropNameOffset:]), name) {
-			if cache != nil {
-				cache.Index = i
-				cache.Valid = true
-			}
-			return i, candidate, 0, nil
-		}
-	}
-	return 0, nil, StatusNameNotFound, nil
+	return LookupCached(PropNameTable, table, count, name, cache)
 }
 
 // propxy's sub-field selector, verified from FUN_0041FEE0. propxy 16018 takes a
