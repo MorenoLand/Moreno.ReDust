@@ -506,7 +506,16 @@ func run() error {
 	var leroyDialogueRepeats, leroyDialogueReturns, leroyDialogueSetsPhase bool
 	var leroySkipDialogue bool
 	var leroyConversationBase render.IndexedFrame
-	var leroyChoiceBase render.IndexedFrame
+
+// leroyStandingSpeech is the line list the current conversation speaks, kept so the choice
+// screen can build the puppet's standing pose from the conversation's *own* first line
+// rather than from whichever line the table happens to list first.
+var leroyStandingSpeech []string
+	// A choice base used to be captured from `currentFrame` on entry, so the choice screen
+// inherited whatever was last on screen. That is what put an animated puppet's own pixels
+// under the standing pose and made the figure appear twice, so **there is no choice base
+// any more**: each choice screen builds its own from the conversation base, which is scene
+// only, plus the standing pose it draws itself.
 	helpInteractionStage := helpInteractionIdle
 	jonesInteractionStage := jonesInteractionIdle
 	jonesPhase, laurelPhase := int16(0), int16(0)
@@ -524,7 +533,7 @@ func run() error {
 	var isaoPuppet *render.Puppet
 	var isaoPuppetTable assets.PuppetSpeechTable
 	var isaoDialogue *engine.PuppetDialogue
-	var isaoConversationBase, isaoChoiceBase render.IndexedFrame
+	var isaoConversationBase render.IndexedFrame
 	var isaoChoiceGroups map[string][][]scripts.PuppetChoice
 	var isaoActiveChoices []scripts.PuppetChoice
 	var isaoCurrentCode string
@@ -550,7 +559,7 @@ func run() error {
 	var jonesPuppetTable assets.PuppetSpeechTable
 	var jonesPuppetProgram scripts.Program
 	var jonesDialogue *engine.PuppetDialogue
-	var jonesConversationBase, jonesChoiceBase render.IndexedFrame
+	var jonesConversationBase render.IndexedFrame
 	var jonesChoiceGroups [][]scripts.PuppetChoice
 	var jonesActiveChoices []scripts.PuppetChoice
 	var jonesChoiceGroup int
@@ -570,7 +579,7 @@ func run() error {
 	var mariePuppetProgram, marieInventoryProgram scripts.Program
 	var marieHandBevelChoices []scripts.PuppetChoice
 	var marieDialogue *engine.PuppetDialogue
-	var marieConversationBase, marieChoiceBase render.IndexedFrame
+	var marieConversationBase render.IndexedFrame
 	var marieChoiceGroups [][]scripts.PuppetChoice
 	var marieActiveChoices []scripts.PuppetChoice
 	var marieInventoryProjected []render.ProjectedFlatProp
@@ -590,7 +599,7 @@ func run() error {
 	var helpPuppetProgram scripts.Program
 	var helpDialogue *engine.PuppetDialogue
 	var helpDialogueSkip bool
-	var helpConversationBase, helpChoiceBase render.IndexedFrame
+	var helpConversationBase render.IndexedFrame
 	var helpActiveChoices []scripts.PuppetChoice
 	var helpPage string
 	var helpChoicePressActive bool
@@ -787,31 +796,32 @@ func run() error {
 		stage.Close()
 		return fmt.Errorf("render G15 actors: %w", err)
 	}
-	// # The resting pose, shared by every conversation
+	// # The standing pose, and why it is *not* baked into the base
 	//
 	// A conversation's base deliberately leaves the speaker's own world sprite out, because
-	// the puppet stands in for it while a line plays. That left the actor present **only**
-	// while a line was playing: a choice list, or a conversation with no scripted speech,
-	// showed nobody at all.
+	// the puppet stands in for it while a line plays. That left the actor present only while
+	// a line was playing, so a choice list showed nobody.
 	//
-	// So the base gets the puppet's **starting pose** composited into it — row 0 of a cue
-	// table, which is the pose its line begins from. A line that starts later simply draws
-	// over it.
+	// The obvious fix — composite the puppet's starting pose into the base — is **wrong**,
+	// and it was tried first. The base is what `PuppetDialogue` restores *behind* the
+	// puppet on every dirty region, so a base carrying a figure has that figure restored
+	// underneath the animated one: a transparent region of the animated frame reveals the
+	// pose, the actor appears twice, and the restore puts standing pixels where the scene
+	// should be.
 	//
-	// Row 0 is a *per-line* pose rather than one global neutral: measured on `LEROY.PUP`, 63
-	// of 73 lines open with frame 0 in every slot and ten open in a variant. The ten are a
-	// small minority, which is why the symptom looked intermittent. Where the caller knows
-	// which line the conversation will speak it passes that name, so the pose is exactly
-	// right; where it does not, the first line in the table stands in.
-	withRestingPuppet := func(base render.IndexedFrame, puppet *render.Puppet, table assets.PuppetSpeechTable, speech []string, who string) (render.IndexedFrame, error) {
+	// So the base stays **scene only**, and the figure is always an explicit step on top of
+	// it, drawn by whichever layer owns the moment: the dialogue while a line plays, the
+	// choice renderer when nobody is speaking. One figure, never two.
+	//
+	// The pose is row 0 of a cue table — the pose a line begins from. It is a *per-line*
+	// pose rather than one global neutral: on `LEROY.PUP`, 63 of 73 lines open with frame 0
+	// in every slot and ten open in a variant, which is why the original symptom looked
+	// intermittent. Where the caller knows which line the conversation will speak it passes
+	// that name; where it does not, the first line in the table stands in.
+	standingPoseOver := func(base render.IndexedFrame, puppet *render.Puppet, table assets.PuppetSpeechTable, speech []string, who string) (render.IndexedFrame, error) {
 		if puppet == nil {
 			return base, nil
 		}
-		palette, err := puppet.Palette()
-		if err != nil {
-			return render.IndexedFrame{}, fmt.Errorf("load %s PUP CLUT: %w", who, err)
-		}
-		base.Palette = palette
 		wanted := ""
 		if len(speech) > 0 {
 			wanted = speech[0]
@@ -827,15 +837,29 @@ func run() error {
 			return render.IndexedFrame{}, fmt.Errorf("%s speech %q is missing from the line table", who, wanted)
 		}
 		if !ok {
-			// No line to take a pose from, so the conversation shows its panel alone. That is
-			// the one case with no figure, and it is a conversation with nothing to say.
+			// No line to take a pose from, so there is no figure to stand in. That is the
+			// one case with nobody on stage, and it is a conversation with nothing to say.
 			return base, nil
 		}
-		resting, err := puppet.RestingFrame(base, cue)
+		pose, err := puppet.RestingFrame(base, cue)
 		if err != nil {
-			return render.IndexedFrame{}, fmt.Errorf("compose %s resting pose: %w", who, err)
+			return render.IndexedFrame{}, fmt.Errorf("compose %s standing pose: %w", who, err)
 		}
-		return resting, nil
+		return pose, nil
+	}
+	// withPuppetPalette applies the puppet's palette to a base without drawing anything, so
+	// a conversation's base carries the colours its figures will be drawn in and nothing
+	// more. **It must not draw the figure** — see standingPoseOver.
+	withPuppetPalette := func(base render.IndexedFrame, puppet *render.Puppet, who string) (render.IndexedFrame, error) {
+		if puppet == nil {
+			return base, nil
+		}
+		palette, err := puppet.Palette()
+		if err != nil {
+			return render.IndexedFrame{}, fmt.Errorf("load %s PUP CLUT: %w", who, err)
+		}
+		base.Palette = palette
+		return base, nil
 	}
 	composeMainPanel := func(worldBackground, panel render.IndexedFrame) (render.IndexedFrame, error) {
 		frame, err := render.CompositeUnderlay(worldBackground, panel)
@@ -1513,8 +1537,10 @@ func run() error {
 			return fmt.Errorf("compose Leroy dialogue background: %w", err)
 		}
 		bySign := scripts.LeroyBySignEntryForPhase(leroyPhase)
-		leroyConversationBase, err = withRestingPuppet(leroyConversationBase,
-			leroyPuppet, leroyPuppetTable, bySign.Speech, "Leroy")
+		leroyStandingSpeech = bySign.Speech
+		// **The base stays scene only.** The figure is added on top, by the dialogue while
+		// a line plays and by the choice renderer when nobody is speaking.
+		leroyConversationBase, err = withPuppetPalette(leroyConversationBase, leroyPuppet, "Leroy")
 		if err != nil {
 			return err
 		}
@@ -1551,7 +1577,15 @@ func run() error {
 		for index, choice := range leroyActiveChoices {
 			labels[index] = choice.Text
 		}
-		choiceBackground := leroyChoiceBase
+		// **The choice screen draws the standing pose over the scene, not the last animated
+		// frame.** Reusing `currentFrame` would put the animated puppet's own pixels in the
+		// base and then draw the pose on top of them, so the figure would appear twice. The
+		// conversation base is scene only, and the pose is this layer's contribution.
+		choiceBackground, err := standingPoseOver(leroyConversationBase,
+			leroyPuppet, leroyPuppetTable, leroyStandingSpeech, "Leroy")
+		if err != nil {
+			return err
+		}
 		frame, err := leroyPuppet.ChoiceFrame(choiceBackground, leroyPuppetTable.PanelResource, labels)
 		if err != nil {
 			return fmt.Errorf("render Leroy choice panel: %w", err)
@@ -1577,7 +1611,7 @@ func run() error {
 			return fmt.Errorf("Leroy bysign reached its event wait with no enabled choices")
 		}
 		if leroyInteractionStage != leroyInteractionPuppetChoices {
-			leroyChoiceBase, leroyChoicePressActive = currentFrame, false
+			leroyChoicePressActive = false
 			leroyChoicePressIndex, leroyChoiceOutline = -1, -1
 		}
 		if err := drawLeroyChoices(-1); err != nil {
@@ -1685,7 +1719,12 @@ func run() error {
 		for index, choice := range helpActiveChoices {
 			labels[index] = choice.Text
 		}
-		frame, err := helpPuppet.ChoiceFrame(helpChoiceBase, helpPuppetTable.PanelResource, labels)
+		choiceBackground, err := standingPoseOver(helpConversationBase,
+			helpPuppet, helpPuppetTable, nil, "Help")
+		if err != nil {
+			return err
+		}
+		frame, err := helpPuppet.ChoiceFrame(choiceBackground, helpPuppetTable.PanelResource, labels)
 		if err != nil {
 			return fmt.Errorf("render Help choice panel: %w", err)
 		}
@@ -1708,7 +1747,7 @@ func run() error {
 			return fmt.Errorf("HELP1.PUP %s reached its event wait with no choices", page)
 		}
 		helpPage, helpActiveChoices = page, choices
-		helpChoiceBase, helpChoicePressActive = currentFrame, false
+		helpChoicePressActive = false
 		helpChoicePressIndex, helpChoiceOutline = -1, -1
 		if err := drawHelpChoices(-1); err != nil {
 			return err
@@ -1780,8 +1819,7 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("compose Help dialogue background: %w", err)
 		}
-		helpConversationBase, err = withRestingPuppet(helpConversationBase,
-			helpPuppet, helpPuppetTable, nil, "Help")
+		helpConversationBase, err = withPuppetPalette(helpConversationBase, helpPuppet, "Help")
 		if err != nil {
 			return err
 		}
@@ -1901,7 +1939,7 @@ func run() error {
 			return fmt.Errorf("load Trotter PUP palette: %w", err)
 		}
 		base.Palette = palette
-		base, err = withRestingPuppet(base, trotterPuppet, trotterPuppetTable, nil, "Trotter")
+		base, err = withPuppetPalette(base, trotterPuppet, "Trotter")
 		if err != nil {
 			return err
 		}
@@ -2072,7 +2110,12 @@ func run() error {
 		for index, choice := range isaoActiveChoices {
 			labels[index] = choice.Text
 		}
-		frame, err := isaoPuppet.ChoiceFrame(isaoChoiceBase, isaoPuppetTable.PanelResource, labels)
+		choiceBackground, err := standingPoseOver(isaoConversationBase,
+			isaoPuppet, isaoPuppetTable, nil, "Isao")
+		if err != nil {
+			return err
+		}
+		frame, err := isaoPuppet.ChoiceFrame(choiceBackground, isaoPuppetTable.PanelResource, labels)
 		if err != nil {
 			return fmt.Errorf("render Isao choice panel: %w", err)
 		}
@@ -2136,7 +2179,7 @@ func run() error {
 			return fmt.Errorf("Isao %s choice group %d is empty", code, group)
 		}
 		isaoCurrentCode, isaoActiveChoices = code, choices
-		isaoChoiceBase, isaoChoicePressActive = currentFrame, false
+		isaoChoicePressActive = false
 		isaoChoicePressIndex, isaoChoiceOutline = -1, -1
 		if err := drawIsaoChoices(-1); err != nil {
 			return err
@@ -2183,7 +2226,7 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("compose Isao dialogue background: %w", err)
 		}
-		base, err = withRestingPuppet(base, isaoPuppet, isaoPuppetTable, nil, "Isao")
+		base, err = withPuppetPalette(base, isaoPuppet, "Isao")
 		if err != nil {
 			return err
 		}
@@ -2374,7 +2417,12 @@ func run() error {
 		for index, choice := range jonesActiveChoices {
 			labels[index] = choice.Text
 		}
-		frame, err := jonesPuppet.ChoiceFrame(jonesChoiceBase, jonesPuppetTable.PanelResource, labels)
+		choiceBackground, err := standingPoseOver(jonesConversationBase,
+			jonesPuppet, jonesPuppetTable, nil, "Jones")
+		if err != nil {
+			return err
+		}
+		frame, err := jonesPuppet.ChoiceFrame(choiceBackground, jonesPuppetTable.PanelResource, labels)
 		if err != nil {
 			return fmt.Errorf("render Jones choice panel: %w", err)
 		}
@@ -2405,7 +2453,7 @@ func run() error {
 			return fmt.Errorf("Jones threenite group %d has no native choices", group)
 		}
 		jonesChoiceGroup = group
-		jonesChoiceBase, jonesChoicePressActive = currentFrame, false
+		jonesChoicePressActive = false
 		jonesChoicePressIndex, jonesChoiceOutline = -1, -1
 		if err := drawJonesChoices(-1); err != nil {
 			return err
@@ -2528,8 +2576,7 @@ func run() error {
 		}
 		// Jones's lines are resolved just below, so the pose falls back to the table's first
 		// line rather than the conversation's own. The figure is present either way.
-		jonesConversationBase, err = withRestingPuppet(jonesConversationBase,
-			jonesPuppet, jonesPuppetTable, nil, "Jones")
+		jonesConversationBase, err = withPuppetPalette(jonesConversationBase, jonesPuppet, "Jones")
 		if err != nil {
 			return err
 		}
@@ -2676,7 +2723,12 @@ func run() error {
 		for index, choice := range marieActiveChoices {
 			labels[index] = choice.Text
 		}
-		frame, err := mariePuppet.ChoiceFrame(marieChoiceBase, mariePuppetTable.PanelResource, labels)
+		choiceBackground, err := standingPoseOver(marieConversationBase,
+			mariePuppet, mariePuppetTable, nil, "Marie")
+		if err != nil {
+			return err
+		}
+		frame, err := mariePuppet.ChoiceFrame(choiceBackground, mariePuppetTable.PanelResource, labels)
 		if err != nil {
 			return fmt.Errorf("render Marie choice panel: %w", err)
 		}
@@ -2731,7 +2783,7 @@ func run() error {
 			return fmt.Errorf("Marie twonite group %d has no native choices", group)
 		}
 		marieChoiceGroup = group
-		marieChoiceBase, marieChoicePressActive = currentFrame, false
+		marieChoicePressActive = false
 		marieChoicePressIndex, marieChoiceOutline = -1, -1
 		if err := drawMarieChoices(-1); err != nil {
 			return err
@@ -2953,8 +3005,7 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("compose Marie dialogue background: %w", err)
 		}
-		marieConversationBase, err = withRestingPuppet(marieConversationBase,
-			mariePuppet, mariePuppetTable, nil, "Marie")
+		marieConversationBase, err = withPuppetPalette(marieConversationBase, mariePuppet, "Marie")
 		if err != nil {
 			return err
 		}
