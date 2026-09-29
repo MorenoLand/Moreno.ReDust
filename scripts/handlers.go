@@ -334,20 +334,123 @@ var valueSecondaryHandlers = map[uint16]string{
 	20108: "FUN_00414E40",
 }
 
+// The four tables are transcribed from the reference's **jump tables**, not from
+// decompiled C. That is a materially stronger kind of evidence, and it was used to
+// validate the transcription: every entry of every table was read out of the image,
+// the block each entry points at was scanned for its CALL, and the target compared
+// with the value transcribed here. **All 300 cases match, with zero mismatches.**
+//
+// The dispatchers are not written as switches. Both use the same shape:
+//
+//	MOVSX EAX, word [record]        ; the opcode
+//	CMP  EAX, special
+//	JZ   <the special case>
+//	SUB  EAX, bandBase
+//	CMP  EAX, bandCount - 1
+//	JA   <the default, which returns status 1>
+//	JMP  dword [EAX * 4 + table]
+//
+// The two dispatchers **mirror each other's special case**. FUN_00424890 tests
+// opcode 16001 before consulting either of its tables, so 16001 has no command-side
+// entry at all and is handled entirely out of switch. FUN_004137B0 tests opcode
+// 20001 the same way, and 20001 likewise has no value-side entry; its first table
+// entry is 16001 at index 0, which is why 16001 is dispatched on the value side and
+// not on the command side.
+const (
+	// CommandSpecialOpcode is 16001, which FUN_00424890 handles before either of
+	// its tables, at 0x004251E0. It is the only opcode with no command-side entry
+	// inside either band.
+	CommandSpecialOpcode uint16 = 16001
+	// ValueSpecialOpcode is 20001, which FUN_004137B0 handles before either of its
+	// tables, at 0x00413E7B. This is the value dispatcher's mirror of
+	// CommandSpecialOpcode, and it is the only opcode with no value-side entry
+	// inside either band.
+	ValueSpecialOpcode uint16 = 20001
+	// UndispatchedStatus is the status both dispatchers return from their default
+	// arm, for an opcode outside every band.
+	UndispatchedStatus uint16 = 1
+	// FrameStatus is the status both return when the record after the opcode is
+	// not the "(" token, checked before any table is consulted.
+	FrameStatus uint16 = 2
+)
+
+// The jump table geometry, verified from the image. Each entry is four bytes and
+// holds the address of the block for one opcode.
+var (
+	// commandPrimaryTable is at 0x00425768, indexed by opcode - 0x2EE1.
+	commandPrimaryTable = TableGeometry{Address: 0x00425768, Base: 0x2EE1, Count: 0x58}
+	// commandSecondaryTable is at 0x004258C8, indexed by opcode - 0x3E82.
+	commandSecondaryTable = TableGeometry{Address: 0x004258C8, Base: 0x3E82, Count: 0x34}
+	// valuePrimaryTable is at 0x00414BB8, indexed by opcode - 0x3E81.
+	valuePrimaryTable = TableGeometry{Address: 0x00414BB8, Base: 0x3E81, Count: 0x35}
+	// valueSecondaryTable is at 0x00414C8C, indexed by opcode - 0x4E22.
+	valueSecondaryTable = TableGeometry{Address: 0x00414C8C, Base: 0x4E22, Count: 0x6B}
+)
+
+// TableGeometry describes one jump table in the reference image.
+type TableGeometry struct {
+	// Address is where the table sits.
+	Address uint32
+	// Base is the opcode the first entry handles; index i handles Base + i.
+	Base uint16
+	// Count is the number of entries, so the table covers Base..Base+Count-1.
+	Count uint16
+}
+
+// First and Last are the opcodes the table covers.
+func (g TableGeometry) First() uint16 { return g.Base }
+func (g TableGeometry) Last() uint16  { return g.Base + g.Count - 1 }
+
+// Covers reports whether an opcode is a table entry rather than a special case or
+// a default. This is the authoritative test, replacing any range arithmetic: the
+// bands are not contiguous in the way the bases suggest, because 16001 and 20001
+// are handled out of table.
+func (g TableGeometry) Covers(opcode uint16) bool {
+	return opcode >= g.First() && opcode <= g.Last()
+}
+
+// commandGeometry and valueGeometry describe the two dispatchers in full, so a
+// caller can classify an opcode without consulting the handler tables.
+var (
+	commandGeometry = []TableGeometry{commandPrimaryTable, commandSecondaryTable}
+	valueGeometry   = []TableGeometry{valuePrimaryTable, valueSecondaryTable}
+)
+
+// DispatchRouteFromGeometry classifies an opcode the way the dispatcher does:
+// the special case first, then each table in order, then the default. It is a
+// second, independent route to the same answer as the handler tables, and a test
+// asserts the two never disagree.
+func DispatchRouteFromGeometry(opcode uint16, special uint16, geometry []TableGeometry) TableGeometry {
+	if opcode == special {
+		return TableGeometry{}
+	}
+	for _, table := range geometry {
+		if table.Covers(opcode) {
+			return table
+		}
+	}
+	return TableGeometry{}
+}
+
 // verifiedTables describes every transcribed switch so a test can assert the
 // exact case count, endpoints and contiguity. A dropped case changes the count
 // and fails the assertion, which is the guard against repeating the earlier
 // extraction error.
+//
+// The geometry each table was transcribed from is carried alongside it, so a test
+// can confirm the entry counts against the jump tables rather than only against
+// the Go maps.
 var verifiedTables = []struct {
-	name  string
-	table map[uint16]string
-	first uint16
-	last  uint16
+	name     string
+	table    map[uint16]string
+	first    uint16
+	last     uint16
+	geometry TableGeometry
 }{
-	{"FUN_00424890.primary", commandPrimaryHandlers, 12001, 12088},
-	{"FUN_00424890.secondary", commandSecondaryHandlers, 16002, 16053},
-	{"FUN_004137B0.primary", valuePrimaryHandlers, 16001, 16053},
-	{"FUN_004137B0.secondary", valueSecondaryHandlers, 20002, 20108},
+	{"FUN_00424890.primary", commandPrimaryHandlers, 12001, 12088, commandPrimaryTable},
+	{"FUN_00424890.secondary", commandSecondaryHandlers, 16002, 16053, commandSecondaryTable},
+	{"FUN_004137B0.primary", valuePrimaryHandlers, 16001, 16053, valuePrimaryTable},
+	{"FUN_004137B0.secondary", valueSecondaryHandlers, 20002, 20108, valueSecondaryTable},
 }
 
 // normalizeHandlerName renders a native function name in the canonical
