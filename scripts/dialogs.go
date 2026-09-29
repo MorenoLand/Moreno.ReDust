@@ -42,6 +42,12 @@ const (
 	MBOK uint32 = 0x0000
 )
 
+// StringResourceLookup resolves a string resource id to its text, FUN_00428D40. **It is
+// not the dialogs' own**: the video driver's selector fetches its twenty driver names
+// through the same routine, so naming it here makes the sharing structural rather than a
+// coincidence of two comments.
+const StringResourceLookup = "FUN_00428D40"
+
 // The verified MessageBox type words and what they decompose to.
 const (
 	// DialogQuestionType is the uType questiondialog passes, 0x2024.
