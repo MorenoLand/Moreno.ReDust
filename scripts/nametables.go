@@ -61,15 +61,29 @@ var (
 	}
 )
 
+// CountSeparate marks a table whose row count lives in a different global rather
+// than immediately before the rows, which is the case for the id-keyed stage
+// object table in hittest.go. Such a table cannot be counted from its own buffer.
+const CountSeparate = -1
+
 // validate checks the table description is self-consistent, so a typo in a
 // geometry constant produces a clear error rather than a slice panic.
 func (t NameTable) validate() error {
-	if t.CountOffset < 0 || t.RowsOffset < 0 || t.RowSize <= 0 {
-		return fmt.Errorf("%s table geometry is not usable: count %d rows %d size %d",
-			t.Kind, t.CountOffset, t.RowsOffset, t.RowSize)
+	if t.RowsOffset < 0 || t.RowSize <= 0 {
+		return fmt.Errorf("%s table geometry is not usable: rows %d size %d",
+			t.Kind, t.RowsOffset, t.RowSize)
 	}
 	if t.NameOffset < 0 || t.NameOffset >= t.RowSize {
 		return fmt.Errorf("%s table name offset %d is outside a %d byte row", t.Kind, t.NameOffset, t.RowSize)
+	}
+	if t.CountOffset == CountSeparate {
+		// The count is supplied out of band, so there is nothing to check for
+		// adjacency and Count must not be used on this table.
+		return nil
+	}
+	if t.CountOffset < 0 {
+		return fmt.Errorf("%s table count offset %d is neither a real offset nor CountSeparate",
+			t.Kind, t.CountOffset)
 	}
 	// The reference reads the count as a DWORD sitting immediately before the
 	// first row, so the two offsets must be adjacent. A gap would mean the count
@@ -86,6 +100,9 @@ func (t NameTable) validate() error {
 func (t NameTable) Count(data []byte) (int, error) {
 	if err := t.validate(); err != nil {
 		return 0, err
+	}
+	if t.CountOffset == CountSeparate {
+		return 0, fmt.Errorf("%s table keeps its count out of band; pass it to LookupByID instead", t.Kind)
 	}
 	if t.CountOffset+4 > len(data) {
 		return 0, fmt.Errorf("%s table count at +%#x is past the %d byte table", t.Kind, t.CountOffset, len(data))
