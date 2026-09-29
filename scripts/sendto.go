@@ -73,14 +73,24 @@ type SendToForward struct {
 // sendToForwards is the verified family. Every CommandHandler and ValueHandler is
 // cross-checked against the two transcribed dispatch tables by the tests, so this
 // table cannot drift from either.
+//
+// **Two guards were corrected.** `sendtostage` was recorded as unguarded, on the
+// grounds that its inner handler went straight to building a child context.
+// Decompiling `FUN_00413230` in full shows it opens with
+// `if (DAT_00459A00 == 0) return 0x0B;` — the shared no-stage guard — before anything
+// else. It is the one member that takes **no argument at all**, which is presumably why
+// it looked argument-free and therefore unguarded. `sendtoactor` was also recorded as
+// unguarded, and its inner `FUN_0040CB60` likewise opens with the same `0x0B` test. Both
+// corrections matter: a port trusting this table would send to a stage that is not
+// open.
 var sendToForwards = []SendToForward{
-	{SendToActor, "sendtoactor", 12016, "FUN_0040CB40", 20084, "FUN_0040CB60", GuardNone},
+	{SendToActor, "sendtoactor", 12016, "FUN_0040CB40", 20084, "FUN_0040CB60", GuardRequireStage},
 	{SendToScene, "sendtoscene", 12034, "FUN_0041A180", 20085, "FUN_0041A1A0", GuardRequireSet},
 	{SendToProp, "sendtoprop", 12055, "FUN_00420CC0", 20088, "FUN_00420CE0", GuardNone},
 	{SendToShop, "sendtoshop", 12059, "FUN_00421020", 20089, "FUN_00421040", GuardNone},
 	{SendToButton, "sendtobutton", 12068, "FUN_00412A70", 20092, "FUN_00412A90", GuardRequireStage},
 	{SendToFlat, "sendtoflat", 12069, "FUN_00412EC0", 20093, "FUN_00412EE0", GuardRequireStage},
-	{SendToStage, "sendtostage", 12070, "FUN_00413210", 20094, "FUN_00413230", GuardNone},
+	{SendToStage, "sendtostage", 12070, "FUN_00413210", 20094, "FUN_00413230", GuardRequireStage},
 }
 
 // SendToForwardFor returns the forwarder for a command-side sendto opcode.
