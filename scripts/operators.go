@@ -146,6 +146,60 @@ const (
 // FUN_00424890 uses for a malformed command call frame, so the two share a code.
 const StatusMismatchedParen uint16 = 2
 
+// Operand result statuses, from FUN_004222E0, which applies one binary operator
+// to the value stack. It takes the stack index of the operator and the operator
+// kind, reads the operand to the left at that index and the operand to the right
+// at the next index, and switches on `kind - 0x1F41`.
+const (
+	// StatusDivideByZero is native status 0x37, returned by the 8004 case when
+	// the right operand is zero. It is checked AFTER both operands have been
+	// confirmed type 4, so a non-numeric divisor gives 0x0E rather than 0x37.
+	StatusDivideByZero uint16 = 0x37
+	// StatusConcatOverflow is native status 0x1A, returned by the 8007 string
+	// concatenation case when the combined length would exceed the 255-byte
+	// Pascal cap.
+	StatusConcatOverflow uint16 = 0x1A
+	// StatusWrongOperandType is 0x0E, declared alongside the value-result
+	// protocol in values.go and used here too: FUN_004222E0's arithmetic and
+	// logical cases both return it, the same status the value builtins return
+	// for a bad argument.
+	//
+	// OperatorArithmeticFirst is 0x1F41, 8001, the lowest operator kind
+	// FUN_004222E0's switch handles, and the base its cases are numbered from.
+	OperatorArithmeticFirst uint16 = 8001
+)
+
+// Verified operand type requirements per operator, from FUN_004222E0's cases.
+//
+// The four arithmetic operators 8001 `+`, 8002 `-`, 8003 `*` and 8004 `/` each
+// test that the left kind is 4 and the right kind is 4, returning 0x0E
+// otherwise. The two logical operators 8005 `&` and 8006 `|` each test that
+// BOTH kinds are 2, not 4, so a numeric operand to a logical operator is a
+// type error rather than a truthiness conversion. That is the part a port is
+// most likely to "fix" by treating nonzero as true, and doing so would accept
+// programs the reference rejects.
+const (
+	// OperatorTypeArithmetic is the required operand kind for 8001..8004.
+	OperatorTypeArithmetic uint16 = 4
+	// OperatorTypeLogical is the required operand kind for 8005 and 8006.
+	OperatorTypeLogical uint16 = 2
+)
+
+// StringLiteralOffsetBase documents the addressing of a type-3 literal, from
+// FUN_00422070:
+//
+//	if (*record != 3) return 0x0E;
+//	FUN_0042E6C0(*(int *)(record + 1) + (int)record, out)
+//
+// A string literal's data word is therefore a RELATIVE offset from the start of
+// its own record to the Pascal text, not an absolute address, an index into a
+// table, or inline text. The reference adds the offset to the record's own
+// address. The Go port models the same relationship against a pool that follows
+// the record stream, which is why Program.pascalRecord subtracts the records'
+// combined size; the two agree whenever the pool directly follows the records,
+// which is the shipped layout.
+const StringLiteralOffsetBase = "record address + data word"
+
 // UnaryMinus applies the verified unary negation from FUN_00422870: the operand
 // is negated only when it is type 4, and the result keeps the operand's type and
 // tail. A non-numeric operand yields the wrong-operand-type status instead,
