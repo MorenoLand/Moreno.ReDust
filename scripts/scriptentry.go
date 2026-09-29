@@ -9,7 +9,7 @@ import "fmt"
 //	guard                       the required context must exist
 //	scratch = label             FUN_0042E6C0(label, &DAT_00459BD0)
 //	scratch = label + name      FUN_0042E660(name, &DAT_00459BD0)
-//	clear the running slot       FUN_00418930()
+//	clear the result buffer       FUN_00418930()
 //
 // The assembled name is therefore "Stage Script: " followed by the resolved
 // stage name, and friends. Note the append direction: FUN_0042E660 appends its
@@ -174,25 +174,31 @@ type ScriptContext struct {
 }
 
 // ScriptContextState is the mutable state the entry path updates: the shared
-// scratch the handlers assemble into and the running-name slot FUN_00418930
-// clears.
+// scratch the handlers assemble into and the result buffer FUN_00418930 clears.
 type ScriptContextState struct {
 	// Scratch is DAT_00459BD0, the shared Pascal buffer the family builds names in.
 	Scratch []byte
-	// RunningName is DAT_00459720, the slot FUN_00418930 clears. It is zero
-	// length in the image, which is why clearing it is a one-byte write.
-	RunningName []byte
+	// ResultBuffer is DAT_00459720. It is the slot FUN_00418930 clears, and it is
+	// also what the `result` builtin reads: verified FUN_00415C20, the handler
+	// for opcode 16010, is just `*status = 0; FUN_00421F60(&DAT_00459720, out)`.
+	//
+	// An earlier draft called this the "running script name" slot. That was a
+	// guess from the name; the `result` handler is the evidence, and it makes the
+	// relationship concrete: the script-entry family clears the result buffer on
+	// the way into a new context, and `result` hands the engine's stored result
+	// back to the script.
+	ResultBuffer []byte
 }
 
-// ClearRunningName mirrors FUN_00418930, which copies the empty C string at
+// ClearResultBuffer mirrors FUN_00418930, which copies the empty C string at
 // 0x0045D4E1 into DAT_00459720. Verified: the address holds four zero bytes
 // between the "Stage Message: " terminator and "button", so the native call is a
 // Pascal copy of length zero and the slot ends up holding a single zero byte.
-func ClearRunningName(state *ScriptContextState) {
+func ClearResultBuffer(state *ScriptContextState) {
 	if state == nil {
 		return
 	}
-	state.RunningName = []byte{0}
+	state.ResultBuffer = []byte{0}
 }
 
 // ScriptEntryBlocked evaluates a spec's guard and returns the native status the
@@ -230,7 +236,7 @@ func OpenStageFileBlocked(ctx ScriptContext) uint16 {
 
 // EnterScriptContext performs the verified three steps of a script-entry
 // handler: check the guard, build the context name as the label followed by
-// the resolved name, and clear the running-name slot. It returns the native
+// the resolved name, and clear the result buffer. It returns the native
 // status; a non-zero status means the scratch was not touched, matching the
 // reference, which returns before any copy.
 func EnterScriptContext(spec ScriptEntrySpec, ctx ScriptContext, state *ScriptContextState, name string) (uint16, error) {
@@ -250,7 +256,7 @@ func EnterScriptContext(spec ScriptEntrySpec, ctx ScriptContext, state *ScriptCo
 		return 0, err
 	}
 	state.Scratch = appended
-	// Step three: clear the running-name slot.
-	ClearRunningName(state)
+	// Step three: clear the result buffer.
+	ClearResultBuffer(state)
 	return 0, nil
 }
