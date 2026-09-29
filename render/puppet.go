@@ -10,6 +10,11 @@ import (
 )
 
 const puppetFrameSlotCount = 11
+
+// PuppetSlotBackdrop is slot 0, the one slot that holds a full-viewport matte rather than a
+// body part. It is replaced on every cue rather than persisting, and over a scene it is not
+// drawn at all — the scene shows through it. Slots 1 and up are body parts.
+const PuppetSlotBackdrop = 0
 const puppetFrameSlotSize = 0x106
 const puppetFrameTableHeaderSize = 0x16
 const puppetFrameResourceListOffset = 0x1c
@@ -362,6 +367,81 @@ func (p *Puppet) DrawResource(canvas *PuppetCanvas, resource uint32, anchor imag
 	}
 	frame.Origin.X, frame.Origin.Y = frame.Origin.Y, frame.Origin.X
 	return canvas.Draw(frame, anchor)
+}
+
+// # The resting pose
+//
+// A conversation shows its puppet in a **neutral pose** whenever nobody is speaking — while
+// a choice list is up, and for a conversation that has no scripted speech at all.
+//
+// The pose is not a separate asset. It is **row 0 of the cue table**, which is the pose the
+// line *starts* from. Measured on `LEROY.PUP`, most lines open with frame 0 in every active
+// slot:
+//
+//	[0]=0 [1]=0 [2]=0 [3]=0 [4]=0 [5]=0 [6]=0 [7]=-1 ...
+//
+// but **ten of the sixty-odd lines open in a different pose** — one starts with slot 8 at
+// frame 7, another with slot 9 at frame 3, another with slot 1 at frame 5. So row 0 is each
+// line's own starting pose and **not one global neutral**, which is why the resting frame
+// must be built from the conversation's *own* first line rather than from any line.
+//
+// This exists because the conversation background deliberately leaves the speaker's world
+// sprite out — the dialogue draws the puppet in its place — so without the resting pose
+// every state that is not mid-line showed **nobody at all**.
+const (
+	// PuppetRestingCueRow is the cue row that holds the starting pose, which is what a
+	// conversation shows when nobody is speaking.
+	PuppetRestingCueRow = 0
+	// PuppetRestingFrame is the frame most lines name for every slot in row 0. It is the
+	// common case, **not** a requirement: ten lines name something else there.
+	PuppetRestingFrame = 0
+	// PuppetBackdropWidth and PuppetBackdropHeight are the backdrop matte's dimensions, and
+	// the height is also the puppet viewport's.
+	PuppetBackdropWidth  = 512
+	PuppetBackdropHeight = 264
+)
+
+// RestingFrame composites a puppet's starting pose over a background, using the cue
+// resource of one of the conversation's own speech lines. The result is what the
+// conversation shows when nobody is speaking, and a line that starts later draws over it.
+func (p *Puppet) RestingFrame(background IndexedFrame, cueResource uint32) (IndexedFrame, error) {
+	if p == nil || p.cache == nil {
+		return IndexedFrame{}, fmt.Errorf("puppet is closed")
+	}
+	palette, err := p.Palette()
+	if err != nil {
+		return IndexedFrame{}, fmt.Errorf("load puppet CLUT: %w", err)
+	}
+	cues, err := p.CueTimeline(cueResource)
+	if err != nil {
+		return IndexedFrame{}, fmt.Errorf("load puppet cue resource %d: %w", cueResource, err)
+	}
+	if len(cues) == 0 {
+		return IndexedFrame{}, fmt.Errorf("puppet cue resource %d has no rows", cueResource)
+	}
+	resting := cues[PuppetRestingCueRow]
+	// Row 0 must name at least one body slot, or there is no figure to composite and the
+	// caller would get back the bare scene — which is the bug this exists to fix. The
+	// backdrop alone does not count, because it is a matte that is not drawn over a scene.
+	body := 0
+	for slot, cueSlot := range resting.Slots {
+		if slot != PuppetSlotBackdrop && cueSlot.Frame >= 0 {
+			body++
+		}
+	}
+	if body == 0 {
+		return IndexedFrame{}, fmt.Errorf("puppet cue resource %d row 0 names no body slot, so it holds no standing figure", cueResource)
+	}
+	background.Palette = palette
+	canvas, err := NewPuppetCanvas(background)
+	if err != nil {
+		return IndexedFrame{}, err
+	}
+	canvas.SetClip(image.Rect(0, 0, background.Width, min(background.Height, PuppetBackdropHeight)))
+	if err := p.DrawCueOverScene(canvas, resting); err != nil {
+		return IndexedFrame{}, err
+	}
+	return canvas.Frame(), nil
 }
 
 func (p *Puppet) Close() error {

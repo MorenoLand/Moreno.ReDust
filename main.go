@@ -1438,6 +1438,17 @@ func run() error {
 		leroyPuppet, leroyPuppetTable, leroyChoices = puppet, table, choices
 		return nil
 	}
+	// leroyCueResourceFor resolves a speech name to its cue resource, which is what the
+	// resting pose is built from. Every line's row 0 is the same neutral pose, so any line
+	// in the conversation will do.
+	leroyCueResourceFor := func(table assets.PuppetSpeechTable, name string) (uint32, error) {
+		for _, speech := range table.Entries {
+			if strings.EqualFold(speech.Name, name) {
+				return speech.CueResource, nil
+			}
+		}
+		return 0, fmt.Errorf("Leroy speech %q is missing from the line table", name)
+	}
 	var showLeroyChoices func() error
 	startLeroyBySign := func() error {
 		if err := openLeroyPuppet(); err != nil {
@@ -1466,13 +1477,29 @@ func run() error {
 			return fmt.Errorf("load Leroy PUP CLUT: %w", err)
 		}
 		leroyConversationBase.Palette = palette
+		// **Composite the puppet's resting pose into the conversation base.** The base
+		// deliberately omits Leroy's world sprite, so without this every state that is not
+		// mid-line — the choice list, and a conversation with no scripted speech — showed
+		// nobody at all. A line that starts later draws over the pose.
+		bySign := scripts.LeroyBySignEntryForPhase(leroyPhase)
+		if len(bySign.Speech) > 0 {
+			restingCue, err := leroyCueResourceFor(leroyPuppetTable, bySign.Speech[0])
+			if err != nil {
+				return err
+			}
+			resting, err := leroyPuppet.RestingFrame(leroyConversationBase, restingCue)
+			if err != nil {
+				return fmt.Errorf("compose Leroy resting pose: %w", err)
+			}
+			leroyConversationBase = resting
+		}
 		if leroyDialogue != nil {
 			if err := leroyDialogue.Close(); err != nil {
 				return err
 			}
 			leroyDialogue = nil
 		}
-		entry := scripts.LeroyBySignEntryForPhase(leroyPhase)
+		entry := bySign
 		leroyDialogueRepeats, leroyDialogueReturns, leroyDialogueSetsPhase = entry.Repeats, entry.Returns, entry.SetPhase
 		if len(entry.Speech) == 0 {
 			currentFrame, stageFrame = leroyConversationBase, leroyConversationBase
