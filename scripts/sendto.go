@@ -300,19 +300,33 @@ func (c *EntityResourceCache) AcquireKey(key ResourceKey) (EntityResourceEntry, 
 	return c.Acquire(slot)
 }
 
-// Release drops a reference, and reports whether the entry reached zero. The
-// reference decrements the same field; what it does at zero is in the eviction
-// path, which is not decompiled, so this does not free anything.
-func (c *EntityResourceCache) Release(slot int) (remaining uint16, reachedZero bool) {
+// Release drops a reference, and reports whether the entry reached zero.
+//
+// **This was corrected against the reference.** The first version treated a release
+// on an already-zero entry as a harmless no-op, on the reasoning that the eviction
+// path was not decompiled. That was wrong: `FUN_004188C0`, the release the engine
+// actually calls, decrements the count **unconditionally** and raises diagnostic
+// `0x1462` if it went below zero. A double release is therefore a reported bug in
+// the reference, not a tolerated condition, and silently absorbing it here is
+// exactly the case that would hide a real double release. The count reaching zero is
+// not itself a problem and is reported without an error.
+func (c *EntityResourceCache) Release(slot int) (remaining int, status uint16, err error) {
 	if c == nil || slot < 0 || slot >= len(c.Entries) {
-		return 0, false
+		return 0, ResourceNoSlotDiag, fmt.Errorf(
+			"releasing resource slot %d, which is outside the %d entry table", slot, c.entryCount())
 	}
-	entry := &c.Entries[slot]
-	if entry.RefCount == 0 {
-		return 0, true
+	// The count is decremented only when it can be, so the table is never left
+	// holding a negative count; the diagnostic reports the double release instead.
+	return ReleaseResource(c.Entries, slot, true)
+}
+
+// entryCount reports the table's length, tolerating a nil cache so the error path
+// above can mention it.
+func (c *EntityResourceCache) entryCount() int {
+	if c == nil {
+		return 0
 	}
-	entry.RefCount--
-	return entry.RefCount, entry.RefCount == 0
+	return len(c.Entries)
 }
 
 // RequiredSize returns the buffer size the reference requests for a resource of
