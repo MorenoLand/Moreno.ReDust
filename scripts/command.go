@@ -68,52 +68,47 @@ func ClassifyCommandRange(opcode uint16) CommandRange {
 	}
 }
 
-// commandHandlers is the verified FUN_00424890 case-to-callee table. The values
-// are native function names recorded so each Go route keeps a traceable evidence
-// tag. It is a partial map on purpose: only the cases the shipped scripts and the
-// converted Go port actually depend on are transcribed, and ClassifyCommandRange
-// is the authority for range membership.
-var commandHandlers = map[uint16]string{
-	// 12000 range (switch on opcode - 0x2EE1), contiguous 12001..12088
-	12001: "FUN_00425B70", // message
-	12013: "FUN_0040BFA0", // opencastfile
-	12016: "FUN_0040CB40", // sendtoactor
-	12017: "FUN_00426880", // playmovie
-	12019: "FUN_0040E250", // opentrackfile
-	12034: "FUN_0041A180", // sendtoscene
-	12038: "FUN_00425E30", // clut
-	12039: "FUN_00426230", // cursor
-	12042: "FUN_00408120", // closepuppetfile
-	12055: "FUN_00420CC0", // sendtoprop
-	12056: "FUN_00420110", // openshopfile
-	12062: "FUN_00411AD0", // gotoflat
-	12068: "FUN_00412A70", // sendtobutton
-	12069: "FUN_00412EC0", // sendtoflat
-	12070: "FUN_00413210", // sendtostage
-	12071: "FUN_00426580", // quit
-	12074: "FUN_00408700", // puppetgrab
-	12077: "FUN_00422C80", // savegame
-	12078: "FUN_00422D40", // opengame
-	12079: "FUN_00425B10", // notedialog
+// The complete verified case-to-callee tables live in handlers.go:
+// commandPrimaryHandlers, commandSecondaryHandlers, valuePrimaryHandlers and
+// valueSecondaryHandlers. They are transcribed in full rather than as a subset,
+// so an extraction error surfaces as a table-count assertion failure instead of
+// a silent range error. Use CommandCommandHandler for the FUN_00424890 side and
+// CommandValueHandler for the FUN_004137B0 side.
 
-	// 16000 range (switch on opcode - 0x3E82), contiguous 16002..16053.
-	// These are the command-dispatcher side of the hybrid band; FUN_004137B0
-	// is tried first and owns the same opcodes.
-	16007: "FUN_0041AC70", // setvisible
-	16008: "FUN_00412450", // currentstage
-	16009: "FUN_00425BD0", // path
-	16010: "FUN_00425CD0", // result
-	16015: "FUN_0041F910", // propvisible
-	16029: "FUN_004199A0", // currentscene
+// CommandHandler returns the verified native handler for opcode as the native
+// dispatcher chain would reach it: the value dispatcher is tried first for the
+// 16000 band, matching verified FUN_004192D0, then the command dispatcher.
+// A dispatchable opcode always resolves; an undispatchable one returns
+// ok with an empty name.
+func CommandHandler(opcode uint16) (handler string, dispatched bool) {
+	if handler, found := CommandHandlerFor(opcode, PreferValue); found {
+		return handler, true
+	}
+	return "", false
 }
 
-// CommandHandler returns the verified native handler name for opcode and whether
-// FUN_00424890 dispatches it. A dispatchable opcode whose handler is not yet
-// transcribed returns ok with an empty name, so callers can distinguish
-// "not handled here" from "handled, not yet converted".
-func CommandHandler(opcode uint16) (handler string, dispatched bool) {
-	handler = commandHandlers[opcode]
-	return handler, ClassifyCommandRange(opcode) != CommandRangeNone
+// CommandCommandHandler returns the command-dispatcher side of an opcode, which
+// for the 16000 band is the fallback FUN_00424890 would reach only after the
+// value dispatcher fails.
+func CommandCommandHandler(opcode uint16) (handler string, found bool) {
+	if h, ok := commandPrimaryHandlers[opcode]; ok {
+		return normalizeHandlerName(h), true
+	}
+	if h, ok := commandSecondaryHandlers[opcode]; ok {
+		return normalizeHandlerName(h), true
+	}
+	return "", false
+}
+
+// CommandValueHandler returns the value-dispatcher side of an opcode.
+func CommandValueHandler(opcode uint16) (handler string, found bool) {
+	if h, ok := valuePrimaryHandlers[opcode]; ok {
+		return normalizeHandlerName(h), true
+	}
+	if h, ok := valueSecondaryHandlers[opcode]; ok {
+		return normalizeHandlerName(h), true
+	}
+	return "", false
 }
 
 // CommandHandlerName returns the opcode's script name, for evidence logging.
