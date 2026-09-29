@@ -24,6 +24,10 @@ func (s *ResultCodeSession) DispatchStatementResult(start int) (int32, uint16, e
 
 const (
 	RouteOther DispatchRoute = iota
+	// RouteUndispatched means the opcode falls in a dispatch band whose
+	// dispatcher returns native status 1 for it. Verified: the 12000 band has
+	// no fallback, so 12000..12011 are unroutable there.
+	RouteUndispatched
 	Route00424890
 	Route004137B0
 	Route004137B0Then00424890
@@ -31,21 +35,55 @@ const (
 	Route0041D6F0
 )
 
+// Verified dispatch topology, from the live Ghidra decompilation of
+// FUN_004192D0 (the event-script classifier):
+//
+//	if (11999 < op && op < 0x2F3A) return FUN_00424890(...);        // 12000..12089
+//	if (19999 < op && op < 0x4E8E) return FUN_004137B0(...);        // 20000..20109
+//	if (15999 < op && op < 0x3EB7) {                                // 16000..16054
+//	    u = FUN_004137B0(...);
+//	    if ((short)u == 0) return u;                                // value route won
+//	    FUN_00418FB0(param_4, &DAT_00459AD0);
+//	    *param_4 = -1;
+//	    return FUN_00424890(...);                                    // otherwise command
+//	}
+//	if (op == 0x0FA2) return FUN_0041D680(...);
+//	if (op == 0x0FBD) return FUN_0041D6F0(...);
+//	// fallback: resolve an identifier and assign, else evaluate
+//
+// Two corrections follow, and they are why the earlier classifier was wrong:
+//
+//   - The 16000 range is tried in the value dispatcher FIRST and only falls
+//     back to the command dispatcher on failure. That is what owns the
+//     16002..16012 opcodes FUN_00424890 leaves as a hole, because
+//     FUN_004137B0's own switch is based at 0x3E81 (16001).
+//   - The 12000 range has NO fallback. FUN_00424890's primary switch starts at
+//     12012, so 12000..12011 return native status 1 there.
+const (
+	// dispatchCommandBandHigh bounds the 12000 range handed straight to the
+	// command dispatcher.
+	dispatchCommandBandHigh = 0x2F3A
+	// dispatchValueBandHigh bounds the 20000 range.
+	dispatchValueBandHigh = 0x4E8E
+	// dispatchHybridBandHigh bounds the 16000 range, which tries the value
+	// dispatcher before the command dispatcher.
+	dispatchHybridBandHigh = 0x3EB7
+)
+
 func ClassifyDispatch(opcode uint16) DispatchRoute {
-	// The 12000 range is bounded by the verified FUN_00424890 switch
-	// (12012..12088), not by a guessed 12000..12089 span. Opcodes outside the
-	// verified range are not dispatched there and return native status 1, so
-	// they must not be routed to Route00424890.
-	switch ClassifyCommandRange(opcode) {
-	case CommandRangePrimary, CommandRangeSpecial, CommandRangeSecondary:
-		return Route00424890
-	}
 	switch {
-	case opcode > 19999 && opcode < 0x4e8e:
+	case opcode > 11999 && opcode < uint16(dispatchCommandBandHigh):
+		// Verified: this band goes to FUN_00424890 with no fallback, so only
+		// opcodes inside its verified switches are actually handled.
+		if ClassifyCommandRange(opcode) != CommandRangeNone {
+			return Route00424890
+		}
+		return RouteUndispatched
+	case opcode > 19999 && opcode < uint16(dispatchValueBandHigh):
 		return Route004137B0
-	case opcode > 15999 && opcode < 0x3eb7:
+	case opcode > 15999 && opcode < uint16(dispatchHybridBandHigh):
 		return Route004137B0Then00424890
-	case opcode == 0x0fa2 || opcode == 0x0fa3:
+	case opcode == 0x0fa2:
 		return Route0041D680
 	case opcode == 0x0fbd:
 		return Route0041D6F0

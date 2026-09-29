@@ -116,22 +116,26 @@ func CommandHandlerName(opcode uint16) string {
 	return ""
 }
 
-// CommandGap records a verified hole in FUN_00424890's coverage. The shipped
-// boot script uses opcodes inside these holes, so they are dispatched by a
-// different native function that has not been located yet. They are tracked
-// explicitly so they are never mistaken for "handled" or for "unknown".
+// Verified dispatch gap, relative to FUN_00424890 only. The opcodes below are
+// NOT dispatched by FUN_00424890, but they are NOT unroutable either: verified
+// FUN_004192D0 tries the 16000 band in the value dispatcher FUN_004137B0 first,
+// whose own switch is based at 0x3E81 (16001), and only falls back to
+// FUN_00424890 when that fails. The 12000..12011 opcodes have no such fallback
+// and do return native status 1.
 //
-//	12000..12011  below the primary switch; message (12001) is in here
+//	12000..12011  below the primary switch; message (12001) is in here and is
+//	              genuinely undispatched on this path
 //	16002..16012  between the 16001 special case and the secondary switch;
 //	              setvisible (16007), currentstage (16008), path (16009) and
-//	              result (16010) are in here
+//	              result (16010) are in here and are owned by FUN_004137B0
 var commandGaps = [...]struct{ low, high uint16 }{
 	{12000, 12011},
 	{16002, 16012},
 }
 
 // InCommandGap reports whether opcode falls in a verified FUN_00424890 dispatch
-// gap, meaning some other native dispatcher owns it.
+// gap. Within the 16000 band such an opcode is owned by the value dispatcher;
+// within 12000..12011 it is genuinely undispatched.
 func InCommandGap(opcode uint16) bool {
 	for _, gap := range commandGaps {
 		if opcode >= gap.low && opcode <= gap.high {
@@ -139,6 +143,14 @@ func InCommandGap(opcode uint16) bool {
 		}
 	}
 	return false
+}
+
+// OwnedByValueDispatcher reports whether a gap opcode is routed by the verified
+// FUN_004192D0 ordering to the value dispatcher FUN_004137B0 before the command
+// dispatcher is tried. This is true for the 16000 band and false for the
+// 12000..12011 band, which has no fallback.
+func OwnedByValueDispatcher(opcode uint16) bool {
+	return opcode >= 16000 && opcode <= 16012
 }
 
 var (
