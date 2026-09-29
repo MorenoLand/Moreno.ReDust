@@ -1518,12 +1518,11 @@ var leroyStandingSpeech []string
 		if err := openLeroyPuppet(); err != nil {
 			return fmt.Errorf("open Leroy dialogue: %w", err)
 		}
-		dialogueActors := make([]render.WorldActorSprite, 0, len(worldActors))
-		for _, actor := range worldActors {
-			if !strings.EqualFold(actor.Name, "leroy") {
-				dialogueActors = append(dialogueActors, actor)
-			}
-		}
+		// **No world actor survives into a conversation.** The puppet fills the 512x264
+		// viewport as a foreground close-up, so a bystander left standing behind it appears
+		// inside the portrait -- the speaker's giant face with a smaller figure showing
+		// through it. The room and the panel stay; the cast does not.
+		dialogueActors := make([]render.WorldActorSprite, 0)
 		dialogueBackground, _, err := compositeWorld(backgroundFrame, worldPoint, dialogueActors)
 		if err != nil {
 			return fmt.Errorf("hide Leroy world sprite for dialogue: %w", err)
@@ -1801,12 +1800,11 @@ var leroyStandingSpeech []string
 		if err := openHelpPuppet(); err != nil {
 			return fmt.Errorf("open Help dialogue: %w", err)
 		}
-		dialogueActors := make([]render.WorldActorSprite, 0, len(worldActors))
-		for _, actor := range worldActors {
-			if !strings.EqualFold(actor.Name, "Help") {
-				dialogueActors = append(dialogueActors, actor)
-			}
-		}
+		// **No world actor survives into a conversation.** The puppet fills the 512x264
+		// viewport as a foreground close-up, so a bystander left standing behind it appears
+		// inside the portrait -- the speaker's giant face with a smaller figure showing
+		// through it. The room and the panel stay; the cast does not.
+		dialogueActors := make([]render.WorldActorSprite, 0)
 		dialogueBackground, _, err := compositeWorld(backgroundFrame, worldPoint, dialogueActors)
 		if err != nil {
 			return fmt.Errorf("hide Help world sprite for dialogue: %w", err)
@@ -1916,12 +1914,11 @@ var leroyStandingSpeech []string
 		if trotterPuppet == nil {
 			return fmt.Errorf("Trotter PUP is unavailable")
 		}
-		dialogueActors := make([]render.WorldActorSprite, 0, len(worldActors))
-		for _, actor := range worldActors {
-			if !strings.EqualFold(actor.Name, "Trotter") {
-				dialogueActors = append(dialogueActors, actor)
-			}
-		}
+		// **No world actor survives into a conversation.** The puppet fills the 512x264
+		// viewport as a foreground close-up, so a bystander left standing behind it appears
+		// inside the portrait -- the speaker's giant face with a smaller figure showing
+		// through it. The room and the panel stay; the cast does not.
+		dialogueActors := make([]render.WorldActorSprite, 0)
 		dialogueBackground, _, err := compositeWorld(backgroundFrame, worldPoint, dialogueActors)
 		if err != nil {
 			return fmt.Errorf("render Trotter dialogue background: %w", err)
@@ -2556,12 +2553,11 @@ var leroyStandingSpeech []string
 			}
 			return nil
 		}
-		dialogueActors := make([]render.WorldActorSprite, 0, len(worldActors))
-		for _, actor := range worldActors {
-			if !strings.EqualFold(actor.Name, "jones") {
-				dialogueActors = append(dialogueActors, actor)
-			}
-		}
+		// **No world actor survives into a conversation.** The puppet fills the 512x264
+		// viewport as a foreground close-up, so a bystander left standing behind it appears
+		// inside the portrait -- the speaker's giant face with a smaller figure showing
+		// through it. The room and the panel stay; the cast does not.
+		dialogueActors := make([]render.WorldActorSprite, 0)
 		dialogueBackground, _, err := compositeWorld(backgroundFrame, worldPoint, dialogueActors)
 		if err != nil {
 			return fmt.Errorf("hide Jones world sprite for dialogue: %w", err)
@@ -2987,12 +2983,11 @@ var leroyStandingSpeech []string
 		if mariePuppet == nil {
 			return fmt.Errorf("Marie PUP is unavailable")
 		}
-		dialogueActors := make([]render.WorldActorSprite, 0, len(worldActors))
-		for _, actor := range worldActors {
-			if !strings.EqualFold(actor.Name, "marie") {
-				dialogueActors = append(dialogueActors, actor)
-			}
-		}
+		// **No world actor survives into a conversation.** The puppet fills the 512x264
+		// viewport as a foreground close-up, so a bystander left standing behind it appears
+		// inside the portrait -- the speaker's giant face with a smaller figure showing
+		// through it. The room and the panel stay; the cast does not.
+		dialogueActors := make([]render.WorldActorSprite, 0)
 		dialogueBackground, _, err := compositeWorld(backgroundFrame, worldPoint, dialogueActors)
 		if err != nil {
 			return fmt.Errorf("hide Marie world sprite for dialogue: %w", err)
