@@ -173,16 +173,26 @@ func PathVolumeAndRest(text string) (volume string, rest string, hadColon bool) 
 	return "", text, false
 }
 
+// UpperASCIIInline reproduces the builder's own fold, using the bounds `pathbuild.go`
+// records. **It is inline in the decompilation** — a two-comparison range test — where the
+// project's verified fold is a 256-entry table at `0x0045DDF0`, so the binary holds two
+// implementations. They agree on every byte, because the range is exactly the 26 letters.
+//
+// The same fold is also spelled a third time in `volresolve.go`, with the bounds as the
+// characters a backtick and a brace rather than as hex.
+func UpperASCIIInline(c byte) byte {
+	if c > PathLowerBound && c < PathUpperBound {
+		return c - PathCaseFoldDelta
+	}
+	return c
+}
+
 // foldVolumeInline upper-cases a run with the builder's own inline fold, reusing the
 // bounds `pathbuild.go` records rather than restating them.
 func foldVolumeInline(s string) string {
 	out := make([]byte, len(s))
 	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c > PathLowerBound && c < PathUpperBound {
-			c -= PathCaseFoldDelta
-		}
-		out[i] = c
+		out[i] = UpperASCIIInline(s[i])
 	}
 	return string(out)
 }
