@@ -3858,11 +3858,12 @@ func run() error {
 	var transferSetName, transferSetScene, transferSetDirection string
 	var flatMouseSession *scripts.FlatMouseSession
 	var flatMouseResource uint32
-	// flatMouseReturnScene is the flat that was current when a save/open button
-	// was pressed. NEW.FLT resource 24 assigns currentflat() to a local before
-	// its gotoflat(1) and then returns with gotoflat(<identifier>), so the
-	// capture has to happen at press time.
-	var flatMouseReturnScene = -1
+	// flatMouseReturnFlat is the name of the flat that was current when a
+	// save/open button was pressed. NEW.FLT resource 24 assigns currentflat() to a
+	// local before its gotoflat(1) and then returns with gotoflat(<identifier>),
+	// and verified FUN_00411AD0 resolves a string gotoflat argument through a flat
+	// name lookup, so the capture is a name and must happen at press time.
+	var flatMouseReturnFlat string
 	var scoreVolumeBaseFrame render.IndexedFrame
 	var scoreVolumeTrack image.Rectangle
 	var volumeSliderDragging bool
@@ -4071,6 +4072,27 @@ func run() error {
 			return animation.CurrentFrame(), true, nil
 		}
 		return nextFrame, true, nil
+	}
+	// stageFlatLookup mirrors verified FUN_00413590: it resolves a flat name to
+	// its zero-based index over the open stage's scenes.
+	stageFlatLookup := func(stage *assets.Stage) scripts.FlatNameLookup {
+		return func(name string) (int, error) {
+			for index := range stage.Scenes {
+				if strings.EqualFold(string(stage.Scenes[index].Name[1:]), name) {
+					return index, nil
+				}
+			}
+			return -1, scripts.ErrUnknownFlat
+		}
+	}
+	// currentFlatName is the Go equivalent of the native currentflat() builtin:
+	// it yields the name of the flat currently on screen, which is what a
+	// gotoflat string argument is resolved against.
+	currentFlatName := func(stage *assets.Stage, scene int) string {
+		if scene < 0 || scene >= len(stage.Scenes) {
+			return ""
+		}
+		return string(stage.Scenes[scene].Name[1:])
 	}
 	// applyFlatTarget performs one verified gotoflat transition. It is shared by
 	// the score-menu button scripts and by the dynamic gotoflat(<identifier>)
@@ -5195,7 +5217,7 @@ func run() error {
 		}
 		if trackButton {
 			flatMouseResource = handler.ScriptResource
-			flatMouseReturnScene = currentScene
+			flatMouseReturnFlat = currentFlatName(stage, currentScene)
 			flatMouseSession = new(scripts.FlatMouseSession)
 			*flatMouseSession = scripts.NewFlatMouseSession(string(handler.Name[1:]), point, continuation)
 			return currentFrame, false, nil
@@ -5241,9 +5263,9 @@ func run() error {
 				return currentFrame, false, nil
 			}
 			continuation, resumed := flatMouseSession.Resume()
-			returnScene := flatMouseReturnScene
+			returnFlatName := flatMouseReturnFlat
 			resourceSource := flatMouseResource
-			flatMouseSession, flatMouseResource, flatMouseReturnScene = nil, 0, -1
+			flatMouseSession, flatMouseResource, flatMouseReturnFlat = nil, 0, ""
 			if status == scripts.FlatMouseCancel || !resumed {
 				return currentFrame, false, nil
 			}
@@ -5258,14 +5280,31 @@ func run() error {
 				// not yet perform that intermediate transition or the native file
 				// dialog, so this return normally rebuilds the flat the player is
 				// already on, matching the handler's trailing flat "update" loop.
-				if continuation.ReturnToCurrentFlat && returnScene >= 0 && returnScene < len(stage.Scenes) {
-					if *debug {
-						log.Printf("save=written name=%q return-flat=%d return-ident=%q", continuation.GameName, returnScene, continuation.ReturnIdentifier)
+				// Resource 24 continues with gotoflat(<identifier>). Verified
+				// FUN_00411AD0: a non-numeric argument is resolved by a flat name
+				// lookup and incremented, so returning to the flat captured by
+				// `arg = currentflat()` routes back to the same flat. Go does not
+				// yet perform the intermediate gotoflat(1) or the native file
+				// dialog, so this normally rebuilds the flat already on screen,
+				// which is what the handler's trailing flat "update" loop achieves.
+				if continuation.ReturnToCurrentFlat && returnFlatName != "" {
+					resolved, status, resolveErr := scripts.ResolveGotoflatTarget(true, scripts.GotoflatValue{
+						Type: 3,
+						Name: returnFlatName,
+					}, stageFlatLookup(stage))
+					if resolveErr != nil || status != 0 {
+						if *debug {
+							log.Printf("save=written name=%q gotoflat-return unresolved flat=%q status=%#x err=%v", continuation.GameName, returnFlatName, status, resolveErr)
+						}
+						return currentFrame, false, nil
 					}
-					return applyFlatTarget(returnScene, 0, 0, resourceSource)
+					if *debug {
+						log.Printf("save=written name=%q gotoflat-return flat=%q native-index=%d return-ident=%q", continuation.GameName, returnFlatName, resolved, continuation.ReturnIdentifier)
+					}
+					return applyFlatTarget(resolved-1, 0, 0, resourceSource)
 				}
 				if *debug {
-					log.Printf("save=written name=%q no-return-scene", continuation.GameName)
+					log.Printf("save=written name=%q no-return-flat", continuation.GameName)
 				}
 				return currentFrame, false, nil
 			case scripts.FlatMouseActionOpenGame:
