@@ -102,6 +102,13 @@ func PascalAppend(destination, source []byte) ([]byte, error) {
 
 // ScriptEntryGuard is the precondition a script-entry handler checks before
 // assembling a context name.
+//
+// The guard is not always in the handler itself. scenescript 12063's neighbour
+// scenescript 12036 is the case in point: FUN_0041AAB0 carries no guard of its
+// own, but the resolver it calls first, FUN_0041B750, opens with
+// `if (DAT_00459A24 == 0) return 0x28;`, so the handler is guarded by a set
+// exactly as if it had checked inline. An earlier draft recorded scenescript as
+// unguarded; the resolver decompile is what corrected it.
 type ScriptEntryGuard uint8
 
 const (
@@ -139,7 +146,7 @@ type ScriptEntrySpec struct {
 var scriptEntrySpecs = []ScriptEntrySpec{
 	{12031, "bootscript", "FUN_004182F0", PoolLabelBootScript, GuardNone, false},
 	{12035, "setscript", "FUN_0041AA40", PoolLabelSetScript, GuardRequireSet, false},
-	{12036, "scenescript", "FUN_0041AAB0", PoolLabelSceneScript, GuardNone, true},
+	{12036, "scenescript", "FUN_0041AAB0", PoolLabelSceneScript, GuardRequireSet, true},
 	{12063, "stagescript", "FUN_00412840", PoolLabelStageScript, GuardRequireStage, false},
 	{12064, "flatscript", "FUN_004128B0", PoolLabelFlatScript, GuardRequireStage, true},
 }
