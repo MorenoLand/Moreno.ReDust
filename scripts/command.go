@@ -11,17 +11,20 @@ import "fmt"
 //	op := records[start].Kind
 //	if op < 0x3E82 {
 //	    if op == 0x3E81 { ... }                        // 16001 special case
-//	    switch op - 0x2EE1 { ... }                     // 12012 .. 12088
+//	    switch op - 0x2EE1 { ... }                     // 12001 .. 12088
 //	} else {
-//	    switch op - 0x3E82 { ... }                     // 16013 .. 16053
+//	    switch op - 0x3E82 { ... }                     // 16002 .. 16053
 //	}
 //	// shared epilogue, on status 0:
 //	if records[start+2+argCount].Kind != 0x0FB3) return 2;   // require ")"
 //	*consumed = argCount + 3;                                // opcode + "(" + args + ")"
 //	return 1;                                                // default: unhandled
 //
-// Note the verified range starts at 12012, not 12000. Opcodes below 12012 and
-// above 12088 are NOT handled here and return status 1.
+// Both switches are contiguous from their base, so the covered ranges are
+// 12001..12088 and 16002..16053 with no holes. An earlier extraction of this
+// table wrongly reported the ranges as starting at 12012 and 16013 because the
+// case pattern only matched `case 0xN:` while Ghidra writes `case 0:` for
+// single digits, which silently dropped cases 0 through 10.
 const (
 	// commandOpenParen and commandCloseParen are the verified 0x0FB2 / 0x0FB3
 	// record kinds that frame every command statement.
@@ -29,11 +32,11 @@ const (
 	commandCloseParen uint16 = 4019
 
 	commandPrimaryBase   = 12001 // 0x2EE1
-	commandPrimaryFirst  = 12012
+	commandPrimaryFirst  = 12001
 	commandPrimaryLast   = 12088
 	commandSpecialOpcode = 16001 // 0x3E81, handled outside both switches
 	commandSecondaryBase = 16002 // 0x3E82
-	commandSecondaryLow  = 16013
+	commandSecondaryLow  = 16002
 	commandSecondaryHigh = 16053
 )
 
@@ -43,11 +46,11 @@ type CommandRange uint8
 const (
 	// CommandRangeNone means the opcode is not dispatched by FUN_00424890.
 	CommandRangeNone CommandRange = iota
-	// CommandRangePrimary is the 12012..12088 switch.
+	// CommandRangePrimary is the contiguous 12001..12088 switch.
 	CommandRangePrimary
 	// CommandRangeSpecial is the single 16001 case.
 	CommandRangeSpecial
-	// CommandRangeSecondary is the 16013..16053 switch.
+	// CommandRangeSecondary is the contiguous 16002..16053 switch.
 	CommandRangeSecondary
 )
 
@@ -71,7 +74,8 @@ func ClassifyCommandRange(opcode uint16) CommandRange {
 // converted Go port actually depend on are transcribed, and ClassifyCommandRange
 // is the authority for range membership.
 var commandHandlers = map[uint16]string{
-	// 12000 range (switch on opcode - 0x2EE1)
+	// 12000 range (switch on opcode - 0x2EE1), contiguous 12001..12088
+	12001: "FUN_00425B70", // message
 	12013: "FUN_0040BFA0", // opencastfile
 	12016: "FUN_0040CB40", // sendtoactor
 	12017: "FUN_00426880", // playmovie
@@ -92,7 +96,13 @@ var commandHandlers = map[uint16]string{
 	12078: "FUN_00422D40", // opengame
 	12079: "FUN_00425B10", // notedialog
 
-	// 16000 range (switch on opcode - 0x3E82)
+	// 16000 range (switch on opcode - 0x3E82), contiguous 16002..16053.
+	// These are the command-dispatcher side of the hybrid band; FUN_004137B0
+	// is tried first and owns the same opcodes.
+	16007: "FUN_0041AC70", // setvisible
+	16008: "FUN_00412450", // currentstage
+	16009: "FUN_00425BD0", // path
+	16010: "FUN_00425CD0", // result
 	16015: "FUN_0041F910", // propvisible
 	16029: "FUN_004199A0", // currentscene
 }
@@ -116,41 +126,33 @@ func CommandHandlerName(opcode uint16) string {
 	return ""
 }
 
-// Verified dispatch gap, relative to FUN_00424890 only. The opcodes below are
-// NOT dispatched by FUN_00424890, but they are NOT unroutable either: verified
-// FUN_004192D0 tries the 16000 band in the value dispatcher FUN_004137B0 first,
-// whose own switch is based at 0x3E81 (16001), and only falls back to
-// FUN_00424890 when that fails. The 12000..12011 opcodes have no such fallback
-// and do return native status 1.
+// UnhandledCommandOpcodes lists the opcodes that reach FUN_00424890 but fall
+// through both of its switches to the default that returns native status 1.
+// There is no interior gap: both switches are contiguous from their base, so
+// only the band edges are unhandled.
 //
-//	12000..12011  below the primary switch; message (12001) is in here and is
-//	              genuinely undispatched on this path
-//	16002..16012  between the 16001 special case and the secondary switch;
-//	              setvisible (16007), currentstage (16008), path (16009) and
-//	              result (16010) are in here and are owned by FUN_004137B0
-var commandGaps = [...]struct{ low, high uint16 }{
-	{12000, 12011},
-	{16002, 16012},
-}
-
-// InCommandGap reports whether opcode falls in a verified FUN_00424890 dispatch
-// gap. Within the 16000 band such an opcode is owned by the value dispatcher;
-// within 12000..12011 it is genuinely undispatched.
-func InCommandGap(opcode uint16) bool {
-	for _, gap := range commandGaps {
-		if opcode >= gap.low && opcode <= gap.high {
-			return true
-		}
+//	12000        below the 12001 primary switch
+//	12089        above the 12088 primary switch
+//	16054        above the 16053 secondary switch
+//
+// Verified FUN_004192D0 sends the 12000 band to FUN_00424890 with no fallback,
+// so these three are genuinely undispatched. The 16000 band is different: it is
+// tried in the value dispatcher FUN_004137B0 first, whose own switch covers
+// 16001..16053, and 16054 is outside both dispatchers.
+func UnhandledCommandOpcodes(opcode uint16) bool {
+	switch opcode {
+	case 12000, 12089, 16054:
+		return true
+	default:
+		return false
 	}
-	return false
 }
 
-// OwnedByValueDispatcher reports whether a gap opcode is routed by the verified
-// FUN_004192D0 ordering to the value dispatcher FUN_004137B0 before the command
-// dispatcher is tried. This is true for the 16000 band and false for the
-// 12000..12011 band, which has no fallback.
+// OwnedByValueDispatcher reports whether an opcode in the 16000 band is routed
+// by the verified FUN_004192D0 ordering to the value dispatcher FUN_004137B0
+// before the command dispatcher is tried.
 func OwnedByValueDispatcher(opcode uint16) bool {
-	return opcode >= 16000 && opcode <= 16012
+	return opcode >= 16000 && opcode <= 16053
 }
 
 var (

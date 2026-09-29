@@ -51,14 +51,15 @@ const (
 //	if (op == 0x0FBD) return FUN_0041D6F0(...);
 //	// fallback: resolve an identifier and assign, else evaluate
 //
-// Two corrections follow, and they are why the earlier classifier was wrong:
+// Two consequences follow:
 //
-//   - The 16000 range is tried in the value dispatcher FIRST and only falls
-//     back to the command dispatcher on failure. That is what owns the
-//     16002..16012 opcodes FUN_00424890 leaves as a hole, because
-//     FUN_004137B0's own switch is based at 0x3E81 (16001).
-//   - The 12000 range has NO fallback. FUN_00424890's primary switch starts at
-//     12012, so 12000..12011 return native status 1 there.
+//   - The 16000 band is tried in the value dispatcher FIRST and only falls
+//     back to the command dispatcher on failure. FUN_004137B0's own switches
+//     are based at 0x3E81 (16001, covering 16001..16053) and 0x4E22 (20002,
+//     covering 20002..20108).
+//   - The 12000 range has NO fallback. FUN_00424890's primary switch is
+//     contiguous from 0x2EE1, so it covers 12001..12088 and only the band
+//     edges 12000 and 12089 return native status 1.
 const (
 	// dispatchCommandBandHigh bounds the 12000 range handed straight to the
 	// command dispatcher.
