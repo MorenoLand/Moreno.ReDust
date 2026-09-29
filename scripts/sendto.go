@@ -209,15 +209,29 @@ const (
 )
 
 // EntityResourceEntry is one cache entry, laid out as the reference's 32 bytes.
-// The handle is opaque here because the resource is a locked global block in the
-// native; the fields that matter for behaviour are the stamp and the count.
+// The Go side tracks the bookkeeping the reference does; loading a resource
+// itself is the asset layer's job, so Load is injected.
+//
+// The key fields at offsets 0 and 4 were identified later, from FUN_00418A00, the
+// slot lookup, and they are what makes the cache a map from a (context, index)
+// pair to a handle rather than a list.
 type EntityResourceEntry struct {
+	// Context is the key field at offset 0, the owning context handle.
+	Context uint32
+	// Index is the key field at offset 4, the index within that context. It is
+	// signed, since the lookup compares it as a signed value.
+	Index int32
 	// Stamp is the 32-bit field at offset 8, refreshed on every hit.
 	Stamp uint32
 	// Handle identifies the loaded resource, at offset 12.
 	Handle uint32
 	// RefCount is the 16-bit field at offset 16, incremented on every hit.
 	RefCount uint16
+}
+
+// Key returns the entry's key, for pairing with FindResourceSlot.
+func (e EntityResourceEntry) Key() ResourceKey {
+	return ResourceKey{Context: e.Context, Index: e.Index}
 }
 
 // EntityResourceCache is the reference-counted table FUN_004186D0 maintains.
@@ -237,6 +251,10 @@ type EntityResourceCache struct {
 	// Allocate reserves a buffer of the given size, which the reference asks for
 	// as the resource's size plus EntityResourceHeadroom.
 	Allocate func(size int) bool
+	// ContextOf supplies the context handle a newly loaded entry is keyed under,
+	// since the native reads it from its own caller. It may be nil, in which case
+	// entries are keyed under context zero.
+	ContextOf func() uint32
 }
 
 // slotFor finds the cached slot for an index, which the reference delegates to
@@ -252,7 +270,8 @@ type EntityResourceCacheWithSlots struct {
 
 // Acquire takes a reference to a cached resource, reproducing the hit path. It
 // increments the count, stamps the entry with the current stamp and then bumps
-// the stamp, in that order, which is what the reference does.
+// the stamp, in that order, which is what the reference does. The entry is
+// located by slot.
 func (c *EntityResourceCache) Acquire(slot int) (EntityResourceEntry, bool) {
 	if c == nil || slot < 0 || slot >= len(c.Entries) {
 		return EntityResourceEntry{}, false
@@ -262,6 +281,23 @@ func (c *EntityResourceCache) Acquire(slot int) (EntityResourceEntry, bool) {
 	entry.Stamp = c.Stamp
 	c.Stamp++
 	return *entry, true
+}
+
+// AcquireKey locates a cached resource by its (context, index) key, which is how
+// FUN_00418A00 finds a slot, and then takes a reference to it.
+func (c *EntityResourceCache) AcquireKey(key ResourceKey) (EntityResourceEntry, bool) {
+	if c == nil {
+		return EntityResourceEntry{}, false
+	}
+	keys := make([]ResourceKey, len(c.Entries))
+	for i := range c.Entries {
+		keys[i] = c.Entries[i].Key()
+	}
+	slot, found := FindResourceSlot(keys, len(c.Entries), key.Context, key.Index)
+	if !found {
+		return EntityResourceEntry{}, false
+	}
+	return c.Acquire(slot)
 }
 
 // Release drops a reference, and reports whether the entry reached zero. The
@@ -315,9 +351,19 @@ func (c *EntityResourceCache) LoadSlot(slot, index int) (EntityResourceEntry, ui
 	if c.Stamp > 0 && c.Stamp != ^uint32(0) {
 		c.Stamp++
 	}
-	entry := EntityResourceEntry{Stamp: c.Stamp, Handle: handle, RefCount: 1}
+	entry := EntityResourceEntry{Context: c.nextContext(), Index: int32(index), Stamp: c.Stamp, Handle: handle, RefCount: 1}
 	if slot < len(c.Entries) {
 		c.Entries[slot] = entry
 	}
 	return entry, 0, nil
+}
+
+// nextContext returns the context handle a newly loaded entry records. The Go side
+// has no context handles of its own, so it is supplied by the caller through
+// ContextOf and defaults to zero.
+func (c *EntityResourceCache) nextContext() uint32 {
+	if c.ContextOf == nil {
+		return 0
+	}
+	return c.ContextOf()
 }
