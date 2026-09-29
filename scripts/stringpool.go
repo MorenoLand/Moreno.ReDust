@@ -1,7 +1,15 @@
 package scripts
 
 // EngineStringPool is the packed NUL-terminated C string pool at
-// 0x0045D360..0x0045D739 in DF386.EXE .data, 985 bytes holding 78 strings.
+// 0x0045D360..0x0045D733 in DF386.EXE .data, 980 bytes holding 77 strings.
+//
+// **The upper boundary was corrected.** This transcription previously ended at
+// 0x0045D739 with a final entry `{0x0045D738, "<"}`, which was wrong: 0x0045D738
+// holds the pointer 0x0045D93C, the first entry of the control-flow keyword table
+// that FUN_0041DC00 scans. Read as ASCII, the pointer's low byte 0x3C is "<", which
+// is how the phantom entry arose. The pool's last real string is "resume" at
+// 0x0045D72D, NUL-terminated at 0x0045D733, followed by four padding zeros and then
+// the pointer table. See keywords.go.
 //
 // The pool is the engine's whole message and keyword vocabulary: the context
 // labels the script-entry handlers build, the property type names, the
@@ -37,14 +45,24 @@ type PoolEntry struct {
 	Text string
 }
 
-// PoolFirst and PoolLast bound the pool in the reference image.
+// PoolFirst and PoolLast bound the pool in the reference image. PoolLast is the
+// NUL that terminates "resume", not the start of the keyword table that follows.
 const (
 	PoolFirst uint32 = 0x0045D360
-	PoolLast  uint32 = 0x0045D739
+	PoolLast  uint32 = 0x0045D733
 )
 
-// PoolSize is the verified byte extent of the pool, 985.
-const PoolSize = 985
+// PoolSize is the verified byte extent of the pool, 980. Four padding bytes follow
+// it before the keyword pointer table begins at 0x0045D738.
+const PoolSize = 980
+
+// PoolPaddingBytes is how many zero bytes separate the pool from the keyword table,
+// 0x0045D734..0x0045D737.
+const PoolPaddingBytes = 4
+
+// KeywordTableFirst is where the keyword pointer table begins, immediately after the
+// pool's padding.
+const KeywordTableFirst uint32 = 0x0045D738
 
 // engineStringPool is the transcribed pool in address order.
 var engineStringPool = []PoolEntry{
@@ -125,7 +143,9 @@ var engineStringPool = []PoolEntry{
 	{0x0045D719, "moving"},
 	{0x0045D721, "nowhere"},
 	{0x0045D72D, "resume"},
-	{0x0045D738, "<"},
+	// 0x0045D738 is NOT a pool entry. It holds the pointer 0x0045D93C, the first
+	// slot of the control-flow keyword table; its low byte 0x3C reads as "<" and
+	// was previously mistaken for a one-character string. See keywords.go.
 }
 
 // PoolText returns the pool string at the given address. The address must be
@@ -236,7 +256,12 @@ const (
 	PoolNameAll       = "all"
 	PoolNameNone      = "none"
 	PoolNameUnknown   = "unknown"
-	PoolLessThan      = "<"
+	// There is deliberately no PoolLessThan. The transcription had one, named for
+	// the string "<" at 0x0045D738, but that address holds the keyword table's first
+	// pointer and its low byte 0x3C only reads as "<" when interpreted as ASCII. The
+	// constant is removed rather than repointed, because no verified use of it
+	// exists and a string the engine does not hold would be worse than an absent
+	// one.
 	PoolNameBootfile  = "bootfile"
 	PoolNameRuntime   = "Runtime"
 	PoolNameStageOpen = "openstage()"
