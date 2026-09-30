@@ -664,19 +664,13 @@ var leroyStandingSpeech []string
 	}
 	loadWorldActors := func(point [3]int16) ([]render.WorldActorSprite, error) {
 		actors := make([]render.WorldActorSprite, 0, 4)
-		// Drop any actor that does not stand in the player's cell or the one the player is
-		// facing, so an actor from another cell is neither drawn nor hit-tested. The
-		// reference's draw path has no wall mask and no occlusion test, so cells are
-		// separated by which backdrop is on screen and by nothing else.
-		cullToVisibleCell := func(actors []render.WorldActorSprite) []render.WorldActorSprite {
-			kept := actors[:0]
-			for _, sprite := range actors {
-				if activeSet.ActorCellVisible(point, sprite.Position) {
-					kept = append(kept, sprite)
-				}
-			}
-			return kept
-		}
+		// No cell cull is applied here. Two attempts were made and both were wrong: the
+		// first required the actor to be in the cell exactly one step ahead, which hid
+		// every actor in the street until the player walked into their cell, and the second
+		// admitted anything ahead in the facing direction, which did not hold up either.
+		// The reference's own rule has not been read out of the binary yet, and guessing it
+		// cost a regression. See assets.ActorCellVisible, which is kept as the measured
+		// cell arithmetic but is deliberately not wired in.
 		if activeSetName == "sallower" {
 			if isaoVisible {
 				for _, actor := range gangCast.Actors {
@@ -706,7 +700,7 @@ var leroyStandingSpeech []string
 					break
 				}
 			}
-			return cullToVisibleCell(actors), nil
+			return actors, nil
 		}
 		if activeSetName != "town" {
 			return actors, nil
@@ -765,7 +759,7 @@ var leroyStandingSpeech []string
 			}
 			actors = append(actors, sprite)
 		}
-		return cullToVisibleCell(actors), nil
+		return actors, nil
 	}
 	if *debug {
 		log.Printf("cast-location-records=set=NITE.SET selector=town count=%d", len(townActors))
