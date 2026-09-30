@@ -48,6 +48,16 @@ type PuppetChoice struct {
 	EventID int32
 }
 
+func PuppetScrambleChoices(choices []PuppetChoice, random *NativeRandom) {
+	if len(choices) < 2 || random == nil {
+		return
+	}
+	for count := 0; count < len(choices)*5; count++ {
+		left, right := random.Inclusive(uint32(len(choices)))-1, random.Inclusive(uint32(len(choices)))-1
+		choices[left], choices[right] = choices[right], choices[left]
+	}
+}
+
 func PuppetBevelChoices(program Program, codeName string) ([]PuppetChoice, error) {
 	start, err := FindCode(program, codeName)
 	if err != nil {

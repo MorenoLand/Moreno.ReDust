@@ -136,7 +136,13 @@ func run() error {
 	work := flag.String("work", "bin", "work directory; assets are read from its assets child")
 	debug := flag.Bool("debug", false, "enable diagnostics")
 	silent := flag.Bool("silent", false, "render the initial level to a PNG and exit without opening a window")
+	silentScript := flag.String("silent-script", "", "run a JSON input script without opening a window or playing audio")
+	silentSeed := flag.Uint("silent-seed", 0, "native random seed for scripted headless checks; zero uses the clock")
+	loadPath := flag.String("load", "", "load a ReDust save before starting")
 	flag.Parse()
+	if *silentScript != "" {
+		*silent = true
+	}
 	workspace, err := assets.NewWorkspace(*work)
 	if err != nil {
 		return fmt.Errorf("initialize work directory: %w", err)
@@ -177,12 +183,28 @@ func run() error {
 	var audioContext *ebitenaudio.Context
 	var nativeLoops scripts.LoopScheduler
 	var nativeRandom scripts.NativeRandom
+	resetNativeRandom := func() {
+		seed := scripts.NativeRandomSeed(scripts.NativeTickMilliseconds())
+		if *silentScript != "" && *silentSeed != 0 {
+			seed = uint32(*silentSeed)
+		}
+		nativeRandom = scripts.NewNativeRandom(seed)
+	}
+	resetNativeRandom()
+	setInventoryLoopsPaused := func(paused bool) {
+		for kind := uint16(1); kind <= 4; kind++ {
+			nativeLoops.SetPaused(kind, "all", paused)
+		}
+	}
 	var currentThemeName string
 	var currentTheme audio.NativeTheme
 	var pendingSpotMovie, spotMovieName string
 	var spotMovieReturnFrame render.IndexedFrame
 	var spotMovieActionFrameOne, spotMovieActive, spotMovieStarting bool
-	if !*silent {
+	if !*silent || *silentScript != "" {
+		if *silent {
+			defer audio.SetOutputMuted(audio.SetOutputMuted(true))
+		}
 		soundBank, err = audio.OpenSoundBank(workspace, "DATA/UNILIB.SND")
 		if err != nil {
 			return fmt.Errorf("open startup sound bank: %w", err)
@@ -343,6 +365,9 @@ func run() error {
 	var avatarTipAfter func() (bool, error)
 	var avatarIdleActive, avatarMakefaceDue bool
 	var avatarIdleNext uint32
+	const nativeAvatarFrameInterval uint32 = 3
+	var avatarGestureActive bool
+	var avatarGestureNext uint32
 	startAvatarNoFace := func(now uint32) {
 		if gameClock == 3 {
 			avatarViewName = "nitefaces"
@@ -351,7 +376,8 @@ func run() error {
 		}
 		avatarFrameIndex, avatarAngle = 0, 0
 		avatarIdleActive, avatarMakefaceDue = true, true
-		avatarIdleNext = now + uint32(nativeRandom.Inclusive(30)+30)
+		avatarGestureActive = false
+		avatarIdleNext = now + nativeAvatarFrameInterval*uint32(nativeRandom.Inclusive(30)+30)
 	}
 	avatarFrameForCurrent := func() (render.PuppetFrame, image.Point, error) {
 		if avatarViewName == "gossip" {
@@ -359,7 +385,9 @@ func run() error {
 			if gameClock == 3 {
 				degree = 0
 			}
-			return avatarFrames[degree], image.Pt(456, 328), nil
+			portrait := avatarFrames[degree]
+			portrait.Origin = image.Pt(portrait.Origin.Y, portrait.Origin.X)
+			return portrait, image.Pt(460, 325), nil
 		}
 		key := fmt.Sprintf("%s:%d:%d", avatarViewName, avatarFrameIndex, avatarAngle)
 		portrait, found := avatarFrameCache[key]
@@ -371,10 +399,11 @@ func run() error {
 			}
 			avatarFrameCache[key] = portrait
 		}
+		portrait.Origin = image.Pt(portrait.Origin.Y, portrait.Origin.X)
 		return portrait, image.Pt(460, 325), nil
 	}
 	if *debug {
-		log.Printf("prop=avatar view=gossip degree-resources=%d,%d anchor=456,328 placement=panel-art-inference", avatarResources[0], avatarResources[1])
+		log.Printf("prop=avatar view=gossip degree-resources=%d,%d anchor=460,325 source=NEW.FLT/noface", avatarResources[0], avatarResources[1])
 	}
 	townActors, err := extraCast.ResolveLocations(nightSet, "town")
 	if err != nil {
@@ -491,6 +520,9 @@ func run() error {
 	const (
 		trotterInteractionIdle uint8 = iota
 		trotterInteractionPuppetSpeaking
+		trotterInteractionPuppetChoices
+		trotterInteractionInventory
+		trotterInteractionInventoryReturning
 	)
 	leroyPhase, leroyInteractionStage := int16(0), leroyInteractionIdle
 	var leroyWalk *scripts.NativeActorWalkJob
@@ -507,15 +539,15 @@ func run() error {
 	var leroySkipDialogue bool
 	var leroyConversationBase render.IndexedFrame
 
-// leroyStandingSpeech is the line list the current conversation speaks, kept so the choice
-// screen can build the puppet's standing pose from the conversation's *own* first line
-// rather than from whichever line the table happens to list first.
-var leroyStandingSpeech []string
+	// leroyStandingSpeech is the line list the current conversation speaks, kept so the choice
+	// screen can build the puppet's standing pose from the conversation's *own* first line
+	// rather than from whichever line the table happens to list first.
+	var leroyStandingSpeech []string
 	// A choice base used to be captured from `currentFrame` on entry, so the choice screen
-// inherited whatever was last on screen. That is what put an animated puppet's own pixels
-// under the standing pose and made the figure appear twice, so **there is no choice base
-// any more**: each choice screen builds its own from the conversation base, which is scene
-// only, plus the standing pose it draws itself.
+	// inherited whatever was last on screen. That is what put an animated puppet's own pixels
+	// under the standing pose and made the figure appear twice, so **there is no choice base
+	// any more**: each choice screen builds its own from the conversation base, which is scene
+	// only, plus the standing pose it draws itself.
 	helpInteractionStage := helpInteractionIdle
 	jonesInteractionStage := jonesInteractionIdle
 	jonesPhase, laurelPhase := int16(0), int16(0)
@@ -530,6 +562,32 @@ var leroyStandingSpeech []string
 	var trotterConversationBase render.IndexedFrame
 	var trotterDialogueSkip bool
 	var trotterPendingStep scripts.TrotterStep
+	var trotterGiftCounter int32
+	var trotterActorValue int32
+	var trotterWalk *scripts.NativeActorWalkJob
+	var trotterWalkNext uint32
+	var trotterFrameIndex int
+	var trotterActiveChoices []scripts.PuppetChoice
+	var trotterChoicePressActive bool
+	var trotterChoicePressEvent int32
+	trotterChoicePressIndex, trotterChoiceOutline := -1, -1
+	var trotterInventoryReturnPending bool
+	var openTrotterInventory func() error
+	var finishPlayerDeath func(string) error
+	var deathSequence scripts.DeathSequence
+	var deathStage uint8
+	var deathUntil uint32
+	var deathFrame render.IndexedFrame
+	var deathBank *audio.SoundBank
+	var deathNarration *audio.Player
+	defer func() {
+		if deathNarration != nil {
+			_ = deathNarration.Close()
+		}
+		if deathBank != nil {
+			_ = deathBank.Close()
+		}
+	}()
 	var isaoPuppet *render.Puppet
 	var isaoPuppetTable assets.PuppetSpeechTable
 	var isaoDialogue *engine.PuppetDialogue
@@ -692,7 +750,7 @@ var leroyStandingSpeech []string
 						continue
 					}
 					actor.Position, actor.Located = trotterPosition, true
-					sprite, err := render.LoadCastActorFrame(workspace, gangCast, actor, actorPoses["trotter"], 0, 4200, render.NativeActorViewAngle(trotterPosition, point, actorHeadings["trotter"]), 32)
+					sprite, err := render.LoadCastActorFrame(workspace, gangCast, actor, actorPoses["trotter"], trotterFrameIndex, 4500, render.NativeActorViewAngle(trotterPosition, point, actorHeadings["trotter"]), 32)
 					if err != nil {
 						return nil, fmt.Errorf("load Sallowers actor Trotter: %w", err)
 					}
@@ -903,7 +961,7 @@ var leroyStandingSpeech []string
 		}
 	}
 	startAvatarNoFace(scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
-	if *silent {
+	if *silent && *silentScript == "" && *loadPath == "" {
 		if *debug {
 			themeBank, err = audio.OpenSoundBank(workspace, "DATA/NIGHT.SND")
 			if err != nil {
@@ -1052,7 +1110,8 @@ var leroyStandingSpeech []string
 		avatarFrameIndex, avatarAngle, avatarTipFrame = 0, 0, 0
 		avatarTipActive, avatarIdleActive = true, false
 		avatarTipAfter = after
-		avatarTipNextFrame = scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) + 1
+		avatarGestureActive = false
+		avatarTipNextFrame = scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) + nativeAvatarFrameInterval
 		return refreshWorldScene()
 	}
 	advanceAvatarAnimation := func(now uint32) (bool, error) {
@@ -1068,7 +1127,7 @@ var leroyStandingSpeech []string
 				avatarTipActive = false
 				startAvatarNoFace(now)
 			} else {
-				avatarFrameIndex, avatarTipNextFrame = avatarTipFrame, now+1
+				avatarFrameIndex, avatarTipNextFrame = avatarTipFrame, now+nativeAvatarFrameInterval
 			}
 			if err := refresh(); err != nil {
 				return false, err
@@ -1082,7 +1141,17 @@ var leroyStandingSpeech []string
 			}
 			return true, nil
 		}
-		if !avatarIdleActive || now < avatarIdleNext || currentScene == 0 && (helpInteractionStage != helpInteractionIdle || leroyInteractionStage != leroyInteractionIdle || jonesInteractionStage != jonesInteractionIdle || isaoInteractionStage != isaoInteractionIdle || marieInteractionStage != marieInteractionIdle || trotterInteractionStage != trotterInteractionIdle) {
+		if !avatarIdleActive || currentScene == 0 && (helpInteractionStage != helpInteractionIdle || leroyInteractionStage != leroyInteractionIdle || jonesInteractionStage != jonesInteractionIdle || isaoInteractionStage != isaoInteractionIdle || marieInteractionStage != marieInteractionIdle || trotterInteractionStage != trotterInteractionIdle) {
+			return false, nil
+		}
+		if now < avatarIdleNext {
+			if avatarGestureActive && now >= avatarGestureNext {
+				avatarFrameIndex, avatarGestureNext = (avatarFrameIndex+1)%26, now+nativeAvatarFrameInterval
+				if err := refresh(); err != nil {
+					return false, err
+				}
+				return true, nil
+			}
 			return false, nil
 		}
 		if !avatarMakefaceDue {
@@ -1103,21 +1172,23 @@ var leroyStandingSpeech []string
 			if gameClock == 3 {
 				avatarViewName = "niterite"
 			}
+			avatarGestureActive, avatarGestureNext = true, now+nativeAvatarFrameInterval
 			delay = 24
 		case 6:
 			avatarViewName, avatarFrameIndex, avatarAngle = "dayleft", 0, 0
 			if gameClock == 3 {
 				avatarViewName = "niteleft"
 			}
+			avatarGestureActive, avatarGestureNext = true, now+nativeAvatarFrameInterval
 			delay = 24
 		case 10:
 			avatarViewName, avatarFrameIndex, avatarAngle = map[bool]string{true: "nitefaces", false: "dayfaces"}[gameClock == 3], 0, 5
 			delay = 3
 		default:
-			avatarIdleNext = now + uint32(nativeRandom.Inclusive(30)+30)
+			avatarIdleNext = now + nativeAvatarFrameInterval*uint32(nativeRandom.Inclusive(30)+30)
 			return false, nil
 		}
-		avatarMakefaceDue, avatarIdleNext = false, now+uint32(delay)
+		avatarMakefaceDue, avatarIdleNext = false, now+nativeAvatarFrameInterval*uint32(delay)
 		if err := refresh(); err != nil {
 			return false, err
 		}
@@ -1277,11 +1348,13 @@ var leroyStandingSpeech []string
 		view, worldPoint, backgroundFrame = nextView, nextPoint, background
 		doorOwner = ""
 		if semanticName == "sallower" {
-			trotterPosition, found, err = nextSet.ResolveLocation("sal.trotter1")
-			if err != nil || !found {
-				return render.IndexedFrame{}, fmt.Errorf("resolve Sallowers Trotter position: point=%v found=%t err=%v", trotterPosition, found, err)
+			if gameDay != 1 || trotterPhase < 6 && gamePhase < 7 {
+				trotterPosition, found, err = nextSet.ResolveLocation("sal.trotter1")
+				if err != nil || !found {
+					return render.IndexedFrame{}, fmt.Errorf("resolve Sallowers Trotter position: point=%v found=%t err=%v", trotterPosition, found, err)
+				}
+				trotterVisible, actorPoses["trotter"], actorHeadings["trotter"], trotterFrameIndex = true, "stand", 0, 0
 			}
-			trotterVisible, actorPoses["trotter"], actorHeadings["trotter"] = true, "stand", 0
 			position, found, err := nextSet.ResolveLocation("sallower.isao")
 			if err != nil || !found {
 				return render.IndexedFrame{}, fmt.Errorf("resolve Sallowers Isao position: point=%v found=%t err=%v", position, found, err)
@@ -1293,7 +1366,6 @@ var leroyStandingSpeech []string
 			}
 		} else {
 			isaoVisible = false
-			trotterVisible = false
 			nativeLoops.Stop(2, "isao")
 		}
 		nextActors, err := loadWorldActors(nextPoint)
@@ -1950,6 +2022,65 @@ var leroyStandingSpeech []string
 		trotterConversationBase = base
 		return nil
 	}
+	trotterStoryState := func() (scripts.TrotterStoryState, error) {
+		state := scripts.TrotterStoryState{Day: int16(gameDay), Clock: int16(gameClock), TrotterPhase: trotterPhase, Phase: gamePhase, PlayerCash: playercash, Counter: trotterGiftCounter}
+		if len(marieInventoryProgram.Records) == 0 {
+			data, err := inventoryArchive.Resource(1)
+			if err != nil {
+				return state, err
+			}
+			marieInventoryProgram, err = scripts.ParseProgram(data)
+			if err != nil {
+				return state, err
+			}
+			marieHandBevelChoices, err = scripts.PuppetBevelChoices(marieInventoryProgram, "addhandbevel")
+			if err != nil {
+				return state, err
+			}
+		}
+		if handFlag == 1 && len(marieHandBevelChoices) > 0 {
+			state.HandChoice = &marieHandBevelChoices[0]
+		} else if !inventoryHidden[strings.ToLower(handItem)] {
+			choice, found, err := scripts.PuppetBevelChoiceInCase(marieInventoryProgram, "addhandbevel", "handitem", handItem)
+			if err != nil {
+				return state, err
+			}
+			if found {
+				state.HandChoice = &choice
+			}
+		}
+		return state, nil
+	}
+	drawTrotterChoices := func(outline int) error {
+		labels := make([]string, len(trotterActiveChoices))
+		for index, choice := range trotterActiveChoices {
+			labels[index] = choice.Text
+		}
+		background, err := standingPoseOver(trotterConversationBase, trotterPuppet, trotterPuppetTable, nil, "Trotter")
+		if err != nil {
+			return err
+		}
+		frame, err := trotterPuppet.ChoiceFrame(background, trotterPuppetTable.PanelResource, labels)
+		if err != nil {
+			return fmt.Errorf("render Trotter choice panel: %w", err)
+		}
+		if outline >= 0 {
+			frame, err = render.DrawNativePuppetChoiceBevel(frame, outline)
+			if err != nil {
+				return err
+			}
+		}
+		currentFrame, stageFrame, trotterChoiceOutline = frame, frame, outline
+		if *debug && outline < 0 {
+			for index, choice := range trotterActiveChoices {
+				log.Printf("puppet=trotter choice-row=%d event=%d text=%q", index, choice.EventID, choice.Text)
+			}
+		}
+		return nil
+	}
+	var finishTrotterStep func() error
+	var startTrotterStep func(scripts.TrotterStep) error
+	var startTrotterGift func() error
 	startTrotterDialogue := func(step scripts.TrotterStep) error {
 		if len(step.Speech) == 0 {
 			return fmt.Errorf("Trotter phase %d has no speech", trotterPhase)
@@ -1970,6 +2101,134 @@ var leroyStandingSpeech []string
 		}
 		return nil
 	}
+	finishTrotterStep = func() error {
+		step := trotterPendingStep
+		sceneName, direction := string(view.Name[1:]), worldPoint[2]
+		viewChanged := false
+		for _, effect := range step.Effects {
+			switch effect.Kind {
+			case scripts.TrotterEffectAdjustCash:
+				playercash += effect.Amount
+				if *debug {
+					log.Printf("puppet=trotter cash=%d delta=%d", playercash, effect.Amount)
+				}
+			case scripts.TrotterEffectGiveInventory:
+				inventoryOwners[strings.ToLower(effect.Value)] = effect.Target
+			case scripts.TrotterEffectSetCounter:
+				trotterGiftCounter = effect.Amount
+			case scripts.TrotterEffectPlayerDeath:
+				if step.SetTrotterPhaseValid {
+					trotterPhase = step.SetTrotterPhase
+				}
+				trotterPendingStep, trotterInteractionStage = scripts.TrotterStep{}, trotterInteractionIdle
+				return finishPlayerDeath(effect.Value)
+			case scripts.TrotterEffectMoveActor:
+				position, found, err := activeSet.ResolveLocation(effect.Value)
+				if err != nil || !found {
+					return fmt.Errorf("resolve Trotter destination %q: found=%t err=%v", effect.Value, found, err)
+				}
+				heading := render.NativeActorHeadingToPoint(trotterPosition, position)
+				walk := scripts.NewNativeActorWalkJob(trotterPosition, position, heading, 4)
+				trotterWalk, actorPoses["trotter"], trotterWalkNext = &walk, "stand", scripts.NativeFrameUnits(scripts.NativeTickMilliseconds())
+				trotterFrameIndex = 0
+			case scripts.TrotterEffectSetScene:
+				sceneName, viewChanged = "scene "+strings.TrimPrefix(effect.Value, "scene "), true
+			case scripts.TrotterEffectSetDirection:
+				switch effect.Value {
+				case "north":
+					direction = assets.SetDirectionNorth
+				case "east":
+					direction = assets.SetDirectionEast
+				case "south":
+					direction = assets.SetDirectionSouth
+				case "west":
+					direction = assets.SetDirectionWest
+				default:
+					return fmt.Errorf("unknown Trotter direction %q", effect.Value)
+				}
+				viewChanged = true
+			case scripts.TrotterEffectSelectHand:
+				if handItem == "" || handFlag == 1 {
+					return openTrotterInventory()
+				}
+				return startTrotterGift()
+			default:
+				return fmt.Errorf("unsupported Trotter effect %d", effect.Kind)
+			}
+		}
+		step.Effects = nil
+		trotterPendingStep = step
+		if step.SetTrotterPhaseValid {
+			trotterPhase = step.SetTrotterPhase
+		}
+		if len(step.Choices) > 0 {
+			if step.Continuation != nil && step.Continuation.Kind == scripts.TrotterContinuationNativeEvent {
+				state, err := trotterStoryState()
+				if err != nil {
+					return err
+				}
+				resumed, err := trotterScriptController.ResumeDay1(state, step.Continuation)
+				if err != nil {
+					return err
+				}
+				step.Choices, trotterPendingStep.Choices = resumed.Choices, resumed.Choices
+			}
+			trotterActiveChoices = append([]scripts.PuppetChoice(nil), step.Choices[0]...)
+			if step.ScrambleChoices {
+				scripts.PuppetScrambleChoices(trotterActiveChoices, &nativeRandom)
+			}
+			trotterChoicePressActive, trotterChoicePressIndex = false, -1
+			trotterInteractionStage = trotterInteractionPuppetChoices
+			return drawTrotterChoices(-1)
+		}
+		if step.Continuation != nil {
+			return fmt.Errorf("Trotter continuation %q has no choices", step.Continuation.Code)
+		}
+		trotterPendingStep, trotterActiveChoices, trotterInteractionStage = scripts.TrotterStep{}, nil, trotterInteractionIdle
+		trotterActorValue++
+		if trotterWalk == nil {
+			actorPoses["trotter"] = "stand"
+		}
+		if viewChanged {
+			_, err := setWorldView(sceneName, direction)
+			return err
+		}
+		return refreshWorldScene()
+	}
+	startTrotterStep = func(step scripts.TrotterStep) error {
+		trotterPendingStep = step
+		if len(step.Speech) > 0 {
+			return startTrotterDialogue(step)
+		}
+		return finishTrotterStep()
+	}
+	startTrotterGift = func() error {
+		state, err := trotterStoryState()
+		if err != nil {
+			return err
+		}
+		item := handItem
+		step, err := trotterScriptController.BeginGift(state, item, trotterPendingStep.Continuation)
+		if err != nil {
+			return err
+		}
+		inventoryHidden[strings.ToLower(item)], handItem = true, ""
+		if err := buildTrotterConversationBase(); err != nil {
+			return err
+		}
+		return startTrotterStep(step)
+	}
+	startTrotterEventResponse := func(event int32) error {
+		state, err := trotterStoryState()
+		if err != nil {
+			return err
+		}
+		step, err := trotterScriptController.ContinueDay1(state, trotterPendingStep.Continuation, event)
+		if err != nil {
+			return err
+		}
+		return startTrotterStep(step)
+	}
 	finishTrotterDialogue := func() error {
 		if trotterDialogue != nil {
 			if err := trotterDialogue.Close(); err != nil {
@@ -1977,18 +2236,10 @@ var leroyStandingSpeech []string
 			}
 			trotterDialogue = nil
 		}
-		if trotterPendingStep.SetTrotterPhaseValid {
-			trotterPhase = trotterPendingStep.SetTrotterPhase
-		}
-		trotterPendingStep, trotterInteractionStage = scripts.TrotterStep{}, trotterInteractionIdle
-		actorPoses["trotter"] = "stand"
-		if err := refreshWorldScene(); err != nil {
-			return fmt.Errorf("restore Sallowers after Trotter dialogue: %w", err)
-		}
-		return nil
+		return finishTrotterStep()
 	}
 	beginTrotterPuppetTalk := func() (bool, error) {
-		if activeSetName != "sallower" || !trotterVisible || trotterInteractionStage != trotterInteractionIdle {
+		if activeSetName != "sallower" || !trotterVisible || trotterWalk != nil || trotterInteractionStage != trotterInteractionIdle {
 			return false, nil
 		}
 		camera := render.NativeActorCameraPosition(worldPoint)
@@ -2003,6 +2254,10 @@ var leroyStandingSpeech []string
 		if err := openTrotterPuppet(); err != nil {
 			return false, fmt.Errorf("open Trotter dialogue: %w", err)
 		}
+		handFlag = 1
+		if _, err := setWorldView("scene c3", assets.SetDirectionWest); err != nil {
+			return false, err
+		}
 		if err := buildTrotterConversationBase(); err != nil {
 			return false, err
 		}
@@ -2012,17 +2267,21 @@ var leroyStandingSpeech []string
 				return false, fmt.Errorf("initialize Trotter script controller: %w", err)
 			}
 		}
-		step, err := trotterScriptController.Dispatch(scripts.TrotterStoryState{Day: int16(gameDay), Clock: int16(gameClock), TrotterPhase: trotterPhase})
+		state, err := trotterStoryState()
 		if err != nil {
 			return false, err
 		}
-		if step.Kind != scripts.TrotterActionDialogue || len(step.Speech) == 0 {
+		step, err := trotterScriptController.Dispatch(state)
+		if err != nil {
+			return false, err
+		}
+		if step.Kind != scripts.TrotterActionDialogue {
 			if *debug {
 				log.Printf("actor=trotter unsupported-step kind=%d day=%d clock=%d phase=%d route=%s/%s", step.Kind, gameDay, gameClock, trotterPhase, step.Route.Page, step.Route.Code)
 			}
 			return false, nil
 		}
-		if err := startTrotterDialogue(step); err != nil {
+		if err := startTrotterStep(step); err != nil {
 			return false, fmt.Errorf("start Trotter phase %d: %w", trotterPhase, err)
 		}
 		if *debug {
@@ -2841,17 +3100,7 @@ var leroyStandingSpeech []string
 			return fmt.Errorf("draw avatar cash: %w", err)
 		}
 		inventoryCashRendered, inventoryCashRenderedValid = playercash, true
-		if !avatarIdleActive {
-			startAvatarNoFace(scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
-		}
-		portrait, anchor, err := avatarFrameForCurrent()
-		if err != nil {
-			return fmt.Errorf("load avatar inventory face: %w", err)
-		}
-		frame, err = render.CompositePuppetFrame(frame, portrait, anchor)
-		if err != nil {
-			return fmt.Errorf("draw avatar inventory face: %w", err)
-		}
+		avatarIdleActive, avatarGestureActive = false, false
 		currentScene, currentPixels = 2, pixels
 		currentFrame, stageFrame = frame, frame
 		marieInventoryProjected = projected
@@ -2865,6 +3114,9 @@ var leroyStandingSpeech []string
 		if err != nil {
 			return err
 		}
+		if currentScene != 2 {
+			setInventoryLoopsPaused(true)
+		}
 		currentScene, currentPixels, inventoryMenuActive = 2, nextPixels, true
 		return renderMarieInventory()
 	}
@@ -2877,6 +3129,11 @@ var leroyStandingSpeech []string
 		handFlag = 0
 		isaoInventoryReturnCode = isaoCurrentCode
 		isaoInteractionStage = isaoInteractionInventory
+		return enterInventoryScene()
+	}
+	openTrotterInventory = func() error {
+		handFlag = 0
+		trotterInteractionStage = trotterInteractionInventory
 		return enterInventoryScene()
 	}
 	var buildMarieConversationBase func() error
@@ -3174,15 +3431,20 @@ var leroyStandingSpeech []string
 				if *debug {
 					log.Printf("actor=leroy pose=%s next=%s ticks=%d heading=%d", step.Pose, step.Callback, step.Remaining, actorHeadings["leroy"])
 				}
-			case "nightfxs":
-				cue, found := scripts.NightWildlifeCue(currentThemeName, &nativeRandom)
+			case "nightfxs", "dayfxs":
+				cue, found := scripts.NativeSoundCue{}, false
+				if loop.Callback == "nightfxs" {
+					cue, found = scripts.NightWildlifeCue(currentThemeName, &nativeRandom)
+				} else {
+					cue, found = scripts.DayWildlifeCue(currentThemeName, &nativeRandom)
+				}
 				if found {
-					played, err := themeBank.PlayAtVolume(audioContext, cue.Name, 255)
+					played, err := themeBank.PlayAtVolume(audioContext, cue.Name, cue.Volume)
 					if err != nil {
 						return 0, fmt.Errorf("play NITE wildlife cue %s: %w", cue.Name, err)
 					}
 					if *debug {
-						log.Printf("ambient-cue=%s pan=%d played=%t", cue.Name, cue.Pan, played)
+						log.Printf("ambient-cue=%s volume=%d played=%t", cue.Name, cue.Volume, played)
 					}
 				}
 				loop.Remaining = 2
@@ -3326,7 +3588,9 @@ var leroyStandingSpeech []string
 				return 0, fmt.Errorf("unknown native loop callback %q", loop.Callback)
 			}
 			return nativeLoops.Register(loop), nil
-		}, func(loop scripts.ScriptLoop) bool { return visualEffectPump || loop.Callback != "nightfxs" })
+		}, func(loop scripts.ScriptLoop) bool {
+			return visualEffectPump || loop.Callback != "nightfxs" && loop.Callback != "dayfxs"
+		})
 		if err != nil {
 			return false, err
 		}
@@ -3466,6 +3730,29 @@ var leroyStandingSpeech []string
 				}
 			}
 		}
+		if trotterWalk != nil {
+			now := scripts.NativeFrameUnits(scripts.NativeTickMilliseconds())
+			if now >= trotterWalkNext {
+				var walking bool
+				trotterPosition, actorHeadings["trotter"], walking = trotterWalk.Pass(trotterPosition, actorHeadings["trotter"], 8)
+				trotterWalkNext, displayChanged = now+nativeAvatarFrameInterval, true
+				if actorHeadings["trotter"] == trotterWalk.Snapshot().Heading {
+					if actorPoses["trotter"] == "walk" {
+						trotterFrameIndex = (trotterFrameIndex + 1) % 16
+					} else {
+						actorPoses["trotter"], trotterFrameIndex = "walk", 0
+					}
+				}
+				if !walking {
+					trotterWalk, trotterVisible, actorPoses["trotter"] = nil, false, "stand"
+					trotterFrameIndex = 0
+					nativeLoops.Stop(2, "trotter")
+				}
+				if *debug {
+					log.Printf("actor=trotter walk point=%v heading=%d active=%t visible=%t", trotterPosition, actorHeadings["trotter"], walking, trotterVisible)
+				}
+			}
+		}
 		if buickWalk != nil {
 			previousPosition, previousHeading := buickPosition, actorHeadings["buick"]
 			var walking bool
@@ -3568,7 +3855,7 @@ var leroyStandingSpeech []string
 			return true, nil
 		}
 		if !visualEffectPump && displayChanged && helpInteractionStage == helpInteractionPuppetChoices {
-			if err := showHelpChoices(helpPage); err != nil {
+			if err := drawHelpChoices(helpChoiceOutline); err != nil {
 				return false, fmt.Errorf("refresh Help choice panel: %w", err)
 			}
 			return true, nil
@@ -3610,6 +3897,30 @@ var leroyStandingSpeech []string
 		}
 		if !visualEffectPump && isaoInteractionStage == isaoInteractionPuppetPending {
 			if err := startIsaoConversation(); err != nil {
+				return false, err
+			}
+			return true, nil
+		}
+		if !visualEffectPump && displayChanged && trotterInteractionStage == trotterInteractionPuppetChoices {
+			if err := drawTrotterChoices(trotterChoiceOutline); err != nil {
+				return false, err
+			}
+			return true, nil
+		}
+		if !visualEffectPump && trotterInteractionStage == trotterInteractionInventoryReturning && trotterInventoryReturnPending {
+			trotterInventoryReturnPending = false
+			if err := buildTrotterConversationBase(); err != nil {
+				return false, err
+			}
+			state, err := trotterStoryState()
+			if err != nil {
+				return false, err
+			}
+			step, err := trotterScriptController.ResumeDay1(state, trotterPendingStep.Continuation)
+			if err != nil {
+				return false, err
+			}
+			if err := startTrotterStep(step); err != nil {
 				return false, err
 			}
 			return true, nil
@@ -3805,7 +4116,7 @@ var leroyStandingSpeech []string
 			}
 		}
 		if displayChanged && leroyInteractionStage == leroyInteractionPuppetChoices {
-			if err := showLeroyChoices(); err != nil {
+			if err := drawLeroyChoices(leroyChoiceOutline); err != nil {
 				return false, fmt.Errorf("refresh Leroy choice panel: %w", err)
 			}
 			return true, nil
@@ -3846,10 +4157,13 @@ var leroyStandingSpeech []string
 		if err != nil {
 			return fmt.Errorf("open scene movie %s: %w", movieName, err)
 		}
-		movieRestorePalette = activeSet.Palette()
+		movieRestorePalette = stage.PaletteRaw
+		if activeSet != nil && currentScene == 0 {
+			movieRestorePalette = activeSet.Palette()
+		}
 		movieBase := currentFrame
 		moviePaletteBase := movieRestorePalette
-		if dogSpotMovie {
+		if dogSpotMovie || deathStage == 3 {
 			movieBase, moviePaletteBase = blackFrame, render.BlackPaletteRaw()
 			if *debug {
 				log.Printf("movie=%s base=blackscreen palette=black", movieName)
@@ -3953,7 +4267,12 @@ var leroyStandingSpeech []string
 					cursor = "touch"
 				}
 			}
-			if (inventoryMenuActive || marieInteractionStage == marieInteractionInventory || isaoInteractionStage == isaoInteractionInventory) && currentScene == 2 {
+			if trotterInteractionStage == trotterInteractionPuppetChoices {
+				if _, found := scripts.NativePuppetChoiceAt(point, trotterActiveChoices); found {
+					cursor = "touch"
+				}
+			}
+			if (inventoryMenuActive || marieInteractionStage == marieInteractionInventory || isaoInteractionStage == isaoInteractionInventory || trotterInteractionStage == trotterInteractionInventory) && currentScene == 2 {
 				if _, found := render.HitTestFlatProps(marieInventoryProjected, image.Pt(int(int16(point>>16)), int(int16(point)))); found {
 					cursor = "touch"
 				}
@@ -4039,13 +4358,36 @@ var leroyStandingSpeech []string
 			destination[key] = value
 		}
 	}
+	captureGameProgress := func() save.GameProgress {
+		positions := map[string][3]int16{"leroy": leroyPosition, "help": helpActorPosition, "jones": jonesPosition, "buick": buickPosition, "marie": mariePosition, "isao": isaoPosition, "trotter": trotterPosition, "bone": boneWorldProp.Position}
+		progress := save.GameProgress{Version: 1, Day: gameDay, Clock: gameClock, Phase: int16(phase), GamePhase: gamePhase, SetName: activeSetName, ViewName: string(view.Name[1:]), TownReturnScene: townReturnScene, Point: worldPoint, PlayerCash: playercash, InventoryOwners: cloneStringMap(inventoryOwners), InventoryHidden: cloneBoolMap(inventoryHidden), HandItem: handItem, HandFlag: handFlag, BoneOwner: boneOwner, BoneInInventory: boneInInventory, BoneWorldVisible: boneWorldProp.Visible, DogVisible: dogVisibleState, ActorPoses: cloneStringMap(actorPoses), ActorHeadings: actorHeadings, ActorPositions: positions, StoryValues: map[string]int32{"isaoActorValue": isaoActorValue, "isaoGiftCounter": isaoGiftCounter, "isaoPhase": int32(isaoPhase), "trotterPhase": int32(trotterPhase), "helpActorValue": helpActorValue, "helpPhase": int32(helpPhase), "jonesActorValue": jonesActorValue, "jonesPhase": int32(jonesPhase), "marieActorValue": marieActorValue, "mariePhase": int32(mariePhase), "laurelPhase": int32(laurelPhase), "oonaActorValue": oonaActorValue}, StoryFlags: map[string]bool{"isaoVisible": isaoVisible, "isaoBouncer": isaoBouncer, "isaoDirGo": isaoDirGo, "helpVisible": helpVisible, "buickVisible": buickVisible, "marieVisible": marieVisible, "jonesVisible": jonesVisible, "marieFlag1": marieFlag1, "marieFlag2": marieFlag2, "marieFlag3": marieFlag3}}
+		progress.StoryValues["trotterGiftCounter"] = trotterGiftCounter
+		progress.StoryValues["trotterActorValue"] = trotterActorValue
+		progress.StoryFlags["trotterVisible"] = trotterVisible
+		loops := nativeLoops.Snapshot()
+		progress.ScriptLoops = &loops
+		if trotterWalk != nil {
+			walk := trotterWalk.Snapshot()
+			progress.TrotterWalk, progress.TrotterWalkFrame = &walk, trotterFrameIndex
+			now := scripts.NativeFrameUnits(scripts.NativeTickMilliseconds())
+			if trotterWalkNext > now {
+				progress.TrotterWalkRemaining = trotterWalkNext - now
+			}
+		}
+		progress.ActorHeadings = make(map[string]int16, len(actorHeadings))
+		for name, heading := range actorHeadings {
+			progress.ActorHeadings[name] = heading
+		}
+		return progress
+	}
+	initialProgress := captureGameProgress()
+	initialProgress.ScriptLoops = nil
 	saveGameProgress := func(gameName string) error {
 		savePath, err := save.GameProgressPath(workspace.WorkDir, gameName)
 		if err != nil {
 			return err
 		}
-		positions := map[string][3]int16{"leroy": leroyPosition, "help": helpActorPosition, "jones": jonesPosition, "buick": buickPosition, "marie": mariePosition, "isao": isaoPosition, "trotter": trotterPosition, "bone": boneWorldProp.Position}
-		progress := save.GameProgress{Version: 1, Day: gameDay, Clock: gameClock, Phase: int16(phase), GamePhase: gamePhase, SetName: activeSetName, ViewName: string(view.Name[1:]), TownReturnScene: townReturnScene, Point: worldPoint, PlayerCash: playercash, InventoryOwners: cloneStringMap(inventoryOwners), InventoryHidden: cloneBoolMap(inventoryHidden), HandItem: handItem, HandFlag: handFlag, BoneOwner: boneOwner, BoneInInventory: boneInInventory, BoneWorldVisible: boneWorldProp.Visible, DogVisible: dogVisibleState, ActorPoses: cloneStringMap(actorPoses), ActorHeadings: actorHeadings, ActorPositions: positions, StoryValues: map[string]int32{"isaoActorValue": isaoActorValue, "isaoGiftCounter": isaoGiftCounter, "isaoPhase": int32(isaoPhase), "trotterPhase": int32(trotterPhase), "helpActorValue": helpActorValue, "helpPhase": int32(helpPhase), "jonesActorValue": jonesActorValue, "jonesPhase": int32(jonesPhase), "marieActorValue": marieActorValue, "mariePhase": int32(mariePhase), "laurelPhase": int32(laurelPhase), "oonaActorValue": oonaActorValue}, StoryFlags: map[string]bool{"isaoVisible": isaoVisible, "isaoBouncer": isaoBouncer, "isaoDirGo": isaoDirGo, "helpVisible": helpVisible, "buickVisible": buickVisible, "marieVisible": marieVisible, "jonesVisible": jonesVisible, "marieFlag1": marieFlag1, "marieFlag2": marieFlag2, "marieFlag3": marieFlag3}}
+		progress := captureGameProgress()
 		if err := save.SaveGameProgress(savePath, progress); err != nil {
 			return err
 		}
@@ -4054,15 +4396,7 @@ var leroyStandingSpeech []string
 		}
 		return nil
 	}
-	loadGameProgress := func(gameName string) error {
-		savePath, err := save.GameProgressPath(workspace.WorkDir, gameName)
-		if err != nil {
-			return err
-		}
-		progress, err := save.LoadGameProgress(savePath)
-		if err != nil {
-			return err
-		}
+	applyGameProgress := func(progress save.GameProgress, savePath string) error {
 		gameDay, gameClock, phase, gamePhase, playercash = progress.Day, progress.Clock, int(progress.Phase), progress.GamePhase, progress.PlayerCash
 		cloneStringMapTo(inventoryOwners, progress.InventoryOwners)
 		cloneBoolMapTo(inventoryHidden, progress.InventoryHidden)
@@ -4075,31 +4409,6 @@ var leroyStandingSpeech []string
 			boneWorldProp.View = boneSmallView
 		}
 		dogVisibleState = progress.DogVisible
-		cloneStringMapTo(actorPoses, progress.ActorPoses)
-		for name, heading := range progress.ActorHeadings {
-			actorHeadings[name] = heading
-		}
-		if position, found := progress.ActorPositions["leroy"]; found {
-			leroyPosition = position
-		}
-		if position, found := progress.ActorPositions["help"]; found {
-			helpActorPosition = position
-		}
-		if position, found := progress.ActorPositions["jones"]; found {
-			jonesPosition = position
-		}
-		if position, found := progress.ActorPositions["buick"]; found {
-			buickPosition = position
-		}
-		if position, found := progress.ActorPositions["marie"]; found {
-			mariePosition = position
-		}
-		if position, found := progress.ActorPositions["isao"]; found {
-			isaoPosition = position
-		}
-		if position, found := progress.ActorPositions["trotter"]; found {
-			trotterPosition = position
-		}
 		if value, found := progress.StoryValues["isaoActorValue"]; found {
 			isaoActorValue = value
 		}
@@ -4111,6 +4420,11 @@ var leroyStandingSpeech []string
 		}
 		if value, found := progress.StoryValues["trotterPhase"]; found {
 			trotterPhase = int16(value)
+		}
+		trotterGiftCounter = progress.StoryValues["trotterGiftCounter"]
+		trotterActorValue = progress.StoryValues["trotterActorValue"]
+		if visible, found := progress.StoryFlags["trotterVisible"]; found {
+			trotterVisible = visible
 		}
 		if value, found := progress.StoryValues["helpActorValue"]; found {
 			helpActorValue = value
@@ -4150,14 +4464,37 @@ var leroyStandingSpeech []string
 		if _, err := switchSpecialSet(progress.SetName, progress.ViewName, direction); err != nil {
 			return err
 		}
-		for name, target := range map[string]*bool{"isaoVisible": &isaoVisible, "isaoBouncer": &isaoBouncer, "isaoDirGo": &isaoDirGo, "helpVisible": &helpVisible, "buickVisible": &buickVisible, "marieVisible": &marieVisible, "jonesVisible": &jonesVisible, "marieFlag1": &marieFlag1, "marieFlag2": &marieFlag2, "marieFlag3": &marieFlag3} {
+		cloneStringMapTo(actorPoses, progress.ActorPoses)
+		for name, heading := range progress.ActorHeadings {
+			actorHeadings[name] = heading
+		}
+		for name, target := range map[string]*[3]int16{"leroy": &leroyPosition, "help": &helpActorPosition, "jones": &jonesPosition, "buick": &buickPosition, "marie": &mariePosition, "isao": &isaoPosition, "trotter": &trotterPosition, "bone": &boneWorldProp.Position} {
+			if position, found := progress.ActorPositions[name]; found {
+				*target = position
+			}
+		}
+		for name, target := range map[string]*bool{"isaoVisible": &isaoVisible, "isaoBouncer": &isaoBouncer, "isaoDirGo": &isaoDirGo, "trotterVisible": &trotterVisible, "helpVisible": &helpVisible, "buickVisible": &buickVisible, "marieVisible": &marieVisible, "jonesVisible": &jonesVisible, "marieFlag1": &marieFlag1, "marieFlag2": &marieFlag2, "marieFlag3": &marieFlag3} {
 			if value, found := progress.StoryFlags[name]; found {
 				*target = value
 			}
 		}
 		worldPoint = progress.Point
+		trotterWalk, trotterFrameIndex = nil, 0
+		if progress.TrotterWalk != nil {
+			walk, err := scripts.RestoreNativeActorWalkJob(*progress.TrotterWalk)
+			if err != nil {
+				return err
+			}
+			trotterWalk, trotterFrameIndex, trotterWalkNext = walk, progress.TrotterWalkFrame, scripts.NativeFrameUnits(scripts.NativeTickMilliseconds())+progress.TrotterWalkRemaining
+		}
+		if progress.ScriptLoops != nil {
+			if err := nativeLoops.Restore(*progress.ScriptLoops); err != nil {
+				return err
+			}
+			setInventoryLoopsPaused(false)
+		}
 		currentScene, inventoryMenuActive = 0, false
-		avatarIdleActive, avatarViewName, avatarFrameIndex, avatarAngle = false, "gossip", 0, 0
+		startAvatarNoFace(scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
 		if err := refreshWorldScene(); err != nil {
 			return err
 		}
@@ -4166,11 +4503,159 @@ var leroyStandingSpeech []string
 		}
 		return nil
 	}
+	loadGameProgressFile := func(savePath string) error {
+		progress, err := save.LoadGameProgress(savePath)
+		if err != nil {
+			return err
+		}
+		return applyGameProgress(progress, savePath)
+	}
+	loadGameProgress := func(gameName string) error {
+		savePath, err := save.GameProgressPath(workspace.WorkDir, gameName)
+		if err != nil {
+			return err
+		}
+		return loadGameProgressFile(savePath)
+	}
+	finishPlayerDeath = func(cause string) error {
+		sequence, err := scripts.NewDeathSequence(workspace, cause, &nativeRandom)
+		if err != nil {
+			return err
+		}
+		deathSequence, deathStage, deathUntil = sequence, 1, scripts.NativeFrameUnits(scripts.NativeTickMilliseconds())+uint32(sequence.DelayFrames)
+		avatarIdleActive, avatarGestureActive, avatarTipActive = false, false, false
+		if *debug {
+			log.Printf("playerdeath=%s movie=%s narration=%v", cause, sequence.Movie, sequence.Narration)
+		}
+		return nil
+	}
+	startDeathMovie := func() error {
+		nativeLoops = scripts.LoopScheduler{}
+		leroyWalk, helpWalk, jonesWalk, buickWalk, marieWalk, trotterWalk = nil, nil, nil, nil, nil, nil
+		actorTurnActive, helpTurnActive, jonesTurnActive, buickTurnActive, marieTurnActive = false, false, false, false, false
+		if themePlayer != nil {
+			if err := themePlayer.Close(); err != nil {
+				return err
+			}
+			themePlayer = nil
+		}
+		if themeBank != nil {
+			if err := themeBank.Close(); err != nil {
+				return err
+			}
+			themeBank = nil
+		}
+		if activeSetOwned && activeSet != nil {
+			if err := activeSet.Close(); err != nil {
+				return err
+			}
+		}
+		activeSet, activeSetName, activeSetOwned = nil, "", false
+		worldActors, projectedActors = nil, nil
+		lease, err := stage.AcquireSceneFrameResource(4)
+		if err != nil {
+			return err
+		}
+		data, err := lease.Bytes()
+		if closeErr := lease.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return err
+		}
+		nextPixels, decodeErr := render.DecodeMoviePixels(data, nil)
+		if len(nextPixels.Pixels) == 0 {
+			return fmt.Errorf("decode death flat: %w", decodeErr)
+		}
+		deathFrame, err = render.StageFrame(stage, nextPixels.Pixels)
+		if err != nil {
+			return err
+		}
+		currentScene, currentPixels, currentFrame, stageFrame, deathStage = 4, nextPixels, blackFrame, deathFrame, 3
+		return startSceneMovie(deathSequence.Movie)
+	}
+	startDeathNarration := func() error {
+		var err error
+		deathBank, err = audio.OpenSoundBank(workspace, deathSequence.SoundBank)
+		if err != nil {
+			return err
+		}
+		tracks, events := make([]audio.NativeSound, len(deathSequence.Narration)), make([]int, len(deathSequence.Narration))
+		var duration uint64
+		for index, voice := range deathSequence.Narration {
+			tracks[index], err = deathBank.Load(voice)
+			if err != nil {
+				return err
+			}
+			events[index] = index
+			duration += (uint64(len(tracks[index].Samples))*60 + uint64(tracks[index].Format.SampleRate) - 1) / uint64(tracks[index].Format.SampleRate)
+		}
+		if !*silent {
+			deathNarration, err = audio.NewNativePlaylist(audioContext, tracks, events, -1)
+			if err != nil {
+				return err
+			}
+		}
+		deathUntil, deathStage = scripts.NativeFrameUnits(scripts.NativeTickMilliseconds())+uint32(duration), 5
+		return nil
+	}
+	startNewGame := func() error {
+		nativeLoops = scripts.LoopScheduler{}
+		leroyWalk, helpWalk, jonesWalk, buickWalk, marieWalk, trotterWalk = nil, nil, nil, nil, nil, nil
+		leroyInteractionStage, helpInteractionStage, jonesInteractionStage, marieInteractionStage, isaoInteractionStage, trotterInteractionStage = leroyInteractionIdle, helpInteractionIdle, jonesInteractionIdle, marieInteractionIdle, isaoInteractionIdle, trotterInteractionIdle
+		marieInventoryReturnPending, isaoInventoryReturnPending, trotterInventoryReturnPending, avatarTipActive = false, false, false, false
+		marieGiftCounter, deathStage = 0, 0
+		if err := applyGameProgress(initialProgress, "NEW.FLT/death/new"); err != nil {
+			return err
+		}
+		if themePlayer != nil {
+			if err := themePlayer.Close(); err != nil {
+				return err
+			}
+			themePlayer = nil
+		}
+		if themeBank != nil {
+			if err := themeBank.Close(); err != nil {
+				return err
+			}
+		}
+		var err error
+		themeBank, err = audio.OpenSoundBank(workspace, "DATA/NIGHT.SND")
+		if err != nil {
+			return err
+		}
+		currentTheme, err = themeBank.LoadTheme("town.snd")
+		if err != nil {
+			return err
+		}
+		themePlayer, err = currentTheme.Play(audioContext)
+		if err != nil {
+			return err
+		}
+		currentThemeName = currentTheme.FirstVoiceName()
+		step, found := scripts.DogIdleStep("doright", &nativeRandom)
+		if found {
+			actorPoses["dog"] = step.Pose
+			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "dog", Callback: step.Callback, Remaining: step.Remaining}); status != 0 {
+				return fmt.Errorf("register new-game dog idle: %#x", status)
+			}
+		}
+		if currentThemeName == "nightwind3" {
+			nativeLoops.Stop(1, "scene g14")
+			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 1, Owner: "scene g14", Callback: "nightfxs", Remaining: 2}); status != 0 {
+				return fmt.Errorf("register new-game nightfxs: %#x", status)
+			}
+		}
+		return refreshWorldScene()
+	}
 	returnToMainPanel := func(effect uint16, duration int) (render.IndexedFrame, bool, error) {
 		oldFrame := currentFrame
+		if currentScene == 2 {
+			setInventoryLoopsPaused(false)
+		}
 		currentScene, currentPixels = 0, pixels
 		inventoryMenuActive = false
-		avatarIdleActive, avatarViewName, avatarFrameIndex, avatarAngle = false, "gossip", 0, 0
+		startAvatarNoFace(scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
 		if err := refreshWorldScene(); err != nil {
 			return render.IndexedFrame{}, false, err
 		}
@@ -4266,6 +4751,12 @@ var leroyStandingSpeech []string
 			}
 		}
 		previousScene := currentScene
+		if previousScene == 2 && target != 2 {
+			setInventoryLoopsPaused(false)
+		}
+		if previousScene != 2 && target == 2 {
+			setInventoryLoopsPaused(true)
+		}
 		currentScene, currentPixels = target, nextPixels
 		inventoryMenuActive = target == 2
 		if inventoryMenuActive {
@@ -4277,7 +4768,7 @@ var leroyStandingSpeech []string
 		} else if target == 0 {
 			stageFrame = nextFrame
 			if previousScene == 2 {
-				avatarIdleActive, avatarViewName, avatarFrameIndex, avatarAngle = false, "gossip", 0, 0
+				startAvatarNoFace(scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
 			}
 		}
 		if isaoInteractionStage == isaoInteractionInventory && target == 0 {
@@ -4285,6 +4776,9 @@ var leroyStandingSpeech []string
 		}
 		if marieInteractionStage == marieInteractionInventory && target == 0 {
 			marieInventoryReturnPending, marieInteractionStage = true, marieInteractionInventoryReturning
+		}
+		if trotterInteractionStage == trotterInteractionInventory && target == 0 {
+			trotterInventoryReturnPending, trotterInteractionStage = true, trotterInteractionInventoryReturning
 		}
 		if effect != 0 {
 			if _, err := runNativeScheduler(true); err != nil {
@@ -4349,8 +4843,59 @@ var leroyStandingSpeech []string
 		}
 		return nextFrame, true, nil
 	}
-	runErr := engine.Run(playback.CurrentFrame(), func() (render.IndexedFrame, bool, error) {
+	initialFrame := playback.CurrentFrame()
+	if *loadPath != "" {
+		if err := releaseMovieAudio(); err != nil {
+			return err
+		}
+		if err := movie.Close(); err != nil {
+			return err
+		}
+		movie, playback = nil, nil
+		if err := loadGameProgressFile(*loadPath); err != nil {
+			return err
+		}
+		initialFrame = currentFrame
+	}
+	if *silent && *silentScript == "" {
+		if err := render.WritePNG(filepath.Join(workspace.WorkDir, "redust-silent.png"), initialFrame); err != nil {
+			return err
+		}
+		return stage.Close()
+	}
+	runGame := engine.Run
+	if *silentScript != "" {
+		runGame = engine.SilentRunner(*silentScript)
+	}
+	runErr := runGame(initialFrame, func() (render.IndexedFrame, bool, error) {
 		drainMovieAudioTails()
+		if deathStage == 1 && scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) >= deathUntil {
+			fade, err := render.NewFadeEffect(currentFrame, blackFrame, deathSequence.FadeOutFrames)
+			if err != nil {
+				return render.IndexedFrame{}, false, err
+			}
+			transition, transitionMode, deathStage = fade, 5, 2
+			return fade.CurrentFrame(), true, nil
+		}
+		if deathStage == 5 {
+			finished := deathNarration != nil && !deathNarration.IsPlaying() || *silent && scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) >= deathUntil
+			if finished {
+				if deathNarration != nil {
+					if err := deathNarration.Close(); err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+					deathNarration = nil
+				}
+				if err := deathBank.Close(); err != nil {
+					return render.IndexedFrame{}, false, err
+				}
+				deathBank, deathStage, handItem = nil, 0, ""
+				if *debug {
+					log.Printf("death-flat=ready cause=%s", deathSequence.Cause)
+				}
+			}
+			return currentFrame, finished, nil
+		}
 		if playback == nil && transition == nil && pendingSetName != "" {
 			transferSetName, transferSetScene, transferSetDirection = pendingSetName, pendingSetScene, pendingSetDirection
 			pendingSetName, pendingSetScene, pendingSetDirection = "", "", ""
@@ -4526,6 +5071,20 @@ var leroyStandingSpeech []string
 			}
 			transitionFrame, changed, done := transition.Update()
 			if done {
+				if transitionMode == 5 {
+					transition, transitionMode = nil, 0
+					if err := startDeathMovie(); err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+					return playback.CurrentFrame(), true, nil
+				}
+				if transitionMode == 6 {
+					currentFrame, stageFrame, transition, transitionMode = deathFrame, deathFrame, nil, 0
+					if err := startDeathNarration(); err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+					return currentFrame, true, nil
+				}
 				if transitionMode == 4 {
 					currentFrame, stageFrame, transition, transitionMode = transition.TargetFrame(), transition.TargetFrame(), nil, 0
 					spotMovieStarting = true
@@ -4687,6 +5246,14 @@ var leroyStandingSpeech []string
 		}
 		playback = nil
 		currentFrame = stageFrame
+		if deathStage == 3 {
+			fade, err := render.NewFadeEffect(blackFrame, deathFrame, deathSequence.FadeInFrames)
+			if err != nil {
+				return render.IndexedFrame{}, false, err
+			}
+			transition, transitionMode, deathStage = fade, 6, 4
+			return fade.CurrentFrame(), true, nil
+		}
 		if spotMovieActive {
 			blackScreen := currentFrame
 			returnSet := nativeSpotMovieReturnSet(gameClock)
@@ -4738,7 +5305,7 @@ var leroyStandingSpeech []string
 		if *debug {
 			log.Printf("startup movies complete; scene=%s", stage.Scenes[currentScene].Name[1:])
 		}
-		if themePlayer == nil {
+		if themePlayer == nil && currentScene == 0 && activeSetName == "town" {
 			themeBank, err = audio.OpenSoundBank(workspace, "DATA/NIGHT.SND")
 			if err != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("open startup theme bank: %w", err)
@@ -4753,8 +5320,7 @@ var leroyStandingSpeech []string
 				return render.IndexedFrame{}, false, fmt.Errorf("start startup town theme: %w", err)
 			}
 			currentThemeName = theme.FirstVoiceName()
-			tick := scripts.NativeTickMilliseconds()
-			nativeRandom = scripts.NewNativeRandom(scripts.NativeRandomSeed(tick))
+			resetNativeRandom()
 			if gameClock == 3 {
 				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "leroy", Callback: "leroyidle", Remaining: 20}); status != 0 {
 					return render.IndexedFrame{}, false, fmt.Errorf("register Leroy idle loop returned status %#x", status)
@@ -4796,6 +5362,9 @@ var leroyStandingSpeech []string
 		}
 		return stageFrame, true, nil
 	}, func(key ebiten.Key) {
+		if deathStage != 0 && playback == nil {
+			return
+		}
 		waveVolume := -1
 		switch key {
 		case ebiten.Key0:
@@ -4857,6 +5426,14 @@ var leroyStandingSpeech []string
 		if trotterInteractionStage == trotterInteractionPuppetSpeaking {
 			if key == ebiten.KeySpace || key == ebiten.KeyEscape || key == ebiten.KeyQ || key == ebiten.KeyPeriod {
 				trotterDialogueSkip = true
+			}
+			return
+		}
+		if trotterInteractionStage == trotterInteractionPuppetChoices {
+			if key == ebiten.KeyEscape || key == ebiten.KeyQ || key == ebiten.KeyPeriod {
+				if err := startTrotterEventResponse(-1); err != nil {
+					log.Printf("cancel Trotter choice: %v", err)
+				}
 			}
 			return
 		}
@@ -4978,6 +5555,9 @@ var leroyStandingSpeech []string
 		}
 	}, func(mouseEvent engine.MouseEvent) (render.IndexedFrame, bool, error) {
 		point := mouseEvent.Point
+		if deathStage != 0 {
+			return currentFrame, false, nil
+		}
 		if playback != nil || transition != nil {
 			return render.IndexedFrame{}, false, nil
 		}
@@ -5020,6 +5600,18 @@ var leroyStandingSpeech []string
 			isaoChoicePressIndex = (int(int16(point)) - 264) / 24
 			return currentFrame, false, nil
 		}
+		if trotterInteractionStage == trotterInteractionPuppetChoices {
+			if mouseEvent.Button != ebiten.MouseButtonLeft {
+				return currentFrame, false, nil
+			}
+			event, found := scripts.NativePuppetChoiceAt(point, trotterActiveChoices)
+			if !found {
+				return currentFrame, false, nil
+			}
+			trotterChoicePressActive, trotterChoicePressEvent = true, event
+			trotterChoicePressIndex = (int(int16(point)) - 264) / 24
+			return currentFrame, false, nil
+		}
 		if inventoryMenuActive && currentScene == 2 && mouseEvent.Button == ebiten.MouseButtonLeft {
 			if name, found := render.HitTestFlatProps(marieInventoryProjected, image.Pt(int(int16(point>>16)), int(int16(point)))); found {
 				handItem = name
@@ -5044,7 +5636,7 @@ var leroyStandingSpeech []string
 				return currentFrame, true, nil
 			}
 		}
-		if trotterInteractionStage != trotterInteractionIdle {
+		if trotterInteractionStage != trotterInteractionIdle && trotterInteractionStage != trotterInteractionInventory {
 			return currentFrame, false, nil
 		}
 		if isaoInteractionStage != isaoInteractionIdle && isaoInteractionStage != isaoInteractionInventory {
@@ -5326,6 +5918,27 @@ var leroyStandingSpeech []string
 		if err != nil {
 			return render.IndexedFrame{}, false, fmt.Errorf("parse button script resource %d: %w", handler.ScriptResource, err)
 		}
+		if currentScene == 4 {
+			action, found, err := scripts.ParseDeathButtonAction(program, string(handler.Name[1:]), *debug)
+			if err != nil {
+				return render.IndexedFrame{}, false, err
+			}
+			if found && action.Kind == scripts.DeathButtonNew {
+				if err := startNewGame(); err != nil {
+					return render.IndexedFrame{}, false, err
+				}
+				return currentFrame, true, nil
+			}
+			if found && action.Kind == scripts.DeathButtonHelp {
+				if err := startSceneMovie(action.Movie); err != nil {
+					return render.IndexedFrame{}, false, err
+				}
+				return playback.CurrentFrame(), true, nil
+			}
+			if found && action.Kind == scripts.DeathButtonQuit && *debug {
+				return currentFrame, false, ebiten.Termination
+			}
+		}
 		continuation, trackButton, err := scripts.ParseFlatMouseContinuation(program, string(handler.Name[1:]))
 		if err != nil {
 			return render.IndexedFrame{}, false, fmt.Errorf("parse flat button script resource %d: %w", handler.ScriptResource, err)
@@ -5508,6 +6121,39 @@ var leroyStandingSpeech []string
 					return currentFrame, true, nil
 				}
 				return currentFrame, false, nil
+			}
+			return currentFrame, false, nil
+		}
+		if trotterInteractionStage == trotterInteractionPuppetChoices && trotterChoicePressActive {
+			event, found := scripts.NativePuppetChoiceAt(state.Point, trotterActiveChoices)
+			outline := -1
+			if found && event == trotterChoicePressEvent {
+				outline = (int(int16(state.Point)) - 264) / 24
+			}
+			if state.LeftDown {
+				if outline == trotterChoiceOutline {
+					return currentFrame, false, nil
+				}
+				if err := drawTrotterChoices(outline); err != nil {
+					return render.IndexedFrame{}, false, err
+				}
+				return currentFrame, true, nil
+			}
+			if state.LeftReleased {
+				selected, selectedEvent := outline >= 0 && outline == trotterChoicePressIndex, trotterChoicePressEvent
+				trotterChoicePressActive, trotterChoicePressIndex = false, -1
+				if selected {
+					if err := startTrotterEventResponse(selectedEvent); err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+					return currentFrame, true, nil
+				}
+				if trotterChoiceOutline >= 0 {
+					if err := drawTrotterChoices(-1); err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+					return currentFrame, true, nil
+				}
 			}
 			return currentFrame, false, nil
 		}

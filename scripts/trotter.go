@@ -18,6 +18,7 @@ type TrotterStep struct {
 	EventID              int32
 	Continuation         *TrotterContinuation
 	Effects              []TrotterEffect
+	ScrambleChoices      bool
 }
 
 func TrotterPuppetResponse(phase int16) (TrotterStep, error) {
@@ -51,6 +52,11 @@ const (
 	TrotterEffectSetDirection
 	TrotterEffectRunPuppet
 	TrotterEffectMessage
+	TrotterEffectAdjustCash
+	TrotterEffectPlayerDeath
+	TrotterEffectSelectHand
+	TrotterEffectGiveInventory
+	TrotterEffectSetCounter
 )
 
 type TrotterEffect struct {
@@ -58,6 +64,7 @@ type TrotterEffect struct {
 	Target string
 	Value  string
 	Phase  int16
+	Amount int32
 }
 
 type TrotterOutcome struct {
@@ -74,14 +81,18 @@ const (
 )
 
 type TrotterContinuation struct {
-	Kind      TrotterContinuationKind
-	Condition string
-	Compare   int32
-	OnMatch   TrotterOutcome
-	Otherwise TrotterOutcome
-	Resource  uint32
-	Code      string
-	EventID   int32
+	Kind          TrotterContinuationKind
+	Condition     string
+	Compare       int32
+	OnMatch       TrotterOutcome
+	Otherwise     TrotterOutcome
+	Resource      uint32
+	Code          string
+	EventID       int32
+	OriginPhase   int16
+	AskedTown     bool
+	ReturnsToGift bool
+	Resume        *TrotterContinuation
 }
 
 type TrotterUnsupportedError struct {
@@ -99,6 +110,10 @@ type TrotterStoryState struct {
 	Day          int16
 	Clock        int16
 	TrotterPhase int16
+	Phase        int16
+	PlayerCash   int32
+	HandChoice   *PuppetChoice
+	Counter      int32
 }
 
 type TrotterSallowerState struct {
@@ -207,10 +222,6 @@ func TrotterDay4Response(phase int16) (TrotterStep, error) {
 
 func TrotterDay1Response(phase int16) (TrotterStep, error) {
 	base := TrotterStep{Kind: TrotterActionDialogue, Route: trotterBootRoutes[1]}
-	if phase > 6 {
-		base.Speech, base.Finish = []string{"trotter.11", "trotter.12"}, true
-		return base, nil
-	}
 	switch phase {
 	case 0:
 		base.Speech, base.SetTrotterPhase, base.SetTrotterPhaseValid = []string{"trotter.13"}, 1, true
@@ -228,11 +239,207 @@ func TrotterDay1Response(phase int16) (TrotterStep, error) {
 	case 6:
 		base.Speech, base.SetTrotterPhase, base.SetTrotterPhaseValid = []string{"trotter.22", "trotter.23"}, 7, true
 		base.Effects = []TrotterEffect{{Kind: TrotterEffectMoveActor, Target: "TROTTER", Value: "sal.trotter2"}, {Kind: TrotterEffectSetScene, Value: "d3"}, {Kind: TrotterEffectSetDirection, Value: "west"}}
+	case 7:
 	default:
 		return TrotterStep{}, TrotterUnsupportedError{Route: fmt.Sprintf("day1/runyoself phase %d", phase)}
 	}
 	base.Finish = base.Continuation == nil
 	return base, nil
+}
+
+func (c *TrotterScriptController) BeginDay1(state TrotterStoryState) (TrotterStep, error) {
+	if c == nil || c.puppetPrograms[trotterDay1Resource].Records == nil {
+		return TrotterStep{}, fmt.Errorf("TROTTER.PUP day1 resource is unavailable")
+	}
+	if state.Phase > 6 {
+		return TrotterStep{Kind: TrotterActionDialogue, Route: trotterBootRoutes[1], Speech: []string{"trotter.11", "trotter.12"}, Finish: true}, nil
+	}
+	step, err := TrotterDay1Response(state.TrotterPhase)
+	if err != nil || step.Continuation == nil {
+		return step, err
+	}
+	code := step.Continuation.Condition
+	choiceStep, err := c.day1Choices(state, code, state.TrotterPhase, false)
+	if err != nil {
+		return TrotterStep{}, err
+	}
+	choiceStep.Speech = step.Speech
+	return choiceStep, nil
+}
+
+func (c *TrotterScriptController) day1Choices(state TrotterStoryState, code string, originPhase int16, askedTown bool) (TrotterStep, error) {
+	choices, err := PuppetBevelChoices(c.puppetPrograms[trotterDay1Resource], code)
+	if err != nil {
+		return TrotterStep{}, fmt.Errorf("TROTTER.PUP day1 %s choices: %w", code, err)
+	}
+	if code == "mainloop" {
+		filtered := make([]PuppetChoice, 0, len(choices)+1)
+		for _, choice := range choices {
+			if askedTown && choice.EventID == 101 {
+				continue
+			}
+			if choice.EventID == 104 && state.HandChoice != nil {
+				filtered = append(filtered, *state.HandChoice)
+			}
+			filtered = append(filtered, choice)
+		}
+		choices = filtered
+	}
+	route := trotterBootRoutes[1]
+	route.Code = code
+	return TrotterStep{Kind: TrotterActionDialogue, Route: route, Choices: [][]PuppetChoice{choices}, ScrambleChoices: code == "mightdie", Continuation: &TrotterContinuation{Kind: TrotterContinuationNativeEvent, Resource: trotterDay1Resource, Code: code, OriginPhase: originPhase, AskedTown: askedTown}}, nil
+}
+
+func (c *TrotterScriptController) ContinueDay1(state TrotterStoryState, continuation *TrotterContinuation, eventID int32) (TrotterStep, error) {
+	if c == nil || c.puppetPrograms[trotterDay1Resource].Records == nil {
+		return TrotterStep{}, fmt.Errorf("TROTTER.PUP day1 resource is unavailable")
+	}
+	if continuation == nil || continuation.Kind != TrotterContinuationNativeEvent || continuation.Resource != trotterDay1Resource || (!continuation.ReturnsToGift && continuation.OriginPhase != 2 && continuation.OriginPhase != 3) {
+		return TrotterStep{}, TrotterUnsupportedError{Route: "day1 continuation"}
+	}
+	code := continuation.Code
+	if code != "mightdie" && code != "alternate" && code != "greet" && code != "mainloop" {
+		return TrotterStep{}, TrotterUnsupportedError{Route: "day1 continuation " + code}
+	}
+	step := TrotterStep{Kind: TrotterActionDialogue, Route: trotterBootRoutes[1], EventID: eventID, Finish: true}
+	step.Route.Code = code
+	if eventID == -1 {
+		return c.finishDay1Call(state, continuation, step, false)
+	}
+	choices, err := c.day1Choices(state, code, continuation.OriginPhase, continuation.AskedTown)
+	if err != nil {
+		return TrotterStep{}, err
+	}
+	found := false
+	for _, choice := range choices.Choices[0] {
+		if choice.EventID == eventID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return TrotterStep{}, TrotterUnsupportedError{Route: fmt.Sprintf("day1/%s event %d", code, eventID)}
+	}
+	if code == "mainloop" && eventID == 55555 {
+		choices.EventID = eventID
+		choices.Effects = []TrotterEffect{{Kind: TrotterEffectSelectHand}}
+		choices.Continuation.ReturnsToGift, choices.Continuation.Resume = continuation.ReturnsToGift, continuation.Resume
+		return choices, nil
+	}
+	step.Speech, err = PuppetEventSpeechCalls(c.puppetPrograms[trotterDay1Resource], code, eventID)
+	if err != nil {
+		return TrotterStep{}, err
+	}
+	nextCode, askedTown := "", continuation.AskedTown
+	switch code {
+	case "mightdie":
+		if eventID == 102 {
+			step.Effects = []TrotterEffect{{Kind: TrotterEffectPlayerDeath, Value: "by trotter"}}
+		} else {
+			nextCode = "greet"
+		}
+	case "alternate":
+		nextCode = "greet"
+	case "greet":
+		nextCode = "mainloop"
+	case "mainloop":
+		if eventID == 101 {
+			nextCode, askedTown = "mainloop", true
+		}
+	}
+	if (code == "mightdie" || code == "alternate") && eventID == 101 && state.PlayerCash > 0 {
+		step.Effects = append(step.Effects, TrotterEffect{Kind: TrotterEffectAdjustCash, Amount: -1})
+	}
+	if nextCode == "" {
+		return c.finishDay1Call(state, continuation, step, true)
+	}
+	choices, err = c.day1Choices(state, nextCode, continuation.OriginPhase, askedTown)
+	if err != nil {
+		return TrotterStep{}, err
+	}
+	choices.Speech, choices.Effects, choices.EventID = step.Speech, step.Effects, eventID
+	choices.Continuation.ReturnsToGift, choices.Continuation.Resume = continuation.ReturnsToGift, continuation.Resume
+	return choices, nil
+}
+
+func (c *TrotterScriptController) ResumeDay1(state TrotterStoryState, continuation *TrotterContinuation) (TrotterStep, error) {
+	if c == nil || continuation == nil || continuation.Kind != TrotterContinuationNativeEvent || continuation.Resource != trotterDay1Resource {
+		return TrotterStep{}, TrotterUnsupportedError{Route: "day1 resume"}
+	}
+	step, err := c.day1Choices(state, continuation.Code, continuation.OriginPhase, continuation.AskedTown)
+	if err != nil {
+		return TrotterStep{}, err
+	}
+	step.Continuation.ReturnsToGift, step.Continuation.Resume = continuation.ReturnsToGift, continuation.Resume
+	return step, nil
+}
+
+func (c *TrotterScriptController) finishDay1Call(state TrotterStoryState, continuation *TrotterContinuation, step TrotterStep, completed bool) (TrotterStep, error) {
+	if continuation.ReturnsToGift {
+		if continuation.Resume == nil {
+			return step, nil
+		}
+		resumed, err := c.ResumeDay1(state, continuation.Resume)
+		if err != nil {
+			return TrotterStep{}, err
+		}
+		resumed.Speech, resumed.Effects, resumed.EventID = step.Speech, step.Effects, step.EventID
+		return resumed, nil
+	}
+	if completed {
+		step.SetTrotterPhase, step.SetTrotterPhaseValid = 4, true
+	}
+	return step, nil
+}
+
+func (c *TrotterScriptController) BeginGift(state TrotterStoryState, what string, resume *TrotterContinuation) (TrotterStep, error) {
+	if c == nil || c.puppetPrograms[trotterBootResource].Records == nil {
+		return TrotterStep{}, fmt.Errorf("TROTTER.PUP boot resource is unavailable")
+	}
+	step := TrotterStep{Kind: TrotterActionDialogue, Route: TrotterRoute{Day: state.Day, Clock: state.Clock, Page: "boot script", Resource: trotterBootResource, Code: "gift"}, Finish: true}
+	switch strings.ToLower(what) {
+	case "cigar":
+		step.Speech = []string{"trotter.1"}
+		step.Effects = []TrotterEffect{{Kind: TrotterEffectGiveInventory, Target: "TROTTER", Value: what}}
+		if state.TrotterPhase < 4 && state.Day == 1 && state.Phase < 7 {
+			alternate, err := c.day1Choices(state, "alternate", state.TrotterPhase, false)
+			if err != nil {
+				return TrotterStep{}, err
+			}
+			alternate.Speech, alternate.Effects = step.Speech, step.Effects
+			alternate.Continuation.ReturnsToGift, alternate.Continuation.Resume = true, resume
+			return alternate, nil
+		}
+	case "jug":
+		step.Speech = []string{"trotter.2"}
+	case "sugarcubes":
+		step.Speech = []string{"trotter.3", "trotter.5"}
+		if state.Clock == 2 && state.Day == 2 && state.TrotterPhase == 3 {
+			step.Speech = []string{"trotter.3", "trotter.4"}
+			step.SetTrotterPhase, step.SetTrotterPhaseValid = 5, true
+			step.Effects = []TrotterEffect{{Kind: TrotterEffectMoveActor, Target: "TROTTER", Value: "sal.trotter2"}, {Kind: TrotterEffectGiveInventory, Target: "TROTTER", Value: what}}
+		}
+	case "tstone", "blade", "mask", "flute", "tbird":
+		step.Speech = []string{"trotter.6"}
+	default:
+		switch state.Counter {
+		case 0:
+			step.Speech, step.Effects = []string{"trotter.7", "trotter.8"}, []TrotterEffect{{Kind: TrotterEffectSetCounter, Amount: 1}}
+		case 1:
+			step.Speech, step.Effects = []string{"trotter.9"}, []TrotterEffect{{Kind: TrotterEffectSetCounter, Amount: 2}}
+		case 2:
+			step.Speech, step.Effects = []string{"trotter.8", "trotter.10"}, []TrotterEffect{{Kind: TrotterEffectSetCounter, Amount: 0}}
+		}
+	}
+	if resume != nil {
+		resumed, err := c.ResumeDay1(state, resume)
+		if err != nil {
+			return TrotterStep{}, err
+		}
+		resumed.Speech, resumed.Effects = step.Speech, step.Effects
+		return resumed, nil
+	}
+	return step, nil
 }
 
 func (c *TrotterScriptController) Boot(day int16) (TrotterStep, error) {
@@ -252,7 +459,7 @@ func (c *TrotterScriptController) Dispatch(state TrotterStoryState) (TrotterStep
 	}
 	switch state.Day {
 	case 1:
-		return TrotterDay1Response(state.TrotterPhase)
+		return c.BeginDay1(state)
 	case 2:
 		switch state.Clock {
 		case 1:

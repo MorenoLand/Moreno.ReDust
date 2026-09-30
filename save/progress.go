@@ -7,32 +7,38 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"redust/scripts"
 )
 
 type GameProgress struct {
-	Version          uint16              `json:"version"`
-	Day              int                 `json:"day"`
-	Clock            int                 `json:"clock"`
-	Phase            int16               `json:"phase"`
-	GamePhase        int16               `json:"gamePhase"`
-	SetName          string              `json:"set"`
-	ViewName         string              `json:"view"`
-	TownReturnScene  string              `json:"townReturnScene,omitempty"`
-	Point            [3]int16            `json:"point"`
-	PlayerCash       int32               `json:"playerCash"`
-	InventoryOwners  map[string]string   `json:"inventoryOwners"`
-	InventoryHidden  map[string]bool     `json:"inventoryHidden"`
-	HandItem         string              `json:"handItem,omitempty"`
-	HandFlag         int16               `json:"handFlag"`
-	BoneOwner        string              `json:"boneOwner"`
-	BoneInInventory  bool                `json:"boneInInventory"`
-	BoneWorldVisible bool                `json:"boneWorldVisible"`
-	DogVisible       bool                `json:"dogVisible"`
-	ActorPoses       map[string]string   `json:"actorPoses"`
-	ActorHeadings    map[string]int16    `json:"actorHeadings"`
-	ActorPositions   map[string][3]int16 `json:"actorPositions"`
-	StoryValues      map[string]int32    `json:"storyValues"`
-	StoryFlags       map[string]bool     `json:"storyFlags"`
+	Version              uint16                        `json:"version"`
+	Day                  int                           `json:"day"`
+	Clock                int                           `json:"clock"`
+	Phase                int16                         `json:"phase"`
+	GamePhase            int16                         `json:"gamePhase"`
+	SetName              string                        `json:"set"`
+	ViewName             string                        `json:"view"`
+	TownReturnScene      string                        `json:"townReturnScene,omitempty"`
+	Point                [3]int16                      `json:"point"`
+	PlayerCash           int32                         `json:"playerCash"`
+	InventoryOwners      map[string]string             `json:"inventoryOwners"`
+	InventoryHidden      map[string]bool               `json:"inventoryHidden"`
+	HandItem             string                        `json:"handItem,omitempty"`
+	HandFlag             int16                         `json:"handFlag"`
+	BoneOwner            string                        `json:"boneOwner"`
+	BoneInInventory      bool                          `json:"boneInInventory"`
+	BoneWorldVisible     bool                          `json:"boneWorldVisible"`
+	DogVisible           bool                          `json:"dogVisible"`
+	ActorPoses           map[string]string             `json:"actorPoses"`
+	ActorHeadings        map[string]int16              `json:"actorHeadings"`
+	ActorPositions       map[string][3]int16           `json:"actorPositions"`
+	StoryValues          map[string]int32              `json:"storyValues"`
+	StoryFlags           map[string]bool               `json:"storyFlags"`
+	ScriptLoops          *scripts.LoopSchedulerState   `json:"scriptLoops,omitempty"`
+	TrotterWalk          *scripts.NativeActorWalkState `json:"trotterWalk,omitempty"`
+	TrotterWalkFrame     int                           `json:"trotterWalkFrame,omitempty"`
+	TrotterWalkRemaining uint32                        `json:"trotterWalkRemaining,omitempty"`
 }
 
 func GameProgressPath(directory, gameName string) (string, error) {
@@ -52,6 +58,19 @@ func ValidateGameProgress(state GameProgress) error {
 	}
 	if state.SetName == "" || state.ViewName == "" || state.PlayerCash < 0 {
 		return fmt.Errorf("game save set/view/cash state is invalid")
+	}
+	if state.ScriptLoops != nil {
+		if err := state.ScriptLoops.Validate(); err != nil {
+			return fmt.Errorf("game save loops: %w", err)
+		}
+	}
+	if state.TrotterWalkFrame < 0 || state.TrotterWalkFrame > 15 {
+		return fmt.Errorf("game save Trotter walk frame %d is outside 0..15", state.TrotterWalkFrame)
+	}
+	if state.TrotterWalk != nil {
+		if err := state.TrotterWalk.Validate(); err != nil {
+			return fmt.Errorf("game save Trotter walk: %w", err)
+		}
 	}
 	return nil
 }

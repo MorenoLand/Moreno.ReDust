@@ -18,7 +18,19 @@ For a headless initial screenshot:
 go run . --silent --debug --work=bin/
 ```
 
-The screenshot is written to `bin/redust-silent.png`. Silent mode exits before the interactive game and audio start.
+The screenshot is written to `bin/redust-silent.png`. Use `--load=bin/example.redust.json` to start from a ReDust save.
+
+For scripted headless input and screenshots:
+
+```powershell
+go run . --work=bin/ --silent-script=bin/check.json --silent-seed=1
+```
+
+The script runs the game's input callbacks with audio muted. It accepts `key`, `click`, `mouse_down`, `mouse_up`, `mouse_move`, `wait`, and `snapshot` actions; snapshots must be PNGs inside the project's `bin/` directory. For example:
+
+```json
+{"actions":[{"type":"key","key":"Space"},{"type":"wait","milliseconds":500},{"type":"snapshot","path":"bin/check.png"}]}
+```
 
 ## Build
 

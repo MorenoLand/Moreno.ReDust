@@ -88,7 +88,7 @@ func DrawNativePuppetChoices(frame IndexedFrame, choices []string) (IndexedFrame
 }
 
 func DrawNativePuppetChoiceBevel(frame IndexedFrame, index int) (IndexedFrame, error) {
-	if index < 0 || index >= 4 || len(frame.Palette) <= 0xfb {
+	if index < 0 || index >= 5 || len(frame.Palette) <= 0xfb {
 		return IndexedFrame{}, fmt.Errorf("puppet choice bevel index %d or palette is invalid", index)
 	}
 	background, err := frame.rgbaImage()

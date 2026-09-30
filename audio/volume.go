@@ -15,6 +15,7 @@ type Player struct {
 type volumeBus struct {
 	mu       sync.Mutex
 	level    int
+	muted    bool
 	bindings map[*volumeBinding]struct{}
 }
 
@@ -33,6 +34,21 @@ func WaveVolume() int {
 
 func SetWaveVolume(level int) error {
 	return applicationVolume.setLevel(level)
+}
+
+func SetOutputMuted(muted bool) bool {
+	return applicationVolume.setMuted(muted)
+}
+
+func (b *volumeBus) setMuted(muted bool) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	previous := b.muted
+	b.muted = muted
+	for binding := range b.bindings {
+		binding.applyVolume()
+	}
+	return previous
 }
 
 func (b *volumeBus) getLevel() int {
@@ -76,7 +92,11 @@ func newPlayer(native *ebitenaudio.Player) *Player {
 
 func (b *volumeBinding) applyVolume() {
 	if !b.closed && b.apply != nil {
-		b.apply(b.gain * float64(b.bus.level) / 9)
+		gain := b.gain * float64(b.bus.level) / 9
+		if b.bus.muted {
+			gain = 0
+		}
+		b.apply(gain)
 	}
 }
 

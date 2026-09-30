@@ -1,6 +1,9 @@
 package scripts
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 type ActorIdleStep struct {
 	Pose           string
@@ -122,6 +125,37 @@ type NativeActorWalkJob struct {
 	progress      int
 	speed         int16
 	heading       int16
+}
+
+type NativeActorWalkState struct {
+	Start    [3]int16 `json:"start"`
+	Target   [3]int16 `json:"target"`
+	Distance int      `json:"distance"`
+	Progress int      `json:"progress"`
+	Speed    int16    `json:"speed"`
+	Heading  int16    `json:"heading"`
+}
+
+func (job NativeActorWalkJob) Snapshot() NativeActorWalkState {
+	return NativeActorWalkState{Start: job.start, Target: job.target, Distance: job.distance, Progress: job.progress, Speed: job.speed, Heading: job.heading}
+}
+
+func (state NativeActorWalkState) Validate() error {
+	if state.Distance < 0 || state.Progress < 0 || state.Progress > state.Distance || state.Speed < 0 || state.Heading < 0 || state.Heading > 255 {
+		return fmt.Errorf("actor walk state is invalid: distance=%d progress=%d speed=%d heading=%d", state.Distance, state.Progress, state.Speed, state.Heading)
+	}
+	expected := NewNativeActorWalkJob(state.Start, state.Target, state.Heading, state.Speed)
+	if state.Distance != expected.distance {
+		return fmt.Errorf("actor walk distance %d differs from original route distance %d", state.Distance, expected.distance)
+	}
+	return nil
+}
+
+func RestoreNativeActorWalkJob(state NativeActorWalkState) (*NativeActorWalkJob, error) {
+	if err := state.Validate(); err != nil {
+		return nil, err
+	}
+	return &NativeActorWalkJob{start: state.Start, target: state.Target, distance: state.Distance, progress: state.Progress, speed: state.Speed, heading: state.Heading}, nil
 }
 
 func LeroyMouseDownAction(day, distance, hotDistance int) bool {
