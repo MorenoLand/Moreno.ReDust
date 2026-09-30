@@ -664,6 +664,19 @@ var leroyStandingSpeech []string
 	}
 	loadWorldActors := func(point [3]int16) ([]render.WorldActorSprite, error) {
 		actors := make([]render.WorldActorSprite, 0, 4)
+		// Drop any actor that does not stand in the player's cell or the one the player is
+		// facing, so an actor from another cell is neither drawn nor hit-tested. The
+		// reference's draw path has no wall mask and no occlusion test, so cells are
+		// separated by which backdrop is on screen and by nothing else.
+		cullToVisibleCell := func(actors []render.WorldActorSprite) []render.WorldActorSprite {
+			kept := actors[:0]
+			for _, sprite := range actors {
+				if activeSet.ActorCellVisible(point, sprite.Position) {
+					kept = append(kept, sprite)
+				}
+			}
+			return kept
+		}
 		if activeSetName == "sallower" {
 			if isaoVisible {
 				for _, actor := range gangCast.Actors {
@@ -693,7 +706,7 @@ var leroyStandingSpeech []string
 					break
 				}
 			}
-			return actors, nil
+			return cullToVisibleCell(actors), nil
 		}
 		if activeSetName != "town" {
 			return actors, nil
@@ -752,7 +765,7 @@ var leroyStandingSpeech []string
 			}
 			actors = append(actors, sprite)
 		}
-		return actors, nil
+		return cullToVisibleCell(actors), nil
 	}
 	if *debug {
 		log.Printf("cast-location-records=set=NITE.SET selector=town count=%d", len(townActors))

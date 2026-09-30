@@ -215,6 +215,53 @@ func (s *Set) BackgroundResourceForPoints(from, to [3]int16) (uint32, bool, erro
 	return 0, false, nil
 }
 
+// ActorCellVisible reports whether a world position stands in the cell the displayed
+// background depicts.
+//
+// A set's walkable cells are the (DirectionID, SceneID) pairs its background table names,
+// and SetView.IsCell separates them from the backdrop-only views. A world position maps
+// onto that same grid by dividing by 256, the inverse of the conversion
+// NativeActorCameraPosition applies to a cell to reach a camera position, and every
+// coordinate point in NITE.SET lands inside it: 36 points over 29 distinct cells, none
+// outside 0..14 on either axis.
+//
+// The cell on screen is the player's own cell stepped once along the player's facing
+// direction, because that is exactly how the displayed backdrop is chosen --
+// BackgroundResourceForDirection(view, point[2]) names the edge leaving the player's cell in
+// direction point[2], and its background is what gets drawn. So an actor is visible when it
+// stands in the player's cell or in the cell that edge leads to, and nowhere else. Each cell
+// carries its own painted backdrop per direction, so a cell two or more steps away is
+// covered by a different backdrop and cannot be on screen at all.
+//
+// This is the whole of the visibility rule, and it is a partition rather than an occlusion
+// test: the reference's draw path has no wall mask, no per-pixel occlusion and no cell test
+// -- its cull is a depth test alone -- so cells are separated by which backdrop is drawn,
+// not by anything that knows about walls.
+func (s *Set) ActorCellVisible(playerPoint [3]int16, position [3]int16) bool {
+	if s == nil || s.cache == nil {
+		return true
+	}
+	playerDirection, playerScene := int(playerPoint[0]), int(playerPoint[1])
+	actorDirection, actorScene := int(position[0])/256, int(position[1])/256
+	if actorDirection == playerDirection && actorScene == playerScene {
+		return true
+	}
+	stepDirection, stepScene := playerDirection, playerScene
+	switch playerPoint[2] {
+	case SetDirectionNorth:
+		stepScene--
+	case SetDirectionSouth:
+		stepScene++
+	case SetDirectionEast:
+		stepDirection++
+	case SetDirectionWest:
+		stepDirection--
+	default:
+		return false
+	}
+	return actorDirection == stepDirection && actorScene == stepScene
+}
+
 func (s *Set) BackgroundResourceForDirection(view SetView, direction int16) (uint32, bool, error) {
 	if direction < SetDirectionNorth || direction > SetDirectionWest {
 		return 0, false, fmt.Errorf("SET direction %d is invalid", direction)
