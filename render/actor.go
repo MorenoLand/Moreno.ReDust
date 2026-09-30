@@ -320,9 +320,14 @@ func projectWorldActor(background IndexedFrame, point [3]int16, actor WorldActor
 	if depth < 0x20 || farClip > 0x600 {
 		return ProjectedWorldActor{}, false, nil
 	}
-	denominator := depth * 1000
-	scale := int(actor.Scale) * int(actor.Metric)
-	width, height := actor.Frame.Width*scale/denominator, actor.Frame.Height*scale/denominator
+	// The reference divides by 1000 before scaling the frame, not after: FUN_0040DB70's
+	// actor path computes (record[0x16] * local_66) / 1000 and FUN_00421820's prop path
+	// computes (record[0x15] * local_66) / 1000, and render/prop.go already divides first.
+	// Folding the 1000 into the denominator instead gives the same value to within the
+	// rounding, which is a fidelity difference and not a correctness one -- but the two
+	// paths should not disagree on where the division happens.
+	scale := int(actor.Scale) * int(actor.Metric) / 1000
+	width, height := actor.Frame.Width*scale/depth, actor.Frame.Height*scale/depth
 	if width < 1 || height < 1 {
 		return ProjectedWorldActor{}, false, nil
 	}
