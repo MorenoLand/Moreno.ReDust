@@ -28,6 +28,36 @@ type SetView struct {
 	Resource       uint32
 }
 
+// IsCell reports whether the view is a walkable cell of the set's graph.
+//
+// SetView.Flags bit 0 is set on every view that has no entry in the set's background
+// table. Across the five sets measured, the correspondence is exact in both directions:
+// NITE.SET has 225 views of which 52 carry Flags == 0 and the table spans exactly those
+// same 52 (DirectionID, SceneID) pairs; BANK.SET 3 of 12 and 3; COURT.SET 8 of 20 and 8;
+// UNDER/HUB.SET 16 of 49 and 16; STORE.SET 2 of 12 and 2. So bit 0 clear means "this view
+// is a real cell" and set means "this view is a backdrop with no edges".
+//
+// Only Flags values 0 and 1 occur, so the test is written against the bit; the observed
+// data cannot distinguish it from Flags == 0 and the bit form is the one that survives a
+// future flag being added.
+func (v SetView) IsCell() bool {
+	return v.Flags&1 == 0
+}
+
+// CellViews returns the set's walkable cells in table order.
+func (s *Set) CellViews() []SetView {
+	if s == nil {
+		return nil
+	}
+	cells := make([]SetView, 0, len(s.views))
+	for _, view := range s.views {
+		if view.IsCell() {
+			cells = append(cells, view)
+		}
+	}
+	return cells
+}
+
 type Set struct {
 	cache              *ResourceCache
 	views              []SetView
