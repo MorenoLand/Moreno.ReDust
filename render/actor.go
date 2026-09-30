@@ -99,6 +99,27 @@ func NativeActorCameraPosition(point [3]int16) [3]int {
 	return [3]int{centerX - 64*forwardX, centerY - 64*forwardY, 62}
 }
 
+// nativeActorBearing returns a bearing from a delta to the 256-unit circle, with the first
+// parameter along bearing 0 and the second along bearing 64.
+//
+// NOTE: this is not yet FUN_00411420's convention, and the difference is recorded in the
+// evidence ledger. FUN_00411420's first parameter is the delta of a point's +2 field and
+// its second the +4 field -- its sole caller FUN_004113F0 pushes them in that order, which
+// is the order the callers here already use -- and its circle runs +y = 0, +x = 64, -y =
+// 128, -x = 192, the diagonals at 32, 96, 160 and 224. So the reference puts the +2 field
+// on the 64 axis where this function puts it on the 0 axis: the two differ by a reflection
+// across the diagonal, not by an offset.
+//
+// A transcription of FUN_00411420 is checked against this function over 5776 signed delta
+// pairs in render/bearingaxes_test.go, and it shows the reference is the correct one --
+// for a Leroy walk toward a target at a = -76, b = +208 the reference returns 242, which
+// lies between 192 and 256 as the delta requires, while this returns 78.
+//
+// It is not changed here because NativeCurrentDegree (North = 192), NativeDirectionVector
+// (192 -> (0, -32), a move along -b) and projectWorldActor's forward vector are all built on
+// this function's axes, where 192 means -a. Correcting the bearing alone would leave the
+// actor pipeline straddling two conventions, which is worse than being consistently wrong.
+// The three tables have to move together.
 func nativeActorBearing(dx, dy int) int16 {
 	absX, absY := absInt(dx), absInt(dy)
 	if dx == 0 {
