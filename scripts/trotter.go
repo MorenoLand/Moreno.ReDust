@@ -19,6 +19,13 @@ type TrotterStep struct {
 	Continuation         *TrotterContinuation
 	Effects              []TrotterEffect
 	ScrambleChoices      bool
+	SpeechStages         []TrotterSpeechStage
+	ChoiceTimeoutFrames  uint32
+}
+
+type TrotterSpeechStage struct {
+	Speech      []string
+	DelayBefore uint32
 }
 
 func TrotterPuppetResponse(phase int16) (TrotterStep, error) {
@@ -57,14 +64,19 @@ const (
 	TrotterEffectSelectHand
 	TrotterEffectGiveInventory
 	TrotterEffectSetCounter
+	TrotterEffectAddInventory
+	TrotterEffectSetStoryValue
+	TrotterEffectHideActor
+	TrotterEffectSetActorHeading
 )
 
 type TrotterEffect struct {
-	Kind   TrotterEffectKind
-	Target string
-	Value  string
-	Phase  int16
-	Amount int32
+	Kind    TrotterEffectKind
+	Target  string
+	Value   string
+	Phase   int16
+	Amount  int32
+	Heading int16
 }
 
 type TrotterOutcome struct {
@@ -93,6 +105,7 @@ type TrotterContinuation struct {
 	AskedTown     bool
 	ReturnsToGift bool
 	Resume        *TrotterContinuation
+	Flags         uint8
 }
 
 type TrotterUnsupportedError struct {
@@ -107,13 +120,108 @@ type TrotterScriptController struct {
 }
 
 type TrotterStoryState struct {
-	Day          int16
-	Clock        int16
-	TrotterPhase int16
-	Phase        int16
-	PlayerCash   int32
-	HandChoice   *PuppetChoice
-	Counter      int32
+	Day               int16
+	Clock             int16
+	TrotterPhase      int16
+	Phase             int16
+	PlayerCash        int32
+	HandChoice        *PuppetChoice
+	Counter           int32
+	TrotterActorValue int32
+	BloodPhase        int16
+	GunOwner          string
+	SugarcubesOwner   string
+	ThunderbirdOwner  string
+	TrotterActorSet   string
+	DocPhase          int16
+}
+
+type TrotterActorSetup struct {
+	Set, Star, Pose                string
+	Position                       [3]int16
+	HasPosition                    bool
+	Heading                        int16
+	SetHeading                     bool
+	Speed, TurnSpeed, Scale, ZClip int16
+	HitBox                         [2]int16
+	Visible, Idle, Delayed         bool
+	Callback                       string
+	LoopTicks                      int32
+}
+
+func NativeTrotterActorSetup(where string) (TrotterActorSetup, bool) {
+	setup := TrotterActorSetup{Pose: "stand", Visible: true, ZClip: 32, HitBox: [2]int16{100, 50}}
+	switch strings.ToLower(where) {
+	case "bar":
+		setup.Set, setup.Star, setup.Heading, setup.SetHeading = "sallower", "sal.trotter1", 0, true
+	case "day4am":
+		setup.Set, setup.Star, setup.Heading, setup.SetHeading, setup.Idle = "sallower", "sal.trotter9", 128, true, true
+	case "inner":
+		setup.Set, setup.Star, setup.Heading, setup.SetHeading, setup.Idle = "doctor2", "doctor2.trot", 175, true, true
+	case "piss":
+		setup.Set, setup.Star, setup.ZClip, setup.Idle = "town", "town.trot1", 0, true
+	case "horse":
+		setup.Set, setup.Star, setup.Heading, setup.SetHeading, setup.Idle = "town", "town.horse2", 12, true, true
+	case "day2street":
+		setup.Set, setup.Star, setup.Heading, setup.SetHeading, setup.Idle = "town", "town.jones5", 12, true, true
+	case "delayed":
+		setup.Set, setup.Star, setup.Delayed = "town", "town.jones1", true
+	case "finale":
+		setup.Set, setup.Position, setup.HasPosition, setup.Heading, setup.SetHeading = "town", [3]int16{1755, 3393, 0}, true, 138, true
+	default:
+		return TrotterActorSetup{}, false
+	}
+	switch setup.Set {
+	case "town":
+		setup.Speed, setup.TurnSpeed, setup.Scale = 3, 7, 1450
+	case "sallower":
+		setup.Speed, setup.TurnSpeed, setup.Scale = 4, 8, 4500
+	case "doctor2":
+		setup.Speed, setup.TurnSpeed, setup.Scale = 5, 10, 2400
+	}
+	if setup.Idle {
+		setup.Callback, setup.LoopTicks = "trotteridle", 18
+	}
+	if setup.Delayed {
+		setup.Callback, setup.LoopTicks = "delayloop", 10
+	}
+	return setup, true
+}
+
+type TrotterActorTransition struct {
+	Setup             string
+	Hide              bool
+	Direction         string
+	SetGamePhase      int16
+	SetGamePhaseValid bool
+}
+
+func NativeTrotterSetTransition(state TrotterStoryState, set string, opening bool) TrotterActorTransition {
+	transition := TrotterActorTransition{}
+	switch strings.ToLower(set) {
+	case "sallower":
+		if opening {
+			if state.Day == 1 && state.TrotterPhase < 6 && state.Phase < 7 || state.Day == 2 && state.Clock == 2 && state.TrotterPhase == 3 {
+				transition.Setup = "bar"
+			}
+			if state.Day == 3 && state.Clock == 3 && state.Phase == 3 {
+				transition.Hide, transition.SetGamePhase, transition.SetGamePhaseValid = true, 4, true
+			}
+			if state.Day == 4 {
+				transition.Setup = "day4am"
+			}
+		} else {
+			transition.Hide = state.Day == 4 || state.Clock > 1 && !(state.Day == 1 && state.Phase != 7) && strings.EqualFold(state.TrotterActorSet, "sallower")
+		}
+	case "doctor2":
+		if opening && state.Day == 3 && state.Clock == 2 && state.DocPhase == 8 {
+			transition.Setup, transition.Direction = "inner", "south"
+		}
+		if !opening && strings.EqualFold(state.TrotterActorSet, "doctor2") {
+			transition.Hide = true
+		}
+	}
+	return transition
 }
 
 type TrotterSallowerState struct {
@@ -379,7 +487,7 @@ func (c *TrotterScriptController) finishDay1Call(state TrotterStoryState, contin
 		if continuation.Resume == nil {
 			return step, nil
 		}
-		resumed, err := c.ResumeDay1(state, continuation.Resume)
+		resumed, err := c.Resume(state, continuation.Resume)
 		if err != nil {
 			return TrotterStep{}, err
 		}
@@ -432,14 +540,281 @@ func (c *TrotterScriptController) BeginGift(state TrotterStoryState, what string
 		}
 	}
 	if resume != nil {
-		resumed, err := c.ResumeDay1(state, resume)
+		if step.SetTrotterPhaseValid && step.SetTrotterPhase == 5 && resume.Resource == trotterDay2Resource && resume.Code == "hesdrunk" {
+			return step, nil
+		}
+		resumed, err := c.Resume(state, resume)
 		if err != nil {
 			return TrotterStep{}, err
 		}
 		resumed.Speech, resumed.Effects = step.Speech, step.Effects
+		resumed.SetTrotterPhase, resumed.SetTrotterPhaseValid = step.SetTrotterPhase, step.SetTrotterPhaseValid
 		return resumed, nil
 	}
 	return step, nil
+}
+
+func (c *TrotterScriptController) laterChoices(state TrotterStoryState, resource uint32, code string, flags uint8, resume *TrotterContinuation) (TrotterStep, error) {
+	if c == nil || c.puppetPrograms[resource].Records == nil {
+		return TrotterStep{}, fmt.Errorf("TROTTER.PUP resource %d is unavailable", resource)
+	}
+	choices, err := PuppetBevelChoices(c.puppetPrograms[resource], code)
+	if err != nil {
+		return TrotterStep{}, err
+	}
+	filtered := make([]PuppetChoice, 0, len(choices)+1)
+	for _, choice := range choices {
+		if code == "day2am" {
+			if choice.EventID == 101 && flags&1 != 0 || choice.EventID == 102 && flags&2 != 0 || choice.EventID == 500 && (flags&4 != 0 || strings.EqualFold(state.GunOwner, "stranger")) {
+				continue
+			}
+		} else if code == "twonite" || code == "threenite" {
+			if choice.EventID == 101 && flags&1 != 0 || choice.EventID == 102 && flags&2 != 0 {
+				continue
+			}
+		}
+		if choice.EventID == 103 && (code == "day2am" || code == "hesdrunk" || code == "twonite" || code == "threenite") && state.HandChoice != nil && len(filtered) <= 3 {
+			filtered = append(filtered, *state.HandChoice)
+		}
+		filtered = append(filtered, choice)
+	}
+	page := "day2"
+	if resource == trotterDay3Resource {
+		page = "day3"
+	}
+	step := TrotterStep{Kind: TrotterActionDialogue, Route: TrotterRoute{Day: state.Day, Clock: state.Clock, Page: page, Resource: resource, Code: code}, Choices: [][]PuppetChoice{filtered}, Continuation: &TrotterContinuation{Kind: TrotterContinuationNativeEvent, Resource: resource, Code: code, Flags: flags, Resume: resume}}
+	if code == "threepm" {
+		step.ChoiceTimeoutFrames = 240
+	}
+	return step, nil
+}
+
+func (c *TrotterScriptController) Resume(state TrotterStoryState, continuation *TrotterContinuation) (TrotterStep, error) {
+	if continuation == nil || continuation.Kind != TrotterContinuationNativeEvent {
+		return TrotterStep{}, TrotterUnsupportedError{Route: "resume"}
+	}
+	if continuation.Resource == trotterDay1Resource {
+		return c.ResumeDay1(state, continuation)
+	}
+	if continuation.Resource != trotterDay2Resource && continuation.Resource != trotterDay3Resource {
+		return TrotterStep{}, TrotterUnsupportedError{Route: fmt.Sprintf("resume resource%d", continuation.Resource)}
+	}
+	if continuation.Resource == trotterDay2Resource && continuation.Code == "hesdrunk" && continuation.EventID == 55555 && strings.EqualFold(state.SugarcubesOwner, "TROTTER") {
+		return TrotterStep{Kind: TrotterActionDialogue, Route: TrotterRoute{Day: state.Day, Clock: state.Clock, Page: "day2", Resource: continuation.Resource, Code: continuation.Code}, Finish: true}, nil
+	}
+	return c.laterChoices(state, continuation.Resource, continuation.Code, continuation.Flags, continuation.Resume)
+}
+
+func (c *TrotterScriptController) Brushoff(state TrotterStoryState) (TrotterStep, error) {
+	step := TrotterStep{Kind: TrotterActionDialogue, Route: TrotterRoute{Day: state.Day, Clock: state.Clock, Page: "day1", Resource: trotterDay1Resource, Code: "brushoff"}, Finish: true}
+	if c == nil || c.puppetPrograms[trotterDay1Resource].Records == nil {
+		return TrotterStep{}, fmt.Errorf("TROTTER.PUP day1 resource is unavailable")
+	}
+	if state.Counter < 0 || state.Counter > 2 {
+		return step, nil
+	}
+	var err error
+	step.Speech, err = PuppetEventSpeechCalls(c.puppetPrograms[trotterDay1Resource], "brushoff", state.Counter)
+	if err != nil {
+		return TrotterStep{}, err
+	}
+	step.Effects = []TrotterEffect{{Kind: TrotterEffectSetCounter, Amount: (state.Counter + 1) % 3}}
+	return step, nil
+}
+
+func (c *TrotterScriptController) BeginDay2(state TrotterStoryState) (TrotterStep, error) {
+	if c == nil || c.puppetPrograms[trotterDay2Resource].Records == nil {
+		return TrotterStep{}, fmt.Errorf("TROTTER.PUP day2 resource is unavailable")
+	}
+	step := TrotterStep{Kind: TrotterActionDialogue, Route: TrotterRoute{Day: state.Day, Clock: state.Clock, Page: "day2", Resource: trotterDay2Resource, Code: "runyoself"}, Finish: true}
+	if state.TrotterPhase == 1 {
+		return c.Brushoff(state)
+	}
+	var err error
+	switch state.Clock {
+	case 1:
+		step, err = c.laterChoices(state, trotterDay2Resource, "day2am", 0, nil)
+		if err != nil {
+			return TrotterStep{}, err
+		}
+		step.Speech = []string{"trotter.43", "trotter.46", "trotter.26"}
+		if state.TrotterActorValue > 0 {
+			step.Speech = []string{"trotter.43", "trotter.44", "trotter.45"}
+			step.SpeechStages = []TrotterSpeechStage{{Speech: []string{"trotter.43", "trotter.44"}}, {Speech: []string{"trotter.45"}, DelayBefore: 120}}
+		}
+	case 2:
+		switch state.TrotterPhase {
+		case 0:
+			step, err = c.laterChoices(state, trotterDay2Resource, "inruby", 0, nil)
+			step.Speech = []string{"trotter.62"}
+		case 3:
+			step, err = c.laterChoices(state, trotterDay2Resource, "hesdrunk", 0, nil)
+			step.Speech = []string{"trotter.59"}
+		case 4:
+			step.Speech = []string{"trotter.54", "trotter.55", "trotter.56", "trotter.57"}
+			step.Effects = []TrotterEffect{{Kind: TrotterEffectPlayerDeath, Value: "by trotter"}}
+		case 5:
+			step.Speech = []string{"trotter.58"}
+		}
+	case 3:
+		step, err = c.laterChoices(state, trotterDay2Resource, "twonite", 0, nil)
+		step.Speech = []string{"trotter.65", "trotter.66", "trotter.65"}
+	default:
+		return TrotterStep{}, TrotterUnsupportedError{Route: fmt.Sprintf("day2 clock%d", state.Clock)}
+	}
+	return step, err
+}
+
+func (c *TrotterScriptController) BeginDay3(state TrotterStoryState) (TrotterStep, error) {
+	if c == nil || c.puppetPrograms[trotterDay3Resource].Records == nil {
+		return TrotterStep{}, fmt.Errorf("TROTTER.PUP day3 resource is unavailable")
+	}
+	if state.TrotterPhase == 1 {
+		return c.Brushoff(state)
+	}
+	var step TrotterStep
+	var err error
+	switch state.Clock {
+	case 1:
+		return TrotterStep{}, TrotterUnsupportedError{Route: "day3 clock1 runs native error handler"}
+	case 2:
+		step, err = c.laterChoices(state, trotterDay3Resource, "threepm", 0, nil)
+		step.Speech = []string{"trotter.77", "trotter.78", "trotter.79", "trotter.80", "trotter.81"}
+		step.Effects = []TrotterEffect{{Kind: TrotterEffectAddInventory, Value: "flute"}, {Kind: TrotterEffectSetStoryValue, Target: "docphase", Amount: 9}}
+	case 3:
+		step, err = c.laterChoices(state, trotterDay3Resource, "threenite", 0, nil)
+		step.Speech = []string{"trotter.43", "trotter.84", "trotter.85", "trotter.26"}
+	default:
+		return TrotterStep{}, TrotterUnsupportedError{Route: fmt.Sprintf("day3 clock%d", state.Clock)}
+	}
+	return step, err
+}
+
+func (c *TrotterScriptController) Continue(state TrotterStoryState, continuation *TrotterContinuation, eventID int32) (TrotterStep, error) {
+	if continuation == nil || continuation.Kind != TrotterContinuationNativeEvent {
+		return TrotterStep{}, TrotterUnsupportedError{Route: "continuation"}
+	}
+	if continuation.Resource == trotterDay1Resource {
+		return c.ContinueDay1(state, continuation, eventID)
+	}
+	resource, code := continuation.Resource, continuation.Code
+	if resource != trotterDay2Resource && resource != trotterDay3Resource {
+		return TrotterStep{}, TrotterUnsupportedError{Route: fmt.Sprintf("continuation resource%d", resource)}
+	}
+	step, err := c.laterChoices(state, resource, code, continuation.Flags, continuation.Resume)
+	if err != nil {
+		return TrotterStep{}, err
+	}
+	step.EventID = eventID
+	if code == "threepm" && (eventID == -1 || eventID == -2 || eventID == 101) {
+		step.Speech = []string{"trotter.82", "trotter.83"}
+		step.Effects = []TrotterEffect{{Kind: TrotterEffectHideActor, Target: "TROTTER"}}
+		step.Choices, step.Continuation, step.ChoiceTimeoutFrames = nil, nil, 0
+		step.Finish, step.SetTrotterPhase, step.SetTrotterPhaseValid = true, 1, true
+		return step, nil
+	}
+	if eventID == -1 {
+		step.Choices, step.Continuation = nil, nil
+		step.Finish = true
+		return step, nil
+	}
+	if len(step.Choices) == 0 {
+		return TrotterStep{}, TrotterUnsupportedError{Route: fmt.Sprintf("%s event%d", code, eventID)}
+	}
+	found := false
+	for _, choice := range step.Choices[0] {
+		if choice.EventID == eventID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return TrotterStep{}, TrotterUnsupportedError{Route: fmt.Sprintf("%s event%d", code, eventID)}
+	}
+	if eventID == 55555 {
+		step.Continuation.EventID = eventID
+		step.Effects = []TrotterEffect{{Kind: TrotterEffectSelectHand}}
+		return step, nil
+	}
+	step.Speech, err = PuppetEventSpeechCalls(c.puppetPrograms[resource], code, eventID)
+	if err != nil {
+		return TrotterStep{}, err
+	}
+	finish, setPhase := false, false
+	switch code {
+	case "day2am":
+		switch eventID {
+		case 101:
+			step.Continuation.Flags |= 1
+			if state.BloodPhase == 1 {
+				step.Speech = []string{"trotter.47"}
+			}
+		case 102:
+			step.Continuation.Flags |= 2
+			step.SpeechStages = []TrotterSpeechStage{{Speech: []string{"trotter.50"}}, {Speech: []string{"trotter.51"}, DelayBefore: 90}, {Speech: []string{"trotter.52"}, DelayBefore: 60}}
+		case 500:
+			step.Continuation.Flags |= 4
+		case 103:
+			finish, setPhase = true, true
+		}
+	case "inruby":
+		finish, setPhase = true, true
+	case "hesdrunk":
+		finish = true
+	case "twonite":
+		switch eventID {
+		case 101:
+			step.Continuation.Flags |= 1
+			outer := *step.Continuation
+			drinks, err := c.laterChoices(state, resource, "drinks", 0, &outer)
+			if err != nil {
+				return TrotterStep{}, err
+			}
+			drinks.Speech, drinks.EventID = step.Speech, eventID
+			return drinks, nil
+		case 102:
+			step.Continuation.Flags |= 2
+		case 103:
+			finish, setPhase = true, true
+		}
+	case "drinks":
+		if continuation.Resume == nil {
+			return TrotterStep{}, TrotterUnsupportedError{Route: "drinks without outer loop"}
+		}
+		resumed, err := c.Resume(state, continuation.Resume)
+		if err != nil {
+			return TrotterStep{}, err
+		}
+		resumed.Speech, resumed.EventID = step.Speech, eventID
+		return resumed, nil
+	case "threenite":
+		switch eventID {
+		case 101:
+			step.Continuation.Flags |= 1
+		case 102:
+			step.Continuation.Flags |= 2
+		case 103:
+			if strings.EqualFold(state.ThunderbirdOwner, "stranger") {
+				step.Speech = []string{"trotter.92", "trotter.93"}
+			}
+			step.Effects = []TrotterEffect{{Kind: TrotterEffectSetActorHeading, Target: "horse1", Heading: 0}, {Kind: TrotterEffectSetPhase, Phase: 1}, {Kind: TrotterEffectSetStoryValue, Target: "fighton", Amount: 0}}
+			finish, setPhase = true, true
+		}
+	default:
+		return TrotterStep{}, TrotterUnsupportedError{Route: code}
+	}
+	if finish {
+		step.Choices, step.Continuation = nil, nil
+		step.Finish = true
+		step.SetTrotterPhase, step.SetTrotterPhaseValid = 1, setPhase
+		return step, nil
+	}
+	resumed, err := c.Resume(state, step.Continuation)
+	if err != nil {
+		return TrotterStep{}, err
+	}
+	resumed.Speech, resumed.SpeechStages, resumed.EventID = step.Speech, step.SpeechStages, eventID
+	return resumed, nil
 }
 
 func (c *TrotterScriptController) Boot(day int16) (TrotterStep, error) {
@@ -461,29 +836,9 @@ func (c *TrotterScriptController) Dispatch(state TrotterStoryState) (TrotterStep
 	case 1:
 		return c.BeginDay1(state)
 	case 2:
-		switch state.Clock {
-		case 1:
-			if state.TrotterPhase == 1 {
-				return c.runCode(trotterBootRoutes[1], "brushoff")
-			}
-			return c.runCode(TrotterRoute{Day: 2, Clock: 1, Page: "day2", Resource: trotterDay2Resource, Code: "day2am"}, "day2am")
-		case 2:
-			return c.runCode(TrotterRoute{Day: 2, Clock: 2, Page: "day2", Resource: trotterDay2Resource, Code: "day2pm"}, "day2pm")
-		case 3:
-			return c.runCode(TrotterRoute{Day: 2, Clock: 3, Page: "day2", Resource: trotterDay2Resource, Code: "twonite"}, "twonite")
-		}
+		return c.BeginDay2(state)
 	case 3:
-		if state.TrotterPhase == 1 {
-			return c.runCode(trotterBootRoutes[1], "brushoff")
-		}
-		switch state.Clock {
-		case 2:
-			return c.runCode(TrotterRoute{Day: 3, Clock: 2, Page: "day3", Resource: trotterDay3Resource, Code: "threepm"}, "threepm")
-		case 3:
-			return c.runCode(TrotterRoute{Day: 3, Clock: 3, Page: "day3", Resource: trotterDay3Resource, Code: "threenite"}, "threenite")
-		case 1:
-			return TrotterStep{}, TrotterUnsupportedError{Route: "day3 clock1 runs native error handler"}
-		}
+		return c.BeginDay3(state)
 	case 4:
 		return TrotterDay4Response(state.TrotterPhase)
 	}

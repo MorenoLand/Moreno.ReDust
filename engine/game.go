@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -147,24 +149,28 @@ func Run(frame render.IndexedFrame, onUpdate func() (render.IndexedFrame, bool, 
 }
 
 type silentAction struct {
-	Type         string `json:"type"`
-	Key          string `json:"key,omitempty"`
-	Button       string `json:"button,omitempty"`
-	X            *int   `json:"x,omitempty"`
-	Y            *int   `json:"y,omitempty"`
-	Milliseconds *int   `json:"milliseconds,omitempty"`
-	Path         string `json:"path,omitempty"`
+	Type         string         `json:"type"`
+	Key          string         `json:"key,omitempty"`
+	Button       string         `json:"button,omitempty"`
+	X            *int           `json:"x,omitempty"`
+	Y            *int           `json:"y,omitempty"`
+	Milliseconds *int           `json:"milliseconds,omitempty"`
+	Path         string         `json:"path,omitempty"`
+	Expect       map[string]any `json:"expect,omitempty"`
 }
 
 var silentKeys = map[string]ebiten.Key{"Escape": ebiten.KeyEscape, "Space": ebiten.KeySpace, "Q": ebiten.KeyQ, "Period": ebiten.KeyPeriod, "ArrowUp": ebiten.KeyArrowUp, "ArrowDown": ebiten.KeyArrowDown, "ArrowLeft": ebiten.KeyArrowLeft, "ArrowRight": ebiten.KeyArrowRight, "W": ebiten.KeyW, "A": ebiten.KeyA, "S": ebiten.KeyS, "D": ebiten.KeyD, "0": ebiten.Key0, "1": ebiten.Key1, "2": ebiten.Key2, "3": ebiten.Key3, "4": ebiten.Key4, "5": ebiten.Key5, "6": ebiten.Key6, "7": ebiten.Key7, "8": ebiten.Key8, "9": ebiten.Key9}
 
-func SilentRunner(scriptPath string) func(render.IndexedFrame, func() (render.IndexedFrame, bool, error), func(ebiten.Key), func(MouseEvent) (render.IndexedFrame, bool, error), func(MouseState) (render.IndexedFrame, bool, error)) error {
+func SilentRunner(scriptPath string, stateProvider ...func() map[string]any) func(render.IndexedFrame, func() (render.IndexedFrame, bool, error), func(ebiten.Key), func(MouseEvent) (render.IndexedFrame, bool, error), func(MouseState) (render.IndexedFrame, bool, error)) error {
 	return func(frame render.IndexedFrame, onUpdate func() (render.IndexedFrame, bool, error), keyDown func(ebiten.Key), mouseDown func(MouseEvent) (render.IndexedFrame, bool, error), mouseState func(MouseState) (render.IndexedFrame, bool, error)) error {
-		return RunSilent(frame, onUpdate, keyDown, mouseDown, mouseState, scriptPath)
+		return RunSilent(frame, onUpdate, keyDown, mouseDown, mouseState, scriptPath, stateProvider...)
 	}
 }
 
-func RunSilent(frame render.IndexedFrame, onUpdate func() (render.IndexedFrame, bool, error), keyDown func(ebiten.Key), mouseDown func(MouseEvent) (render.IndexedFrame, bool, error), mouseState func(MouseState) (render.IndexedFrame, bool, error), scriptPath string) error {
+func RunSilent(frame render.IndexedFrame, onUpdate func() (render.IndexedFrame, bool, error), keyDown func(ebiten.Key), mouseDown func(MouseEvent) (render.IndexedFrame, bool, error), mouseState func(MouseState) (render.IndexedFrame, bool, error), scriptPath string, stateProvider ...func() map[string]any) error {
+	if len(stateProvider) > 1 {
+		return fmt.Errorf("silent runner accepts at most one state provider")
+	}
 	file, err := os.Open(scriptPath)
 	if err != nil {
 		return fmt.Errorf("open silent script: %w", err)
@@ -267,6 +273,12 @@ func RunSilent(frame render.IndexedFrame, onUpdate func() (render.IndexedFrame, 
 			if err = os.MkdirAll(filepath.Dir(path), 0755); err == nil {
 				err = render.WritePNG(path, frame)
 			}
+		case "assert":
+			if len(stateProvider) == 0 || stateProvider[0] == nil {
+				err = fmt.Errorf("assert action requires a state provider")
+			} else {
+				err = assertSilentState(stateProvider[0](), action.Expect)
+			}
 		}
 		if err != nil {
 			return fmt.Errorf("silent action %d (%s): %w", index+1, action.Type, err)
@@ -313,8 +325,96 @@ func validateSilentAction(action silentAction, outputRoot string) error {
 		if action.X != nil || action.Y != nil || action.Key != "" || action.Button != "" || action.Milliseconds != nil {
 			return fmt.Errorf("snapshot action has unrelated fields")
 		}
+	case "assert":
+		if action.Expect == nil {
+			return fmt.Errorf("assert requires an expect object")
+		}
+		if action.X != nil || action.Y != nil || action.Key != "" || action.Button != "" || action.Milliseconds != nil || action.Path != "" {
+			return fmt.Errorf("assert action has unrelated fields")
+		}
 	default:
 		return fmt.Errorf("unknown action %q", action.Type)
 	}
 	return nil
+}
+
+func assertSilentState(actual, expected map[string]any) error {
+	return compareSilentStateValue(actual, expected, "state")
+}
+
+func compareSilentStateValue(actual, expected any, path string) error {
+	if expectedMap, ok := expected.(map[string]any); ok {
+		keys := make([]string, 0, len(expectedMap))
+		for key := range expectedMap {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			actualValue, exists := silentMapValue(actual, key)
+			if !exists {
+				return fmt.Errorf("%s.%s is absent", path, key)
+			}
+			if err := compareSilentStateValue(actualValue, expectedMap[key], path+"."+key); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if expectedSlice, ok := expected.([]any); ok {
+		actualSlice := reflect.ValueOf(actual)
+		if !actualSlice.IsValid() || actualSlice.Kind() != reflect.Slice && actualSlice.Kind() != reflect.Array || actualSlice.Len() != len(expectedSlice) {
+			return fmt.Errorf("%s mismatch: expected %#v, got %#v", path, expected, actual)
+		}
+		for index, expectedValue := range expectedSlice {
+			if err := compareSilentStateValue(actualSlice.Index(index).Interface(), expectedValue, fmt.Sprintf("%s[%d]", path, index)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if expectedNumber, ok := silentNumber(expected); ok {
+		actualNumber, actualIsNumber := silentNumber(actual)
+		if actualIsNumber && actualNumber == expectedNumber {
+			return nil
+		}
+	} else if reflect.DeepEqual(actual, expected) {
+		return nil
+	}
+	return fmt.Errorf("%s mismatch: expected %#v, got %#v", path, expected, actual)
+}
+
+func silentMapValue(value any, key string) (any, bool) {
+	mapValue := reflect.ValueOf(value)
+	if !mapValue.IsValid() || mapValue.Kind() != reflect.Map || mapValue.IsNil() || mapValue.Type().Key().Kind() != reflect.String {
+		return nil, false
+	}
+	mapKey := reflect.ValueOf(key)
+	if !mapKey.Type().AssignableTo(mapValue.Type().Key()) {
+		if !mapKey.Type().ConvertibleTo(mapValue.Type().Key()) {
+			return nil, false
+		}
+		mapKey = mapKey.Convert(mapValue.Type().Key())
+	}
+	mapEntry := mapValue.MapIndex(mapKey)
+	if !mapEntry.IsValid() {
+		return nil, false
+	}
+	return mapEntry.Interface(), true
+}
+
+func silentNumber(value any) (float64, bool) {
+	number := reflect.ValueOf(value)
+	if !number.IsValid() {
+		return 0, false
+	}
+	switch number.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return float64(number.Int()), true
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return float64(number.Uint()), true
+	case reflect.Float32, reflect.Float64:
+		return number.Float(), true
+	default:
+		return 0, false
+	}
 }

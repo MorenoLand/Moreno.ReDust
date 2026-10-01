@@ -35,6 +35,8 @@ type GameProgress struct {
 	ActorPositions       map[string][3]int16           `json:"actorPositions"`
 	StoryValues          map[string]int32              `json:"storyValues"`
 	StoryFlags           map[string]bool               `json:"storyFlags"`
+	StoryStrings         map[string]string             `json:"storyStrings,omitempty"`
+	InventoryDegrees     map[string]int16              `json:"inventoryDegrees,omitempty"`
 	ScriptLoops          *scripts.LoopSchedulerState   `json:"scriptLoops,omitempty"`
 	TrotterWalk          *scripts.NativeActorWalkState `json:"trotterWalk,omitempty"`
 	TrotterWalkFrame     int                           `json:"trotterWalkFrame,omitempty"`

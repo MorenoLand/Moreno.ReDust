@@ -20,6 +20,31 @@ type MovieFrameDescriptor struct {
 	ResourceIndex uint32
 	Rect          [4]int16
 	Raw           [movieDescriptorSize]byte
+	Events        []MovieFrameEvent
+}
+
+type MovieFrameEvent struct {
+	Type     int16
+	Rect     [4]int16
+	Argument uint32
+	Target   int16
+	Payload  []byte
+	Raw      []byte
+}
+
+type MovieInputActionKind uint8
+
+const (
+	MovieInputFrameChange MovieInputActionKind = iota + 1
+	MovieInputExit
+	MovieInputUnhandled
+)
+
+type MovieInputAction struct {
+	Kind               MovieInputActionKind
+	Event              MovieFrameEvent
+	Frame              int
+	NextResourceOffset uint32
 }
 
 type Movie struct {
@@ -28,32 +53,42 @@ type Movie struct {
 	paletteRaw             []byte
 	actionFrameMarkers     [2]int16
 	defaultTick            uint32
+	nextResourceOffset     uint32
 	embeddedSoundResources []uint32
 	soundtrackResources    []uint32
 	soundtrackLoop         int
 }
 
 type MoviePlayback struct {
-	movie        *Movie
-	width        int
-	height       int
-	frame        int
-	elapsed      int
-	duration     int
-	mode         uint16
-	actionFrames uint16
-	dibPixels    []byte
-	screenPixels []byte
-	baseRGBA     *image.RGBA
-	screenRGBA   *image.RGBA
-	covered      []bool
-	palette      PaletteState
-	moviePalette PaletteState
-	basePalette  PaletteState
-	fadeFrom     PaletteState
-	fadeTo       PaletteState
-	done         bool
-	warning      error
+	movie            *Movie
+	width            int
+	height           int
+	frame            int
+	elapsed          int
+	duration         int
+	mode             uint16
+	actionFrames     uint16
+	dibPixels        []byte
+	wipeRect         [4]int16
+	wipeNextRect     [4]int16
+	wipeStep         int16
+	wipeWidth        int
+	wipeHeight       int
+	wipePitch        int
+	wipeRemaining    int
+	wipeFinalPending bool
+	waitingForInput  bool
+	screenPixels     []byte
+	baseRGBA         *image.RGBA
+	screenRGBA       *image.RGBA
+	covered          []bool
+	palette          PaletteState
+	moviePalette     PaletteState
+	basePalette      PaletteState
+	fadeFrom         PaletteState
+	fadeTo           PaletteState
+	done             bool
+	warning          error
 }
 
 type MoviePixels struct {
@@ -128,14 +163,67 @@ func OpenMovie(workspace assets.Workspace, name string) (*Movie, error) {
 	for index := range frames {
 		offset := movieDescriptorOffset + index*movieDescriptorSize
 		raw := data[offset : offset+movieDescriptorSize]
-		frames[index] = MovieFrameDescriptor{Mode: binary.LittleEndian.Uint16(raw[6:8]), State: binary.LittleEndian.Uint16(raw[8:10]), Duration: int32(binary.LittleEndian.Uint32(raw[2:6])), ResourceIndex: binary.LittleEndian.Uint32(raw[0x1c:0x20]), Rect: [4]int16{int16(binary.LittleEndian.Uint16(raw[0x28:0x2a])), int16(binary.LittleEndian.Uint16(raw[0x2a:0x2c])), int16(binary.LittleEndian.Uint16(raw[0x2c:0x2e])), int16(binary.LittleEndian.Uint16(raw[0x2e:0x30]))}}
-		copy(frames[index].Raw[:], raw)
+		frame := MovieFrameDescriptor{Mode: binary.LittleEndian.Uint16(raw[6:8]), State: binary.LittleEndian.Uint16(raw[8:10]), Duration: int32(binary.LittleEndian.Uint32(raw[2:6])), ResourceIndex: binary.LittleEndian.Uint32(raw[0x1c:0x20]), Rect: [4]int16{int16(binary.LittleEndian.Uint16(raw[0x28:0x2a])), int16(binary.LittleEndian.Uint16(raw[0x2a:0x2c])), int16(binary.LittleEndian.Uint16(raw[0x2c:0x2e])), int16(binary.LittleEndian.Uint16(raw[0x2e:0x30]))}}
+		copy(frame.Raw[:], raw)
+		frame.Events, err = parseMovieFrameEvents(data, raw)
+		if err != nil {
+			resources.Close()
+			return nil, fmt.Errorf("movie frame %d events: %w", index, err)
+		}
+		frames[index] = frame
 		if frames[index].ResourceIndex >= header.CountB {
 			resources.Close()
 			return nil, fmt.Errorf("movie frame %d references resource %d outside %d entries", index, frames[index].ResourceIndex, header.CountB)
 		}
 	}
-	return &Movie{resources: resources, frames: frames, paletteRaw: append([]byte(nil), data[0x3e:0x83e]...), actionFrameMarkers: [2]int16{int16(binary.LittleEndian.Uint16(data[0x2e:0x30])), int16(binary.LittleEndian.Uint16(data[0x30:0x32]))}, defaultTick: binary.LittleEndian.Uint32(data[0x26:0x2a]), embeddedSoundResources: embeddedSoundResources, soundtrackResources: soundtrackResources, soundtrackLoop: int(loopTarget)}, nil
+	return &Movie{resources: resources, frames: frames, paletteRaw: append([]byte(nil), data[0x3e:0x83e]...), actionFrameMarkers: [2]int16{int16(binary.LittleEndian.Uint16(data[0x2e:0x30])), int16(binary.LittleEndian.Uint16(data[0x30:0x32]))}, defaultTick: binary.LittleEndian.Uint32(data[0x26:0x2a]), nextResourceOffset: binary.LittleEndian.Uint32(data[0x36:0x3a]), embeddedSoundResources: embeddedSoundResources, soundtrackResources: soundtrackResources, soundtrackLoop: int(loopTarget)}, nil
+}
+
+func parseMovieFrameEvents(data, raw []byte) ([]MovieFrameEvent, error) {
+	count := int(int16(binary.LittleEndian.Uint16(raw[:2])))
+	if count <= 0 {
+		return nil, nil
+	}
+	offset := uint64(binary.LittleEndian.Uint32(raw[0x24:0x28]))
+	if offset > uint64(len(data)) || uint64(count) > uint64(len(data))/14 {
+		return nil, fmt.Errorf("event count %d or offset %#x exceeds metadata size %d", count, offset, len(data))
+	}
+	events := make([]MovieFrameEvent, count)
+	for index := range events {
+		if offset+2 > uint64(len(data)) {
+			return nil, fmt.Errorf("event %d type exceeds metadata", index)
+		}
+		eventType := int16(binary.LittleEndian.Uint16(data[offset : offset+2]))
+		size := 0
+		switch eventType {
+		case 1, -1, 5, -5:
+			size = 0x0e
+		case 2, -2:
+			size = 0x10
+		case 3, -3:
+			size = 0x2e
+		case 4, -4:
+			size = 0x30
+		default:
+			return nil, fmt.Errorf("event %d has unsupported type %d", index, eventType)
+		}
+		if uint64(size) > uint64(len(data))-offset {
+			return nil, fmt.Errorf("event %d type %d record exceeds metadata", index, eventType)
+		}
+		event := MovieFrameEvent{Type: eventType, Argument: binary.LittleEndian.Uint32(data[offset+10 : offset+14]), Raw: append([]byte(nil), data[offset:offset+uint64(size)]...)}
+		for coordinate := range event.Rect {
+			event.Rect[coordinate] = int16(binary.LittleEndian.Uint16(data[offset+2+uint64(coordinate*2) : offset+4+uint64(coordinate*2)]))
+		}
+		if size >= 0x10 {
+			event.Target = int16(binary.LittleEndian.Uint16(data[offset+14 : offset+16]))
+		}
+		if size > 0x10 {
+			event.Payload = append([]byte(nil), data[offset+0x10:offset+uint64(size)]...)
+		}
+		events[index] = event
+		offset += uint64(size)
+	}
+	return events, nil
 }
 
 func (m *Movie) FrameCount() int {
@@ -272,6 +360,13 @@ func (p *MoviePlayback) CurrentFrame() IndexedFrame {
 
 func (p *MoviePlayback) Done() bool { return p == nil || p.done }
 
+func (p *MoviePlayback) FrameIndex() int {
+	if p == nil {
+		return -1
+	}
+	return p.frame
+}
+
 func (p *MoviePlayback) ActionFrame(index int) (bool, error) {
 	if p == nil || p.movie == nil {
 		return false, fmt.Errorf("movie playback is unavailable")
@@ -280,6 +375,63 @@ func (p *MoviePlayback) ActionFrame(index int) (bool, error) {
 		return false, fmt.Errorf("actionframe argument %d is invalid", index)
 	}
 	return p.actionFrames&(1<<uint(index-1)) != 0, nil
+}
+
+func (p *MoviePlayback) WaitingForInput() bool { return p != nil && p.waitingForInput }
+
+func (p *MoviePlayback) InputEventAt(point image.Point) (MovieFrameEvent, bool) {
+	if p == nil || p.movie == nil || !p.waitingForInput || p.frame < 0 || p.frame >= len(p.movie.frames) {
+		return MovieFrameEvent{}, false
+	}
+	for _, event := range p.movie.frames[p.frame].Events {
+		top, left, bottom, right := int(event.Rect[0]), int(event.Rect[1]), int(event.Rect[2]), int(event.Rect[3])
+		if point.Y >= top && point.Y < bottom && point.X >= left && point.X < right {
+			return event, true
+		}
+	}
+	return MovieFrameEvent{}, false
+}
+
+func (p *MoviePlayback) CursorAt(point image.Point) bool {
+	_, found := p.InputEventAt(point)
+	return found
+}
+
+func (p *MoviePlayback) Click(point image.Point) (MovieInputAction, bool, error) {
+	event, found := p.InputEventAt(point)
+	if !found {
+		return MovieInputAction{}, false, nil
+	}
+	if event.Type < 0 {
+		return MovieInputAction{Kind: MovieInputUnhandled, Event: event, Frame: p.frame}, true, nil
+	}
+	switch event.Type {
+	case 1:
+		nextOffset := uint32(0)
+		if p.frame+1 == p.movie.FrameCount() {
+			nextOffset = p.movie.nextResourceOffset
+		}
+		p.waitingForInput = false
+		p.done = true
+		return MovieInputAction{Kind: MovieInputExit, Event: event, Frame: p.frame, NextResourceOffset: nextOffset}, true, nil
+	case 2:
+		target := int(event.Target)
+		if target < 0 {
+			target = 0
+		}
+		if target >= p.movie.FrameCount() {
+			target = p.movie.FrameCount() - 1
+		}
+		if target == p.frame {
+			return MovieInputAction{Kind: MovieInputUnhandled, Event: event, Frame: target}, true, nil
+		}
+		if err := p.loadFrame(target); err != nil {
+			return MovieInputAction{}, true, err
+		}
+		return MovieInputAction{Kind: MovieInputFrameChange, Event: event, Frame: target}, true, nil
+	default:
+		return MovieInputAction{Kind: MovieInputUnhandled, Event: event, Frame: p.frame}, true, nil
+	}
 }
 
 func (p *MoviePlayback) Skip() {
@@ -304,6 +456,13 @@ func (p *MoviePlayback) Update() (IndexedFrame, bool, bool, error) {
 	if p.done {
 		return p.CurrentFrame(), false, true, nil
 	}
+	if p.waitingForInput {
+		return p.CurrentFrame(), false, false, nil
+	}
+	if p.wipeFinalPending {
+		p.wipeFinalPending = false
+		return p.advanceMovieFrame()
+	}
 	changed := false
 	if p.mode == 17 || p.mode == 18 {
 		p.palette = interpolatePalette(p.fadeFrom, p.fadeTo, p.elapsed, p.duration-1)
@@ -311,17 +470,66 @@ func (p *MoviePlayback) Update() (IndexedFrame, bool, bool, error) {
 		changed = true
 	}
 	p.elapsed++
+	if p.mode >= 8 && p.mode <= 11 {
+		if p.wipeRemaining > 1 {
+			p.drawMovieRect(p.wipeNextRect)
+			p.advanceMovieWipe()
+			p.wipeRemaining--
+			changed = true
+		} else if p.wipeRemaining == 1 {
+			p.drawMovieRect(p.wipeRect)
+			p.wipeRemaining = 0
+			changed = true
+		}
+		if changed {
+			p.rebuildRGBA()
+		}
+		if p.wipeRemaining > 0 || p.elapsed < p.duration {
+			return p.CurrentFrame(), changed, false, nil
+		}
+		if len(p.movie.frames[p.frame].Events) != 0 {
+			p.waitingForInput = true
+			return p.CurrentFrame(), true, false, nil
+		}
+		p.wipeFinalPending = true
+		return p.CurrentFrame(), true, false, nil
+	}
 	if p.elapsed < p.duration {
 		return p.CurrentFrame(), changed, false, nil
 	}
-	if p.frame+1 >= p.movie.FrameCount() {
+	if len(p.movie.frames[p.frame].Events) != 0 {
+		p.waitingForInput = true
+		return p.CurrentFrame(), changed, false, nil
+	}
+	return p.advanceMovieFrame()
+}
+
+func (p *MoviePlayback) advanceMovieFrame() (IndexedFrame, bool, bool, error) {
+	descriptor := p.movie.frames[p.frame]
+	selector := int16(binary.LittleEndian.Uint16(descriptor.Raw[0x16:0x18]))
+	switch selector {
+	case 0, 1:
 		p.done = true
 		return p.CurrentFrame(), true, true, nil
+	case 2:
+		target := int(int16(binary.LittleEndian.Uint16(descriptor.Raw[0x18:0x1a])))
+		if target < 0 {
+			target = 0
+		}
+		if target >= p.movie.FrameCount() {
+			target = p.movie.FrameCount() - 1
+		}
+		if target == p.frame {
+			p.done = true
+			return p.CurrentFrame(), false, true, nil
+		}
+		if err := p.loadFrame(target); err != nil {
+			return p.CurrentFrame(), false, false, err
+		}
+		return p.CurrentFrame(), true, false, nil
+	default:
+		return p.CurrentFrame(), false, false, fmt.Errorf("movie frame %d uses unimplemented no-event selector %d", p.frame, selector)
 	}
-	if err := p.loadFrame(p.frame + 1); err != nil {
-		return p.CurrentFrame(), changed, false, err
-	}
-	return p.CurrentFrame(), true, false, nil
 }
 
 func (p *MoviePlayback) loadFrame(index int) error {
@@ -329,7 +537,10 @@ func (p *MoviePlayback) loadFrame(index int) error {
 	if err != nil {
 		return err
 	}
-	if descriptor.Mode != 16 && descriptor.Mode != 17 && descriptor.Mode != 18 {
+	p.waitingForInput = false
+	switch descriptor.Mode {
+	case 8, 9, 10, 11, 16, 17, 18:
+	default:
 		return fmt.Errorf("movie frame %d uses unimplemented mode %d", index, descriptor.Mode)
 	}
 	duration, err := p.movie.FrameDuration(index)
@@ -344,26 +555,40 @@ func (p *MoviePlayback) loadFrame(index int) error {
 	if decodeErr != nil {
 		p.warning = decodeErr
 	}
+	p.mode = descriptor.Mode
 	top, left, bottom, right := int(descriptor.Rect[0]), int(descriptor.Rect[1]), int(descriptor.Rect[2]), int(descriptor.Rect[3])
-	if top < 0 {
-		top = 0
-	}
-	if left < 0 {
-		left = 0
-	}
-	if bottom > p.height {
-		bottom = p.height
-	}
-	if right > p.width {
-		right = p.width
-	}
-	if bottom > top && right > left {
-		for y := top; y < bottom && y < pixels.Height; y++ {
-			source := y*pixels.Pitch + left
-			destination := y*p.width + left
-			copy(p.screenPixels[destination:destination+right-left], pixels.Pixels[source:source+right-left])
-			for x := left; x < right; x++ {
-				p.covered[destination+x-left] = true
+	if descriptor.Mode >= 8 && descriptor.Mode <= 11 {
+		modeDuration := int(int16(duration))
+		if modeDuration < 1 {
+			modeDuration = 1
+		}
+		p.wipeRect = descriptor.Rect
+		p.wipeWidth, p.wipeHeight, p.wipePitch, p.wipeRemaining = pixels.Width, pixels.Height, pixels.Pitch, modeDuration
+		p.wipeNextRect, p.wipeStep = movieWipeFirstStrip(descriptor.Mode, descriptor.Rect, modeDuration)
+		p.wipeFinalPending = false
+		p.drawMovieRect(p.wipeNextRect)
+		p.advanceMovieWipe()
+	} else {
+		if top < 0 {
+			top = 0
+		}
+		if left < 0 {
+			left = 0
+		}
+		if bottom > p.height {
+			bottom = p.height
+		}
+		if right > p.width {
+			right = p.width
+		}
+		if bottom > top && right > left {
+			for y := top; y < bottom && y < pixels.Height; y++ {
+				source := y*pixels.Pitch + left
+				destination := y*p.width + left
+				copy(p.screenPixels[destination:destination+right-left], pixels.Pixels[source:source+right-left])
+				for x := left; x < right; x++ {
+					p.covered[destination+x-left] = true
+				}
 			}
 		}
 	}
@@ -382,6 +607,78 @@ func (p *MoviePlayback) loadFrame(index int) error {
 	}
 	p.rebuildRGBA()
 	return nil
+}
+
+func movieWipeFirstStrip(mode uint16, rect [4]int16, duration int) ([4]int16, int16) {
+	step := int16(0)
+	strip := rect
+	switch mode {
+	case 8, 9:
+		step = int16((int(rect[2])-int(rect[0]))/duration + 1)
+		if mode == 8 {
+			strip[2] = int16(int(rect[0]) + int(step))
+		} else {
+			strip[0] = int16(int(rect[2]) - int(step))
+		}
+	case 10, 11:
+		step = int16((int(rect[3])-int(rect[1]))/duration + 1)
+		if mode == 10 {
+			strip[3] = int16(int(rect[1]) + int(step))
+		} else {
+			strip[1] = int16(int(rect[3]) - int(step))
+		}
+	}
+	return strip, step
+}
+
+func (p *MoviePlayback) advanceMovieWipe() {
+	switch p.mode {
+	case 8:
+		p.wipeNextRect[0] += p.wipeStep
+		p.wipeNextRect[2] += p.wipeStep
+	case 9:
+		p.wipeNextRect[0] -= p.wipeStep
+		p.wipeNextRect[2] -= p.wipeStep
+	case 10:
+		p.wipeNextRect[1] += p.wipeStep
+		p.wipeNextRect[3] += p.wipeStep
+	case 11:
+		p.wipeNextRect[1] -= p.wipeStep
+		p.wipeNextRect[3] -= p.wipeStep
+	}
+}
+
+func (p *MoviePlayback) drawMovieRect(rect [4]int16) {
+	top, left, bottom, right := int(rect[0]), int(rect[1]), int(rect[2]), int(rect[3])
+	if top < 0 {
+		top = 0
+	}
+	if left < 0 {
+		left = 0
+	}
+	if bottom > p.height {
+		bottom = p.height
+	}
+	if bottom > p.wipeHeight {
+		bottom = p.wipeHeight
+	}
+	if right > p.width {
+		right = p.width
+	}
+	if right > p.wipeWidth {
+		right = p.wipeWidth
+	}
+	if bottom <= top || right <= left {
+		return
+	}
+	for y := top; y < bottom; y++ {
+		source := y*p.wipePitch + left
+		destination := y*p.width + left
+		copy(p.screenPixels[destination:destination+right-left], p.dibPixels[source:source+right-left])
+		for x := left; x < right; x++ {
+			p.covered[destination+x-left] = true
+		}
+	}
 }
 
 func (p *MoviePlayback) rebuildRGBA() {

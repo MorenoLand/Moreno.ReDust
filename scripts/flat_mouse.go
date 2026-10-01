@@ -21,6 +21,7 @@ const (
 	FlatMouseActionSaveGame
 	FlatMouseActionOpenGame
 	FlatMouseActionGoToFlat
+	FlatMouseActionExamineInventory
 )
 
 type FlatMouseContinuation struct {
@@ -72,6 +73,18 @@ func (s *FlatMouseSession) Resume() (FlatMouseContinuation, bool) {
 }
 
 func ParseFlatMouseContinuation(program Program, handlerName string) (FlatMouseContinuation, bool, error) {
+	if strings.EqualFold(handlerName, "info") && flatMouseProgramCalls(program, "trackbut") {
+		for index, record := range program.Records {
+			if record.Kind != LookupOpcode("sendtoprop") || index+7 >= len(program.Records) {
+				continue
+			}
+			item, itemErr := program.IdentifierPascal(index + 2)
+			call, callErr := program.IdentifierPascal(index + 4)
+			if itemErr == nil && callErr == nil && strings.EqualFold(string(item[1:]), "handitem") && strings.EqualFold(string(call[1:]), "infoyoself") && program.Records[index+1].Kind == LookupOpcode("(") && program.Records[index+3].Kind == LookupOpcode(",") && program.Records[index+5].Kind == LookupOpcode("(") && program.Records[index+6].Kind == LookupOpcode(")") && program.Records[index+7].Kind == LookupOpcode(")") {
+				return FlatMouseContinuation{Action: FlatMouseActionExamineInventory, FlatTarget: -1}, true, nil
+			}
+		}
+	}
 	continuation, found, err := parseFlatMouseGameAction(program)
 	if err != nil {
 		return FlatMouseContinuation{}, false, err
