@@ -467,7 +467,7 @@ func run() error {
 	actorHeadings := map[string]int16{"leroy": 0, "dog": 32, "help": 0, "jones": 0, "buick": 0, "marie": 128, "isao": 64, "trotter": 0, "laurel": 0}
 	actorTurnTargets := map[string]int16{"leroy": 0, "help": 0, "jones": 0, "buick": 0, "marie": 128, "isao": 64}
 	actorTurnActive, helpTurnActive, jonesTurnActive := false, false, false
-	buickVisible, marieVisible := gameClock == 3, gameClock == 3
+	buickVisible, marieVisible := gameDay == 2 && gameClock == 3, gameClock == 3
 	buickTurnActive, marieTurnActive := false, false
 	buickStar, marieStar := "town.blood1", "town.jones2"
 	helpVisible, helpPhase, helpAttention := false, int16(0), int32(0)
@@ -5425,6 +5425,9 @@ func run() error {
 			if value, found := progress.StoryFlags[name]; found {
 				*target = value
 			}
+		}
+		if gameDay == 1 {
+			buickVisible = false
 		}
 		worldPoint = progress.Point
 		trotterWalk, trotterFrameIndex = nil, 0
