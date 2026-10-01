@@ -212,10 +212,10 @@ func LoadCastActorFrame(workspace assets.Workspace, cast assets.Cast, actor asse
 }
 
 func CompositeWorldActors(background IndexedFrame, point [3]int16, actors []WorldActorSprite) (IndexedFrame, []ProjectedWorldActor, error) {
-	return CompositeWorldActorsAndProps(background, point, "", actors, nil)
+	return CompositeWorldActorsAndProps(background, point, "", actors, nil, nil)
 }
 
-func CompositeWorldActorsAndProps(background IndexedFrame, point [3]int16, activeSet string, actors []WorldActorSprite, props []WorldPropSprite) (IndexedFrame, []ProjectedWorldActor, error) {
+func CompositeWorldActorsAndProps(background IndexedFrame, point [3]int16, activeSet string, actors []WorldActorSprite, props []WorldPropSprite, occluders []WorldOccluder) (IndexedFrame, []ProjectedWorldActor, error) {
 	projected := make([]ProjectedWorldActor, 0, len(actors))
 	for _, actor := range actors {
 		if !actor.Visible {
@@ -225,7 +225,7 @@ func CompositeWorldActorsAndProps(background IndexedFrame, point [3]int16, activ
 		if err != nil {
 			return IndexedFrame{}, nil, err
 		}
-		if found {
+		if found && applyWorldOcclusion(&projectedActor, occluders, background.Height/2) {
 			projected = append(projected, projectedActor)
 		}
 	}
@@ -234,7 +234,7 @@ func CompositeWorldActorsAndProps(background IndexedFrame, point [3]int16, activ
 		if err != nil {
 			return IndexedFrame{}, nil, err
 		}
-		if found {
+		if found && applyWorldOcclusion(&projectedProp, occluders, background.Height/2) {
 			projected = append(projected, projectedProp)
 		}
 	}
@@ -276,6 +276,9 @@ func HitTestWorldActors(actors []ProjectedWorldActor, point image.Point) (string
 			continue
 		}
 		x, y := point.X-actor.Bounds.Min.X, point.Y-actor.Bounds.Min.Y
+		if !actor.mask[y*actor.Bounds.Dx()+x] {
+			continue
+		}
 		if actor.propHitMask != nil {
 			sourceX, sourceY := x*actor.propHitSourceWidth/actor.Bounds.Dx(), y*actor.propHitSourceHeight/actor.Bounds.Dy()
 			index := sourceX*actor.propHitStride + sourceY

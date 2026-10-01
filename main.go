@@ -467,7 +467,7 @@ func run() error {
 	actorHeadings := map[string]int16{"leroy": 0, "dog": 32, "help": 0, "jones": 0, "buick": 0, "marie": 128, "isao": 64, "trotter": 0, "laurel": 0}
 	actorTurnTargets := map[string]int16{"leroy": 0, "help": 0, "jones": 0, "buick": 0, "marie": 128, "isao": 64}
 	actorTurnActive, helpTurnActive, jonesTurnActive := false, false, false
-	buickVisible, marieVisible := gameDay == 2 && gameClock == 3, gameClock == 3
+	buickVisible, marieVisible := gameDay == 2 && gameClock == 3, gameDay == 2 && gameClock == 3
 	buickTurnActive, marieTurnActive := false, false
 	buickStar, marieStar := "town.blood1", "town.jones2"
 	helpVisible, helpPhase, helpAttention := false, int16(0), int32(0)
@@ -755,7 +755,7 @@ func run() error {
 	var helpDelayReady bool
 	var helpActorValue int32
 	var helpInitialPage bool
-	boneWorldProp := render.WorldPropSprite{Name: "Bone", Set: "town", Position: bonePosition, Heading: 32, Scale: 1000, Archive: inventoryArchive, View: boneSmallView}
+	boneWorldProp := render.WorldPropSprite{Name: "Bone", Set: "town", Position: bonePosition, Heading: 32, Scale: 1200, Archive: inventoryArchive, View: boneSmallView}
 	boneOwner := "none"
 	var boneInventoryFrame render.PuppetFrame
 	var boneInInventory bool
@@ -804,7 +804,7 @@ func run() error {
 		}
 	}()
 	compositeWorld := func(background render.IndexedFrame, point [3]int16, actors []render.WorldActorSprite) (render.IndexedFrame, []render.ProjectedWorldActor, error) {
-		return render.CompositeWorldActorsAndProps(background, point, activeSetName, actors, []render.WorldPropSprite{boneWorldProp})
+		return render.CompositeWorldActorsAndProps(background, point, activeSetName, actors, []render.WorldPropSprite{boneWorldProp}, render.WorldOccludersForView(activeSetName, point))
 	}
 	loadWorldActors := func(point [3]int16) ([]render.WorldActorSprite, error) {
 		actors := make([]render.WorldActorSprite, 0, 4)
@@ -4019,7 +4019,7 @@ func run() error {
 			}
 		}
 		if helpPendingResult.GiveBone {
-			boneWorldProp.Position, boneWorldProp.Heading, boneWorldProp.Scale = bonePosition, 32, 1000
+			boneWorldProp.Position, boneWorldProp.Heading, boneWorldProp.Scale = bonePosition, 32, 1200
 			boneWorldProp.View, boneWorldProp.Visible, boneOwner = boneSmallView, true, "none"
 			if *debug {
 				log.Printf("prop=Bone setup=street owner=%s view=small point=%v degree=%d scale=%d", boneOwner, boneWorldProp.Position, boneWorldProp.Heading, boneWorldProp.Scale)
@@ -4206,7 +4206,7 @@ func run() error {
 				}
 				loop.Remaining = 17
 				displayChanged = displayChanged || currentScene == 0
-				if *debug {
+				if *debug && *debugLoops {
 					log.Printf("actor=jones idle=turn-check point=%v ticks=%d turn=%t", jonesPosition, loop.Remaining, jonesTurnActive)
 				}
 			case "trigger":
@@ -5428,6 +5428,7 @@ func run() error {
 		}
 		if gameDay == 1 {
 			buickVisible = false
+			marieVisible = false
 		}
 		worldPoint = progress.Point
 		trotterWalk, trotterFrameIndex = nil, 0
@@ -5773,6 +5774,27 @@ func run() error {
 			if strings.EqualFold(setup.Name, "trotter") {
 				if err := setupTrotterActor(setup.Selector); err != nil {
 					return render.IndexedFrame{}, err
+				}
+			} else if strings.EqualFold(setup.Name, "marie") {
+				star := "town.marie1"
+				if setup.Selector == "day2PM" {
+					star = "town.mwife3"
+				} else if setup.Selector != "day2street" {
+					return render.IndexedFrame{}, fmt.Errorf("unsupported Marie hotel setup %q", setup.Selector)
+				}
+				position, found, err := nightSet.ResolveLocation(star)
+				if err != nil || !found {
+					return render.IndexedFrame{}, fmt.Errorf("resolve Marie star %q: found=%t err=%v", star, found, err)
+				}
+				mariePosition, marieStar, marieVisible, marieWalk, marieWalkTarget = position, star, true, nil, ""
+				actorPoses["marie"], actorHeadings["marie"] = "stand", 128
+				marieTurnActive = false
+				nativeLoops.Stop(2, "marie")
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "marie", Callback: "marieidle", Remaining: 17}); status != 0 {
+					return render.IndexedFrame{}, fmt.Errorf("register Marie hotel setup idle loop: %#x", status)
+				}
+				if *debug {
+					log.Printf("actor=marie setup=%s set=town star=%s point=%v heading=128", setup.Selector, star, position)
 				}
 			}
 		}
