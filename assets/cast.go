@@ -33,6 +33,8 @@ type CastActor struct {
 	Name     string
 	Selector string
 	Location string
+	// Script is record+0x6E, which the actor constructor FUN_0040C1F0 copies
+	// into the actor's pose field: it is the actor's initial pose name.
 	Script   string
 	Poses    []CastPose
 	Position [3]int16
@@ -42,6 +44,10 @@ type CastActor struct {
 type Cast struct {
 	Name   string
 	Actors []CastActor
+	// ScriptResource is the cast's shared script, resource 0 +0x924, which
+	// FUN_0040C160 stores in the cast table and sendtoactor runs after the
+	// actor's own script.
+	ScriptResource uint32
 }
 
 func (w Workspace) OpenCast(name string) (Cast, error) {
@@ -106,7 +112,10 @@ func (w Workspace) OpenCast(name string) (Cast, error) {
 		}
 		actors[index] = CastActor{Resource: resource, Name: values[0], Selector: values[1], Location: values[2], Script: values[3], Poses: poses}
 	}
-	return Cast{Name: name, Actors: actors}, nil
+	if len(metadata) < 0x928 {
+		return Cast{}, fmt.Errorf("cast metadata is shorter than its script resource field")
+	}
+	return Cast{Name: name, Actors: actors, ScriptResource: binary.LittleEndian.Uint32(metadata[0x924:0x928])}, nil
 }
 
 func (a CastActor) PoseResource(name string) (uint32, bool) {

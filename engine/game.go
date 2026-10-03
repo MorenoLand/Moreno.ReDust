@@ -385,6 +385,26 @@ func compareSilentStateValue(actual, expected any, path string) error {
 
 func silentMapValue(value any, key string) (any, bool) {
 	mapValue := reflect.ValueOf(value)
+	for mapValue.IsValid() && mapValue.Kind() == reflect.Pointer && !mapValue.IsNil() {
+		mapValue = mapValue.Elem()
+	}
+	if mapValue.IsValid() && mapValue.Kind() == reflect.Struct {
+		// Struct state is addressed by its JSON field names, as saved.
+		for index := 0; index < mapValue.NumField(); index++ {
+			field := mapValue.Type().Field(index)
+			if !field.IsExported() {
+				continue
+			}
+			name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+			if name == "" {
+				name = field.Name
+			}
+			if strings.EqualFold(name, key) {
+				return mapValue.Field(index).Interface(), true
+			}
+		}
+		return nil, false
+	}
 	if !mapValue.IsValid() || mapValue.Kind() != reflect.Map || mapValue.IsNil() || mapValue.Type().Key().Kind() != reflect.String {
 		return nil, false
 	}

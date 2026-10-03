@@ -244,6 +244,16 @@ func ApplyBinaryOperator(left, right Record, opcode uint16, strings *StringRegis
 			if opcode == 8009 {
 				result.Data = 1
 			}
+			// The native expression stack holds strings in place; the port's
+			// registers must be released here or a mismatched comparison
+			// leaks one.
+			for _, operand := range [...]Record{left, right} {
+				if operand.Kind == 3 && strings != nil {
+					if _, status, err := strings.Load(operand); err != nil || status != 0 {
+						return Record{}, status, err
+					}
+				}
+			}
 			return result, 0, nil
 		}
 		switch left.Kind {

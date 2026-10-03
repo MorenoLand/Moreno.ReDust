@@ -41,6 +41,10 @@ type GameProgress struct {
 	TrotterWalk          *scripts.NativeActorWalkState `json:"trotterWalk,omitempty"`
 	TrotterWalkFrame     int                           `json:"trotterWalkFrame,omitempty"`
 	TrotterWalkRemaining uint32                        `json:"trotterWalkRemaining,omitempty"`
+	NativeLoopKinds      bool                          `json:"nativeLoopKinds,omitempty"` // loop kinds follow FUN_004112A0; older saves used actor 2, scene 1
+
+	// ScriptActors holds the interpreter-managed actors' records.
+	ScriptActors map[string]scripts.ActorRecordState `json:"scriptActors,omitempty"`
 }
 
 func GameProgressPath(directory, gameName string) (string, error) {

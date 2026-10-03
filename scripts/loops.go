@@ -5,6 +5,62 @@ import (
 	"strings"
 )
 
+// Native loop kinds, from FUN_004112A0, which maps makeloop/stoploop's first
+// argument: "actor" 1, "prop" 2, "scene" 3, "flat" 4; any other name is
+// status 10.
+const (
+	LoopKindActor uint16 = 1
+	LoopKindProp  uint16 = 2
+	LoopKindScene uint16 = 3
+	LoopKindFlat  uint16 = 4
+)
+
+// LoopKindByName reproduces FUN_004112A0's case-insensitive mapping.
+func LoopKindByName(name string) (uint16, bool) {
+	switch strings.ToLower(name) {
+	case "actor":
+		return LoopKindActor, true
+	case "prop":
+		return LoopKindProp, true
+	case "scene":
+		return LoopKindScene, true
+	case "flat":
+		return LoopKindFlat, true
+	}
+	return 0, false
+}
+
+// LoopKindName is the inverse of LoopKindByName.
+func LoopKindName(kind uint16) string {
+	switch kind {
+	case LoopKindActor:
+		return "actor"
+	case LoopKindProp:
+		return "prop"
+	case LoopKindScene:
+		return "scene"
+	case LoopKindFlat:
+		return "flat"
+	}
+	return ""
+}
+
+// MigrateLegacyKinds rewrites loops saved before the native kind numbers were
+// adopted, when actor loops were stored as 2 and scene loops as 1.
+func (s *LoopSchedulerState) MigrateLegacyKinds() {
+	for _, slot := range s.Slots {
+		if slot == nil {
+			continue
+		}
+		switch slot.Kind {
+		case 2:
+			slot.Kind = LoopKindActor
+		case 1:
+			slot.Kind = LoopKindScene
+		}
+	}
+}
+
 type ScriptLoop struct {
 	Kind       uint16 `json:"kind"`
 	Owner      string `json:"owner"`

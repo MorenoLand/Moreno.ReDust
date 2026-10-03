@@ -49,3 +49,16 @@ func (s *StringRegisters) Load(value Record) ([]byte, uint16, error) {
 	s.active[index] = false
 	return result, 0, nil
 }
+
+// Active counts the registers holding a value, for leak diagnostics.
+func (s *StringRegisters) Active() int {
+	count := 0
+	if s != nil {
+		for _, active := range s.active {
+			if active {
+				count++
+			}
+		}
+	}
+	return count
+}

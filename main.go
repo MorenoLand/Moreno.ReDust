@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"errors"
 	"flag"
 	"fmt"
@@ -476,6 +477,29 @@ func run() error {
 	var trotterPosition [3]int16
 	isaoVisible, isaoBouncer, isaoDirGo := false, false, false
 	trotterVisible := false
+	// Script-managed actors are driven by the general interpreter over their
+	// shipped scripts instead of hand-written state. The table holds every cast
+	// actor, built by the native constructor (FUN_0040C1F0); only the managed
+	// ones are drawn from it and have their loops dispatched through it, while
+	// the rest keep their existing hand-coded paths for now.
+	scriptActors := scripts.NewScriptActors()
+	scriptActorCasts := map[string]assets.Cast{}
+	scriptActorRecords := map[string]assets.CastActor{}
+	scriptManaged := map[string]bool{"mwife": true, "blood": true}
+	for _, cast := range []assets.Cast{gangCast, extraCast} {
+		for _, actor := range cast.Actors {
+			key := strings.ToLower(actor.Name)
+			if _, exists := scriptActorRecords[key]; exists {
+				continue
+			}
+			poses := make([]string, len(actor.Poses))
+			for index, pose := range actor.Poses {
+				poses[index] = pose.Name
+			}
+			scriptActors.Add(scripts.NewCastActorRecord(cast.Name, actor.Name, actor.Selector, actor.Location, actor.Script, poses))
+			scriptActorCasts[key], scriptActorRecords[key] = cast, actor
+		}
+	}
 	const leroyTurnRate int16 = 7
 	const leroyWalkRate int16 = 3
 	const helpWalkRate int16 = 3
@@ -808,6 +832,19 @@ func run() error {
 	}
 	loadWorldActors := func(point [3]int16) ([]render.WorldActorSprite, error) {
 		actors := make([]render.WorldActorSprite, 0, 4)
+		for _, key := range scriptActors.Names() {
+			record, _ := scriptActors.Lookup(key)
+			if !scriptManaged[key] || !record.Visible || !strings.EqualFold(record.Set, activeSetName) {
+				continue
+			}
+			castActor := scriptActorRecords[key]
+			castActor.Position, castActor.Located = record.Position, true
+			sprite, err := render.LoadCastActorFrame(workspace, scriptActorCasts[key], castActor, record.Pose, int(record.Frame), int16(record.Scale), render.NativeActorViewAngle(record.Position, point, record.Heading), record.ZClip)
+			if err != nil {
+				return nil, fmt.Errorf("load script actor %s in %s: %w", record.Name, activeSetName, err)
+			}
+			actors = append(actors, sprite)
+		}
 		if trotterVisible && strings.EqualFold(trotterActorSet, activeSetName) {
 			for _, actor := range gangCast.Actors {
 				if !strings.EqualFold(actor.Name, "Trotter") {
@@ -975,6 +1012,143 @@ func run() error {
 	if err != nil {
 		stage.Close()
 		return fmt.Errorf("render G15 actors: %w", err)
+	}
+	scriptCaches := map[string]*assets.ResourceCache{}
+	scriptPrograms := map[string]*scripts.Program{}
+	scriptCache := func(castName string) (*assets.ResourceCache, error) {
+		if cache, found := scriptCaches[castName]; found {
+			return cache, nil
+		}
+		cache, err := workspace.OpenResourceCache(castName)
+		if err != nil {
+			return nil, err
+		}
+		scriptCaches[castName] = cache
+		return cache, nil
+	}
+	scriptResource := func(castName string, resource uint32) ([]byte, error) {
+		cache, err := scriptCache(castName)
+		if err != nil {
+			return nil, err
+		}
+		lease, err := cache.Acquire(resource)
+		if err != nil {
+			return nil, err
+		}
+		data, err := lease.Bytes()
+		if closeErr := lease.Close(); err == nil {
+			err = closeErr
+		}
+		return append([]byte(nil), data...), err
+	}
+	scriptProgram := func(castName string, resource uint32) (*scripts.Program, error) {
+		key := fmt.Sprintf("%s#%d", castName, resource)
+		if program, found := scriptPrograms[key]; found {
+			return program, nil
+		}
+		data, err := scriptResource(castName, resource)
+		if err != nil {
+			return nil, err
+		}
+		program, err := scripts.ParseProgram(data)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s resource %d: %w", castName, resource, err)
+		}
+		scriptPrograms[key] = &program
+		return &program, nil
+	}
+	scriptHost := &scripts.GameHost{Actors: scriptActors, Loops: &nativeLoops, Random: &nativeRandom, Env: scripts.GameHostEnv{
+		CurrentSet: func() string { return activeSetName },
+		ResolveStar: func(set, star string) ([3]int16, bool) {
+			source := nightSet
+			if strings.EqualFold(set, activeSetName) {
+				source = activeSet
+			} else if !strings.EqualFold(set, "town") {
+				return [3]int16{}, false
+			}
+			position, found, err := source.ResolveLocation(star)
+			return position, err == nil && found
+		},
+		Player: func() [3]int16 {
+			return [3]int16{worldPoint[0]*256 + 128, worldPoint[1]*256 + 128, 0}
+		},
+		Camera: func() [3]int16 {
+			camera := render.NativeActorCameraPosition(worldPoint)
+			return [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
+		},
+		ProjectedDepth: func(actor *scripts.ActorRecord) (int16, bool) {
+			for _, projected := range projectedActors {
+				if strings.EqualFold(projected.Name, actor.Name) {
+					return int16(projected.Depth), true
+				}
+			}
+			return 0, false
+		},
+		Heading:   render.NativeActorHeadingToPoint,
+		Frame:     func() int32 { return int32(scripts.NativeFrameUnits(scripts.NativeTickMilliseconds())) },
+		FrameRate: func() int32 { return 3 },
+		OptionKey: func() bool { return ebiten.IsKeyPressed(ebiten.KeyAlt) },
+		ShiftKey:  func() bool { return ebiten.IsKeyPressed(ebiten.KeyShift) },
+		Chain: func(actor *scripts.ActorRecord) ([]scripts.ScriptFrame, error) {
+			key := strings.ToLower(actor.Name)
+			cast := scriptActorCasts[key]
+			record, err := scriptResource(cast.Name, scriptActorRecords[key].Resource)
+			if err != nil {
+				return nil, err
+			}
+			if len(record) < 0x2a {
+				return nil, fmt.Errorf("actor %s record is shorter than its script field", actor.Name)
+			}
+			own, err := scriptProgram(cast.Name, binary.LittleEndian.Uint32(record[0x26:0x2a]))
+			if err != nil {
+				return nil, err
+			}
+			shared, err := scriptProgram(cast.Name, cast.ScriptResource)
+			if err != nil {
+				return nil, err
+			}
+			return []scripts.ScriptFrame{
+				{Program: own, Me: actor.Name, Target: actor.Name, Label: "Actor Script: "},
+				{Program: shared, Me: actor.Name, Target: actor.Name, Label: "Cast Script: ", Last: true},
+			}, nil
+		},
+	}}
+	scriptInterpreter := scripts.NewInterpreter(scriptHost)
+	// deliverScriptEvent raises an event the native way. A non-zero status is
+	// what the native engine reports in its error dialog and then continues
+	// past; an opcode the host lacks is an evidence gap. Both are logged and
+	// play continues.
+	deliverScriptEvent := func(event scripts.ActorEvent) error {
+		for name, value := range map[string]int32{"day": int32(gameDay), "clock": int32(gameClock), "phase": int32(phase)} {
+			if err := scriptInterpreter.SetGlobalNumber(name, value); err != nil {
+				return err
+			}
+		}
+		status, err := scriptHost.Deliver(scriptInterpreter, event)
+		if errors.Is(err, scripts.ErrHostOpcodeUnimplemented) {
+			log.Printf("script-gap actor=%s message=%s: %v", event.Actor, event.Message, err)
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("script event %s %s: %w", event.Actor, event.Message, err)
+		}
+		if status != 0 {
+			log.Printf("script-status actor=%s message=%s status=%#x record=%d", event.Actor, event.Message, status, scriptInterpreter.ProgramCounter)
+		} else if *debug && *debugLoops {
+			log.Printf("script-event actor=%s message=%s", event.Actor, event.Message)
+		}
+		return nil
+	}
+	// GANG r1 initactors sends initactor to every actor at boot; the managed
+	// actors receive theirs here, which declares their phase globals and puts
+	// them down until a setup places them.
+	for _, key := range scriptActors.Names() {
+		if scriptManaged[key] {
+			if err := deliverScriptEvent(scripts.ActorEvent{Actor: key, Message: "initactor()"}); err != nil {
+				stage.Close()
+				return err
+			}
+		}
 	}
 	// # The standing pose, and why it is *not* baked into the base
 	//
@@ -1398,7 +1572,7 @@ func run() error {
 			actorHeadings["trotter"] = setup.Heading
 		}
 		trotterWalk = nil
-		nativeLoops.Stop(2, "trotter")
+		nativeLoops.Stop(scripts.LoopKindActor, "trotter")
 		return nil
 	}
 	switchSpecialSet := func(setName, sceneName, directionName string) (render.IndexedFrame, error) {
@@ -1492,15 +1666,15 @@ func run() error {
 		closeTrotter := scripts.NativeTrotterSetTransition(trotterState, previousName, false)
 		if closeTrotter.Hide {
 			trotterVisible, trotterWalk = false, nil
-			nativeLoops.Stop(2, "trotter")
+			nativeLoops.Stop(scripts.LoopKindActor, "trotter")
 		}
 		if previousName == "town" && semanticName != "town" {
 			townReturnScene = string(view.Name[1:])
-			nativeLoops.Stop(1, "scene g14")
+			nativeLoops.Stop(scripts.LoopKindScene, "scene g14")
 			for _, owner := range []string{"leroy", "dog", "help", "jones", "buick", "marie", "isao"} {
-				nativeLoops.Stop(2, owner)
+				nativeLoops.Stop(scripts.LoopKindActor, owner)
 			}
-			nativeLoops.Stop(2, "laurel")
+			nativeLoops.Stop(scripts.LoopKindActor, "laurel")
 			leroyWalk, helpWalk, jonesWalk = nil, nil, nil
 			buickWalk, marieWalk = nil, nil
 			actorPoses["leroy"], actorPoses["help"], actorPoses["jones"] = "stand", "stand", "stand"
@@ -1509,10 +1683,11 @@ func run() error {
 		}
 		activeSet, activeSetName, activeSetOwned = nextSet, semanticName, nextOwned
 		view, worldPoint, backgroundFrame = nextView, nextPoint, background
+		scriptHost.OpenSet()
 		doorOwner = ""
 		if previousName == "hotupper" && semanticName != "hotupper" {
 			hotelJonesVisible, hotelJonesWalk = false, nil
-			nativeLoops.Stop(1, "scene c4")
+			nativeLoops.Stop(scripts.LoopKindScene, "scene c4")
 		}
 		if semanticName == "hotupper" && strings.EqualFold(pendingHotelActorSetup, "jones") && strings.EqualFold(pendingHotelActorSelector, "hallway") {
 			position, found, err := nextSet.ResolveLocation("hotupper.jones1")
@@ -1534,7 +1709,7 @@ func run() error {
 		}
 		if openTrotter.Hide {
 			trotterVisible, trotterWalk = false, nil
-			nativeLoops.Stop(2, "trotter")
+			nativeLoops.Stop(scripts.LoopKindActor, "trotter")
 		}
 		if openTrotter.SetGamePhaseValid {
 			gamePhase = openTrotter.SetGamePhase
@@ -1546,12 +1721,12 @@ func run() error {
 			}
 			isaoPosition, isaoVisible, actorPoses["isao"], actorHeadings["isao"] = position, true, "stand", 64
 			isaoBouncer, isaoDirGo, jonesTurnActive = false, false, false
-			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "isao", Callback: "isaoidle", Remaining: 2}); status != 0 {
+			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "isao", Callback: "isaoidle", Remaining: 2}); status != 0 {
 				return render.IndexedFrame{}, fmt.Errorf("register Isao idle loop returned status %#x", status)
 			}
 		} else {
 			isaoVisible = false
-			nativeLoops.Stop(2, "isao")
+			nativeLoops.Stop(scripts.LoopKindActor, "isao")
 		}
 		if semanticName == "hotlower" && gameDay == 2 && gameClock == 1 && !laurelVisible && laurelPosition == ([3]int16{}) {
 			if setup, found := scripts.NativeLaurelActorSetup("hotel"); found {
@@ -1562,7 +1737,7 @@ func run() error {
 				laurelPosition, laurelVisible, actorPoses["laurel"], actorHeadings["laurel"] = position, setup.Visible, setup.Pose, setup.Heading
 				laurelFrameIndex = 0
 				if setup.Callback != "" {
-					if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "laurel", Callback: setup.Callback, Remaining: setup.LoopTicks}); status != 0 {
+					if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "laurel", Callback: setup.Callback, Remaining: setup.LoopTicks}); status != 0 {
 						return render.IndexedFrame{}, fmt.Errorf("register Laurel idle callback: %#x", status)
 					}
 				}
@@ -1588,7 +1763,7 @@ func run() error {
 		if openHotelScene {
 			hotelSceneOpenAction, hotelSceneOpenStep, hotelEventsLocked = &hotelSceneAction, 0, hotelSceneAction.LockEvents
 			loopOwner := strings.ToLower(strings.TrimSpace(hotelSceneAction.LoopName + " " + strings.TrimPrefix(hotelSceneAction.LoopScene, "Scene ")))
-			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 1, Owner: loopOwner, Callback: hotelSceneAction.LoopCode, Remaining: int32(hotelSceneAction.LoopTicks)}); status != 0 {
+			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindScene, Owner: loopOwner, Callback: hotelSceneAction.LoopCode, Remaining: int32(hotelSceneAction.LoopTicks)}); status != 0 {
 				return render.IndexedFrame{}, fmt.Errorf("register hotel scene-open trigger returned status %#x", status)
 			}
 			if *debug {
@@ -1599,17 +1774,17 @@ func run() error {
 		}
 		if semanticName == "town" && previousName != "town" {
 			if gameClock == 3 {
-				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "leroy", Callback: "leroyidle", Remaining: 20}); status != 0 {
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "leroy", Callback: "leroyidle", Remaining: 20}); status != 0 {
 					return render.IndexedFrame{}, fmt.Errorf("register Leroy idle loop after town return returned status %#x", status)
 				}
 			}
 			if buickVisible {
-				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "buick", Callback: "buickidle", Remaining: 21}); status != 0 {
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "buick", Callback: "buickidle", Remaining: 21}); status != 0 {
 					return render.IndexedFrame{}, fmt.Errorf("register Buick idle loop after town return returned status %#x", status)
 				}
 			}
 			if marieVisible {
-				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "marie", Callback: "marieidle", Remaining: 17}); status != 0 {
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "marie", Callback: "marieidle", Remaining: 17}); status != 0 {
 					return render.IndexedFrame{}, fmt.Errorf("register Marie idle loop after town return returned status %#x", status)
 				}
 			}
@@ -1617,23 +1792,23 @@ func run() error {
 				step, found := scripts.DogIdleStep("doright", &nativeRandom)
 				if found {
 					actorPoses["dog"] = step.Pose
-					if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "dog", Callback: step.Callback, Remaining: step.Remaining}); status != 0 {
+					if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "dog", Callback: step.Callback, Remaining: step.Remaining}); status != 0 {
 						return render.IndexedFrame{}, fmt.Errorf("register Dog idle loop after town return returned status %#x", status)
 					}
 				}
 			}
 			if helpVisible {
-				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "help", Callback: "helpidle", Remaining: 19}); status != 0 {
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "help", Callback: "helpidle", Remaining: 19}); status != 0 {
 					return render.IndexedFrame{}, fmt.Errorf("register Help idle loop after town return returned status %#x", status)
 				}
 			}
 			if jonesVisible && jonesWalk == nil {
-				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "jones", Callback: "jonesidle", Remaining: 17}); status != 0 {
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "jones", Callback: "jonesidle", Remaining: 17}); status != 0 {
 					return render.IndexedFrame{}, fmt.Errorf("register Jones idle loop after town return returned status %#x", status)
 				}
 			}
 			if currentThemeName == "nightwind3" {
-				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 1, Owner: "scene g14", Callback: "nightfxs", Remaining: 2}); status != 0 {
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindScene, Owner: "scene g14", Callback: "nightfxs", Remaining: 2}); status != 0 {
 					return render.IndexedFrame{}, fmt.Errorf("register NITE nightfxs loop after town return returned status %#x", status)
 				}
 			}
@@ -1670,7 +1845,7 @@ func run() error {
 			actorHeadings["help"] = 0
 		}
 		helpVisible, actorPoses["help"] = true, "stand"
-		nativeLoops.Stop(2, "help")
+		nativeLoops.Stop(scripts.LoopKindActor, "help")
 		camera := render.NativeActorCameraPosition(worldPoint)
 		player := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
 		dogVisible := false
@@ -1695,7 +1870,7 @@ func run() error {
 			actorTurnTargets["help"] = render.NativeActorHeadingToPoint(helpPosition, player)
 			helpTurnActive = actorHeadings["help"] != actorTurnTargets["help"]
 		}
-		if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "help", Callback: step.Callback, Remaining: step.Remaining}); status != 0 {
+		if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "help", Callback: step.Callback, Remaining: step.Remaining}); status != 0 {
 			return fmt.Errorf("register Help idle loop returned status %#x", status)
 		}
 		if *debug {
@@ -1728,8 +1903,8 @@ func run() error {
 			actorTurnTargets["help"] = render.NativeActorHeadingToPoint(helpActorPosition, player)
 			helpTurnActive = actorHeadings["help"] != actorTurnTargets["help"]
 		}
-		nativeLoops.Stop(2, "help")
-		if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "help", Callback: step.Callback, Remaining: step.Remaining}); status != 0 {
+		nativeLoops.Stop(scripts.LoopKindActor, "help")
+		if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "help", Callback: step.Callback, Remaining: step.Remaining}); status != 0 {
 			return fmt.Errorf("register Help idle loop returned status %#x", status)
 		}
 		if *debug {
@@ -1759,7 +1934,7 @@ func run() error {
 		walk := scripts.NewNativeActorWalkJob(helpActorPosition, destination, routeHeading, helpWalkRate)
 		helpWalk, helpInteractionStage = &walk, helpInteractionMoving
 		helpTurnActive, actorPoses["help"] = false, "stand"
-		nativeLoops.Stop(2, "help")
+		nativeLoops.Stop(scripts.LoopKindActor, "help")
 		if *debug {
 			log.Printf("actor=help walktopuppet distance=%d destination=%v heading=%d puppet=HELP1.PUP", distance, destination, routeHeading)
 		}
@@ -2445,7 +2620,7 @@ func run() error {
 				laurelVisible, laurelFrameIndex = true, 0
 			case scripts.LaurelEffectHideActor:
 				laurelVisible, laurelWalk = false, nil
-				nativeLoops.Stop(2, "laurel")
+				nativeLoops.Stop(scripts.LoopKindActor, "laurel")
 			case scripts.LaurelEffectPlayerDeath:
 				return finishPlayerDeath(effect.Value)
 			case scripts.LaurelEffectSelectHand:
@@ -2650,7 +2825,7 @@ func run() error {
 			case scripts.TrotterEffectHideActor:
 				if strings.EqualFold(effect.Target, "trotter") {
 					trotterVisible, trotterWalk = false, nil
-					nativeLoops.Stop(2, "trotter")
+					nativeLoops.Stop(scripts.LoopKindActor, "trotter")
 				} else if strings.EqualFold(effect.Target, "laurel") {
 					laurelVisible, laurelWalk = false, nil
 				} else {
@@ -3116,7 +3291,7 @@ func run() error {
 		isaoSecondRun, isaoInteractionStage = false, isaoInteractionIdle
 		actorPoses["isao"] = "stand"
 		if isaoVisible && activeSetName == "sallower" {
-			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "isao", Callback: "isaoidle", Remaining: 2}); status != 0 {
+			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "isao", Callback: "isaoidle", Remaining: 2}); status != 0 {
 				return fmt.Errorf("register Isao idle loop after dialogue returned status %#x", status)
 			}
 		}
@@ -3235,7 +3410,7 @@ func run() error {
 			}
 			themePlayer = nil
 		}
-		nativeLoops.Stop(2, "isao")
+		nativeLoops.Stop(scripts.LoopKindActor, "isao")
 		isaoInteractionStage = isaoInteractionPuppetPending
 		if *debug {
 			log.Printf("actor=isao mousedown=accepted distance=%d point=%v", distance, worldPoint)
@@ -3340,7 +3515,7 @@ func run() error {
 		jonesInteractionStage = jonesInteractionIdle
 		actorPoses["jones"] = "stand"
 		if jonesVisible && activeSetName == "town" {
-			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "jones", Callback: "jonesidle", Remaining: 17}); status != 0 {
+			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "jones", Callback: "jonesidle", Remaining: 17}); status != 0 {
 				return fmt.Errorf("register Jones idle loop after dialogue returned status %#x", status)
 			}
 		}
@@ -3349,7 +3524,7 @@ func run() error {
 			if step.Kind == scripts.HotelTriggerDelay {
 				hotelSceneOpenStep++
 				loopOwner := strings.ToLower(strings.TrimSpace(hotelSceneOpenAction.LoopName + " " + strings.TrimPrefix(hotelSceneOpenAction.LoopScene, "Scene ")))
-				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 1, Owner: loopOwner, Callback: hotelSceneOpenAction.LoopCode, Remaining: int32(step.DelayTicks)}); status != 0 {
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindScene, Owner: loopOwner, Callback: hotelSceneOpenAction.LoopCode, Remaining: int32(step.DelayTicks)}); status != 0 {
 					return fmt.Errorf("register Jones hallway delay returned status %#x", status)
 				}
 				if *debug {
@@ -3445,7 +3620,7 @@ func run() error {
 				log.Printf("puppet=jones blocked clock=%d jonesphase=%d", gameClock, jonesPhase)
 			}
 			if jonesVisible && activeSetName == "town" {
-				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "jones", Callback: "jonesidle", Remaining: 17}); status != 0 {
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "jones", Callback: "jonesidle", Remaining: 17}); status != 0 {
 					return fmt.Errorf("register Jones idle loop after unsupported dialogue returned status %#x", status)
 				}
 			}
@@ -3499,7 +3674,7 @@ func run() error {
 			log.Printf("puppet=jones blocked jonesphase=%d laurelphase=%d", jonesPhase, laurelPhase)
 		}
 		if jonesVisible && activeSetName == "town" {
-			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "jones", Callback: "jonesidle", Remaining: 17}); status != 0 {
+			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "jones", Callback: "jonesidle", Remaining: 17}); status != 0 {
 				return fmt.Errorf("register Jones idle loop after unsupported state returned status %#x", status)
 			}
 		}
@@ -3517,7 +3692,7 @@ func run() error {
 		}
 		camera := render.NativeActorCameraPosition(worldPoint)
 		playerPosition := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
-		nativeLoops.Stop(2, "jones")
+		nativeLoops.Stop(scripts.LoopKindActor, "jones")
 		jonesTurnActive = false
 		if scripts.NativeActorDistance2D(jonesPosition, playerPosition) >= townActorHotDistance {
 			destination := [3]int16{playerPosition[0], playerPosition[1], 0}
@@ -3827,9 +4002,9 @@ func run() error {
 		actorPoses["marie"] = "stand"
 		if marieFinishNPC {
 			marieVisible, marieFinishNPC = false, false
-			nativeLoops.Stop(2, "marie")
+			nativeLoops.Stop(scripts.LoopKindActor, "marie")
 		} else if marieVisible && activeSetName == "town" {
-			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "marie", Callback: "marieidle", Remaining: 17}); status != 0 {
+			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "marie", Callback: "marieidle", Remaining: 17}); status != 0 {
 				return fmt.Errorf("register Marie idle loop after dialogue returned status %#x", status)
 			}
 		}
@@ -3934,7 +4109,7 @@ func run() error {
 				log.Printf("puppet=marie blocked day=%d clock=%d mariephase=%d", gameDay, gameClock, mariePhase)
 			}
 			if marieVisible && activeSetName == "town" {
-				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "marie", Callback: "marieidle", Remaining: 17}); status != 0 {
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "marie", Callback: "marieidle", Remaining: 17}); status != 0 {
 					return fmt.Errorf("register Marie idle loop after unsupported dialogue returned status %#x", status)
 				}
 			}
@@ -3962,7 +4137,7 @@ func run() error {
 		}
 		camera := render.NativeActorCameraPosition(worldPoint)
 		player := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
-		nativeLoops.Stop(2, "marie")
+		nativeLoops.Stop(scripts.LoopKindActor, "marie")
 		marieTurnActive = false
 		if scripts.NativeActorDistance2D(mariePosition, player) >= townActorHotDistance {
 			destination := [3]int16{player[0], player[1], 0}
@@ -3986,7 +4161,7 @@ func run() error {
 		if !hasJonesStart || !hasJonesTarget {
 			return fmt.Errorf("NITE.SET lacks town.jones1 or town.jones2")
 		}
-		nativeLoops.Stop(2, "jones")
+		nativeLoops.Stop(scripts.LoopKindActor, "jones")
 		jonesPosition, jonesVisible = jonesStartPosition, true
 		actorPoses["jones"] = "walk"
 		actorHeadings["jones"] = render.NativeActorHeadingToPoint(jonesStartPosition, jonesTargetPosition)
@@ -4011,7 +4186,7 @@ func run() error {
 			helpVisible = false
 			helpWalk = nil
 			helpInteractionStage = helpInteractionIdle
-			nativeLoops.Stop(2, "help")
+			nativeLoops.Stop(scripts.LoopKindActor, "help")
 		}
 		if helpPendingResult.GiveRing && helpPendingResult.HideHelp {
 			if err := setupJonesBarActor(); err != nil {
@@ -4056,7 +4231,21 @@ func run() error {
 	}
 	runNativeScheduler := func(visualEffectPump bool) (bool, error) {
 		displayChanged := false
+		if !visualEffectPump {
+			// FUN_0040F4E0 runs the walk and turn jobs before the loops.
+			events, moved := scriptHost.Pass()
+			displayChanged = displayChanged || moved && currentScene == 0
+			for _, event := range events {
+				if err := deliverScriptEvent(event); err != nil {
+					return false, err
+				}
+			}
+		}
 		status, err := nativeLoops.PassWhere(func(loop scripts.ScriptLoop) (uint16, error) {
+			if event, isActor := scripts.LoopEvent(loop); isActor && scriptManaged[strings.ToLower(loop.Owner)] {
+				displayChanged = displayChanged || currentScene == 0
+				return 0, deliverScriptEvent(event)
+			}
 			switch loop.Callback {
 			case "toidle", "leroyidle":
 				actorCamera := render.NativeActorCameraPosition(worldPoint)
@@ -4429,7 +4618,7 @@ func run() error {
 					if !jonesTurnActive {
 						jonesInteractionStage = jonesInteractionPuppetPending
 					}
-				} else if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "jones", Callback: "jonesidle", Remaining: 17}); status != 0 {
+				} else if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "jones", Callback: "jonesidle", Remaining: 17}); status != 0 {
 					return false, fmt.Errorf("register Jones idle loop returned status %#x", status)
 				}
 				displayChanged = true
@@ -4468,7 +4657,7 @@ func run() error {
 				if !walking {
 					trotterWalk, trotterVisible, actorPoses["trotter"] = nil, false, "stand"
 					trotterFrameIndex = 0
-					nativeLoops.Stop(2, "trotter")
+					nativeLoops.Stop(scripts.LoopKindActor, "trotter")
 				}
 				if *debug && (*debugLoops || !walking) {
 					log.Printf("actor=trotter walk point=%v heading=%d active=%t visible=%t", trotterPosition, actorHeadings["trotter"], walking, trotterVisible)
@@ -5284,7 +5473,12 @@ func run() error {
 		progress.StoryValues["trotterScale"], progress.StoryValues["trotterSpeed"], progress.StoryValues["trotterTurnSpeed"], progress.StoryValues["trotterZClip"] = int32(trotterScale), int32(trotterSpeed), int32(trotterTurnSpeed), int32(trotterZClip)
 		progress.StoryFlags["trotterVisible"], progress.StoryFlags["laurelVisible"] = trotterVisible, laurelVisible
 		loops := nativeLoops.Snapshot()
-		progress.ScriptLoops = &loops
+		progress.ScriptLoops, progress.NativeLoopKinds = &loops, true
+		managed := make([]string, 0, len(scriptManaged))
+		for name := range scriptManaged {
+			managed = append(managed, name)
+		}
+		progress.ScriptActors = scriptActors.Snapshot(managed)
 		if trotterWalk != nil {
 			walk := trotterWalk.Snapshot()
 			progress.TrotterWalk, progress.TrotterWalkFrame = &walk, trotterFrameIndex
@@ -5439,7 +5633,13 @@ func run() error {
 			}
 			trotterWalk, trotterFrameIndex, trotterWalkNext = walk, progress.TrotterWalkFrame, scripts.NativeFrameUnits(scripts.NativeTickMilliseconds())+progress.TrotterWalkRemaining
 		}
+		if err := scriptActors.Restore(progress.ScriptActors); err != nil {
+			return err
+		}
 		if progress.ScriptLoops != nil {
+			if !progress.NativeLoopKinds {
+				progress.ScriptLoops.MigrateLegacyKinds()
+			}
 			if err := nativeLoops.Restore(*progress.ScriptLoops); err != nil {
 				return err
 			}
@@ -5590,13 +5790,13 @@ func run() error {
 		step, found := scripts.DogIdleStep("doright", &nativeRandom)
 		if found {
 			actorPoses["dog"] = step.Pose
-			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "dog", Callback: step.Callback, Remaining: step.Remaining}); status != 0 {
+			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "dog", Callback: step.Callback, Remaining: step.Remaining}); status != 0 {
 				return fmt.Errorf("register new-game dog idle: %#x", status)
 			}
 		}
 		if currentThemeName == "nightwind3" {
-			nativeLoops.Stop(1, "scene g14")
-			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 1, Owner: "scene g14", Callback: "nightfxs", Remaining: 2}); status != 0 {
+			nativeLoops.Stop(scripts.LoopKindScene, "scene g14")
+			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindScene, Owner: "scene g14", Callback: "nightfxs", Remaining: 2}); status != 0 {
 				return fmt.Errorf("register new-game nightfxs: %#x", status)
 			}
 		}
@@ -5768,10 +5968,14 @@ func run() error {
 		}
 		if strings.EqualFold(action.PutDownActor, "laurel") {
 			laurelVisible, laurelWalk = false, nil
-			nativeLoops.Stop(2, "laurel")
+			nativeLoops.Stop(scripts.LoopKindActor, "laurel")
 		}
 		for _, setup := range action.ActorSetups {
-			if strings.EqualFold(setup.Name, "trotter") {
+			if scriptManaged[strings.ToLower(setup.Name)] {
+				if err := deliverScriptEvent(scripts.ActorEvent{Actor: setup.Name, Message: fmt.Sprintf("setupactor(%q)", setup.Selector)}); err != nil {
+					return render.IndexedFrame{}, err
+				}
+			} else if strings.EqualFold(setup.Name, "trotter") {
 				if err := setupTrotterActor(setup.Selector); err != nil {
 					return render.IndexedFrame{}, err
 				}
@@ -5789,8 +5993,8 @@ func run() error {
 				mariePosition, marieStar, marieVisible, marieWalk, marieWalkTarget = position, star, true, nil, ""
 				actorPoses["marie"], actorHeadings["marie"] = "stand", 128
 				marieTurnActive = false
-				nativeLoops.Stop(2, "marie")
-				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "marie", Callback: "marieidle", Remaining: 17}); status != 0 {
+				nativeLoops.Stop(scripts.LoopKindActor, "marie")
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "marie", Callback: "marieidle", Remaining: 17}); status != 0 {
 					return render.IndexedFrame{}, fmt.Errorf("register Marie hotel setup idle loop: %#x", status)
 				}
 				if *debug {
@@ -6377,7 +6581,7 @@ func run() error {
 			if playback != nil {
 				movieFrame, movieWaiting = playback.FrameIndex(), playback.WaitingForInput()
 			}
-			return map[string]any{"day": gameDay, "clock": gameClock, "phase": gamePhase, "set": activeSetName, "scene": string(stage.Scenes[currentScene].Name[1:]), "point": worldPoint, "cash": playercash, "inventory": inventoryOwners, "inventoryMenu": inventoryMenuActive, "breakfast": hotelHotplateStage != nil && stage == hotelHotplateStage, "jonesPhase": jonesPhase, "jonesRingStory": jonesRingStory, "laurelPhase": laurelPhase, "movieFrame": movieFrame, "movieWaiting": movieWaiting}
+			return map[string]any{"day": gameDay, "clock": gameClock, "phase": gamePhase, "set": activeSetName, "scene": string(stage.Scenes[currentScene].Name[1:]), "point": worldPoint, "cash": playercash, "inventory": inventoryOwners, "inventoryMenu": inventoryMenuActive, "breakfast": hotelHotplateStage != nil && stage == hotelHotplateStage, "jonesPhase": jonesPhase, "jonesRingStory": jonesRingStory, "laurelPhase": laurelPhase, "movieFrame": movieFrame, "movieWaiting": movieWaiting, "scriptActors": scriptActors.Snapshot([]string{"mwife", "blood"})}
 		})
 	}
 	runErr := runGame(initialFrame, func() (render.IndexedFrame, bool, error) {
@@ -6918,7 +7122,7 @@ func run() error {
 			currentThemeName = theme.FirstVoiceName()
 			resetNativeRandom()
 			if gameClock == 3 {
-				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "leroy", Callback: "leroyidle", Remaining: 20}); status != 0 {
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "leroy", Callback: "leroyidle", Remaining: 20}); status != 0 {
 					return render.IndexedFrame{}, false, fmt.Errorf("register Leroy idle loop returned status %#x", status)
 				}
 			}
@@ -6926,23 +7130,23 @@ func run() error {
 				step, found := scripts.DogIdleStep("doright", &nativeRandom)
 				if found {
 					actorPoses["dog"] = step.Pose
-					if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "dog", Callback: step.Callback, Remaining: step.Remaining}); status != 0 {
+					if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "dog", Callback: step.Callback, Remaining: step.Remaining}); status != 0 {
 						return render.IndexedFrame{}, false, fmt.Errorf("register dog idle loop returned status %#x", status)
 					}
 				}
 			}
 			if buickVisible {
-				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "buick", Callback: "buickidle", Remaining: 21}); status != 0 {
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "buick", Callback: "buickidle", Remaining: 21}); status != 0 {
 					return render.IndexedFrame{}, false, fmt.Errorf("register Buick idle loop returned status %#x", status)
 				}
 			}
 			if marieVisible {
-				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 2, Owner: "marie", Callback: "marieidle", Remaining: 17}); status != 0 {
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "marie", Callback: "marieidle", Remaining: 17}); status != 0 {
 					return render.IndexedFrame{}, false, fmt.Errorf("register Marie idle loop returned status %#x", status)
 				}
 			}
 			if currentThemeName == "nightwind3" {
-				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: 1, Owner: "scene g14", Callback: "nightfxs", Remaining: 2}); status != 0 {
+				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindScene, Owner: "scene g14", Callback: "nightfxs", Remaining: 2}); status != 0 {
 					return render.IndexedFrame{}, false, fmt.Errorf("register NITE nightfxs loop returned status %#x", status)
 				}
 			}
@@ -7598,7 +7802,7 @@ func run() error {
 						walk := scripts.NewNativeActorWalkJob(leroyPosition, destination, routeHeading, leroyWalkRate)
 						leroyWalk, actorTurnActive, leroyInteractionStage = &walk, false, leroyInteractionMoving
 						actorPoses["leroy"] = "stand"
-						nativeLoops.Stop(2, "leroy")
+						nativeLoops.Stop(scripts.LoopKindActor, "leroy")
 						if *debug {
 							log.Printf("actor=leroy walktopuppet distance=%d destination=%v heading=%d", distance, destination, routeHeading)
 						}
@@ -8014,7 +8218,7 @@ func run() error {
 				actorName, hit := render.HitTestWorldActors(projectedActors, point)
 				if hit && strings.EqualFold(actorName, "dog") && boneInInventory && boneOwner == "stranger" && gameDay != 5 {
 					dogVisibleState = false
-					nativeLoops.Stop(2, "dog")
+					nativeLoops.Stop(scripts.LoopKindActor, "dog")
 					if activeSetName == "town" && view.Resource == 135 && worldPoint[2] == assets.SetDirectionNorth {
 						boneInInventory, boneOwner, boneWorldProp.Visible = false, "none", false
 						inventoryOwners["bone"], handItem = "none", ""
