@@ -139,7 +139,9 @@ func (t *VariableTable) Remove(name []byte, cache *Record) (uint16, error) {
 		return 0, err
 	}
 	if status != 0 {
-		return status, fmt.Errorf("variable deletion target is not present")
+		// FUN_00427120 masks FUN_00427200's not-found status 9 to zero, so
+		// dumplocal/dumpglobal of an absent name succeeds silently.
+		return 0, nil
 	}
 	slot := t.slots[id]
 	if slot.ValueType() == 3 {

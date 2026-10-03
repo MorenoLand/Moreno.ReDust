@@ -83,7 +83,9 @@ func (p *ExpressionValueParser) Parse(program Program, start int) (Record, uint3
 		return Record{Kind: 2, Data: 1}, 1, 0, nil
 	case 4022:
 		return Record{Kind: 2}, 1, 0, nil
-	case 8007:
+	case 4023:
+		// FUN_00422870 applies logical not to 0xFB7, the `not` keyword; 8007
+		// is the binary `@` concatenation operator and is never a prefix.
 		value, consumed, status, err := p.Parse(program, start+1)
 		if err != nil || uint16(status) != 0 {
 			return Record{}, 0, status, err

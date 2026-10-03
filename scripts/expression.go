@@ -201,7 +201,8 @@ func ApplyBinaryOperator(left, right Record, opcode uint16, strings *StringRegis
 			if right.Data == 0 {
 				return Record{}, 0x37, nil
 			}
-			result.Data = left.Data / right.Data
+			// IDIV at 0x004223FD: signed division.
+			result.Data = uint32(int32(left.Data) / int32(right.Data))
 		}
 	case 8005, 8006:
 		if left.Kind != 2 || right.Kind != 2 {
@@ -236,9 +237,11 @@ func ApplyBinaryOperator(left, right Record, opcode uint16, strings *StringRegis
 	case 8008, 8009:
 		var equal bool
 		if left.Kind != right.Kind {
+			// Mismatched types compare unequal and still yield a boolean
+			// (0x004224FD and 0x004225BF write type 2 in both cases).
+			result.Kind = 2
 			result.Data = 0
 			if opcode == 8009 {
-				result.Kind = 2
 				result.Data = 1
 			}
 			return result, 0, nil
@@ -271,15 +274,17 @@ func ApplyBinaryOperator(left, right Record, opcode uint16, strings *StringRegis
 			return Record{}, 14, nil
 		}
 		result.Kind = 2
+		// JL/JG/JLE/JGE at 0x004226A7..0x0042278B: signed comparisons.
+		l, r := int32(left.Data), int32(right.Data)
 		switch opcode {
 		case 8010:
-			result.Data = boolWord(left.Data > right.Data)
+			result.Data = boolWord(l > r)
 		case 8011:
-			result.Data = boolWord(left.Data < right.Data)
+			result.Data = boolWord(l < r)
 		case 8012:
-			result.Data = boolWord(left.Data >= right.Data)
+			result.Data = boolWord(l >= r)
 		case 8013:
-			result.Data = boolWord(left.Data <= right.Data)
+			result.Data = boolWord(l <= r)
 		}
 	default:
 		return Record{}, 14, nil
