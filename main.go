@@ -4464,8 +4464,30 @@ func run() error {
 		scriptTask = task
 		return nil
 	}
+	schedulerPasses, schedulerWindow := 0, scripts.NativeTickMilliseconds()
+	// The native pump (FUN_00406920) finishes each render by waiting until the
+	// timer FUN_0042B700, which counts 60 units a second, has advanced by the
+	// boot script's framerate(3). Walk jobs, loops and projection therefore run
+	// 20 times a second, not once per host update.
+	const nativePumpInterval uint32 = 3
+	nextNativePump := uint32(0)
+	nativePumpDue := func() bool {
+		now := scripts.NativeFrameUnits(scripts.NativeTickMilliseconds())
+		if int32(now-nextNativePump) < 0 {
+			return false
+		}
+		nextNativePump = now + nativePumpInterval
+		return true
+	}
 	runNativeScheduler := func(visualEffectPump bool) (bool, error) {
 		displayChanged := false
+		if *debug && *debugLoops {
+			schedulerPasses++
+			if now := scripts.NativeTickMilliseconds(); now-schedulerWindow >= 1000 {
+				log.Printf("scheduler passes=%d window-ms=%d", schedulerPasses, now-schedulerWindow)
+				schedulerPasses, schedulerWindow = 0, now
+			}
+		}
 		scriptsPaused := scriptTask != nil && !scriptHost.PassRequested()
 		if !visualEffectPump && !scriptsPaused {
 			// FUN_0040F4E0 runs the walk and turn jobs before the loops.
@@ -6836,7 +6858,7 @@ func run() error {
 					currentFrame, stageFrame, displayChanged = frame, frame, true
 				}
 			}
-			if scriptHost.PassRequested() {
+			if scriptHost.PassRequested() && nativePumpDue() {
 				if _, err := runNativeScheduler(false); err != nil {
 					return render.IndexedFrame{}, false, err
 				}
@@ -6956,9 +6978,12 @@ func run() error {
 				return render.IndexedFrame{}, false, fmt.Errorf("advance player portrait: %w", err)
 			}
 			displayChanged = avatarChanged
-			changed, err := runNativeScheduler(false)
-			if err != nil {
-				return render.IndexedFrame{}, false, err
+			changed := false
+			if nativePumpDue() {
+				var err error
+				if changed, err = runNativeScheduler(false); err != nil {
+					return render.IndexedFrame{}, false, err
+				}
 			}
 			if currentScene == 2 && inventoryMenuActive && inventoryCashNeedsRefresh(inventoryCashRendered, inventoryCashRenderedValid, playercash) {
 				if err := renderMarieInventory(); err != nil {
