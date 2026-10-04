@@ -4527,6 +4527,7 @@ func run() error {
 	// 20 times a second, not once per host update.
 	const nativePumpInterval uint32 = 3
 	nextNativePump := uint32(0)
+	forceNativePump := false
 	nativePumpDue := func() bool {
 		now := scripts.NativeFrameUnits(scripts.NativeTickMilliseconds())
 		if int32(now-nextNativePump) < 0 {
@@ -4537,7 +4538,11 @@ func run() error {
 	}
 	runNativeScheduler := func(visualEffectPump bool) (bool, error) {
 		displayChanged := false
-		if *debug && *debugLoops {
+		// Only the actor simulation (jobs, turns, loops) runs at the pump
+		// rate; interaction state machines keep running every update.
+		pumpDue := visualEffectPump || forceNativePump || nativePumpDue()
+		forceNativePump = false
+		if *debug && *debugLoops && pumpDue {
 			schedulerPasses++
 			if now := scripts.NativeTickMilliseconds(); now-schedulerWindow >= 1000 {
 				log.Printf("scheduler passes=%d window-ms=%d", schedulerPasses, now-schedulerWindow)
@@ -4545,7 +4550,7 @@ func run() error {
 			}
 		}
 		scriptsPaused := scriptTask != nil && !scriptHost.PassRequested()
-		if !visualEffectPump && !scriptsPaused {
+		if !visualEffectPump && !scriptsPaused && pumpDue {
 			// FUN_0040F4E0 runs the walk and turn jobs before the loops.
 			events, moved := scriptHost.Pass()
 			displayChanged = displayChanged || moved && currentScene == 0
@@ -4790,7 +4795,7 @@ func run() error {
 			}
 			return nativeLoops.Register(loop), nil
 		}, func(loop scripts.ScriptLoop) bool {
-			if scriptsPaused && loop.Kind == scripts.LoopKindActor && scriptManaged[strings.ToLower(loop.Owner)] {
+			if !pumpDue || scriptsPaused && loop.Kind == scripts.LoopKindActor && scriptManaged[strings.ToLower(loop.Owner)] {
 				return false
 			}
 			return visualEffectPump || loop.Callback != "nightfxs" && loop.Callback != "dayfxs"
@@ -4801,7 +4806,7 @@ func run() error {
 		if status != 0 {
 			return false, fmt.Errorf("native scene scheduler returned status %#x", status)
 		}
-		if !visualEffectPump && actorTurnActive {
+		if !visualEffectPump && pumpDue && actorTurnActive {
 			actorHeadings["leroy"] = scripts.NativeTurnStep(actorHeadings["leroy"], actorTurnTargets["leroy"], leroyTurnRate)
 			actorTurnActive = actorHeadings["leroy"] != actorTurnTargets["leroy"]
 			displayChanged = displayChanged || currentScene == 0
@@ -4815,7 +4820,7 @@ func run() error {
 				}
 			}
 		}
-		if !visualEffectPump && helpTurnActive {
+		if !visualEffectPump && pumpDue && helpTurnActive {
 			actorHeadings["help"] = scripts.NativeTurnStep(actorHeadings["help"], actorTurnTargets["help"], helpTurnRate)
 			helpTurnActive = actorHeadings["help"] != actorTurnTargets["help"]
 			displayChanged = displayChanged || currentScene == 0
@@ -4823,7 +4828,7 @@ func run() error {
 				log.Printf("actor=help turn heading=%d target=%d active=%t", actorHeadings["help"], actorTurnTargets["help"], helpTurnActive)
 			}
 		}
-		if !visualEffectPump && jonesTurnActive {
+		if !visualEffectPump && pumpDue && jonesTurnActive {
 			actorHeadings["jones"] = scripts.NativeTurnStep(actorHeadings["jones"], actorTurnTargets["jones"], jonesTurnRate)
 			jonesTurnActive = actorHeadings["jones"] != actorTurnTargets["jones"]
 			displayChanged = displayChanged || currentScene == 0
@@ -4831,7 +4836,7 @@ func run() error {
 				log.Printf("actor=jones turn heading=%d target=%d active=%t", actorHeadings["jones"], actorTurnTargets["jones"], jonesTurnActive)
 			}
 		}
-		if !visualEffectPump && marieTurnActive {
+		if !visualEffectPump && pumpDue && marieTurnActive {
 			actorHeadings["marie"] = scripts.NativeTurnStep(actorHeadings["marie"], actorTurnTargets["marie"], jonesTurnRate)
 			marieTurnActive = actorHeadings["marie"] != actorTurnTargets["marie"]
 			displayChanged = displayChanged || currentScene == 0
@@ -4845,7 +4850,7 @@ func run() error {
 		if !visualEffectPump && helpInteractionStage == helpInteractionFacing && !helpTurnActive {
 			helpInteractionStage = helpInteractionPuppetPending
 		}
-		if leroyWalk != nil {
+		if pumpDue && leroyWalk != nil {
 			previousPosition, previousHeading := leroyPosition, actorHeadings["leroy"]
 			var walking bool
 			leroyPosition, actorHeadings["leroy"], walking = leroyWalk.Pass(leroyPosition, actorHeadings["leroy"], leroyTurnRate)
@@ -4871,7 +4876,7 @@ func run() error {
 				}
 			}
 		}
-		if helpWalk != nil {
+		if pumpDue && helpWalk != nil {
 			previousPosition, previousHeading := helpActorPosition, actorHeadings["help"]
 			var walking bool
 			helpActorPosition, actorHeadings["help"], walking = helpWalk.Pass(helpActorPosition, actorHeadings["help"], helpTurnRate)
@@ -4900,7 +4905,7 @@ func run() error {
 				}
 			}
 		}
-		if jonesWalk != nil {
+		if pumpDue && jonesWalk != nil {
 			previousPosition, previousHeading := jonesPosition, actorHeadings["jones"]
 			var walking bool
 			jonesPosition, actorHeadings["jones"], walking = jonesWalk.Pass(jonesPosition, actorHeadings["jones"], jonesTurnRate)
@@ -4983,7 +4988,7 @@ func run() error {
 				}
 			}
 		}
-		if marieWalk != nil {
+		if pumpDue && marieWalk != nil {
 			previousPosition, previousHeading := mariePosition, actorHeadings["marie"]
 			var walking bool
 			mariePosition, actorHeadings["marie"], walking = marieWalk.Pass(mariePosition, actorHeadings["marie"], jonesTurnRate)
@@ -6907,6 +6912,7 @@ func run() error {
 				}
 			}
 			if scriptHost.PassRequested() && nativePumpDue() {
+				forceNativePump = true
 				if _, err := runNativeScheduler(false); err != nil {
 					return render.IndexedFrame{}, false, err
 				}
@@ -7026,12 +7032,9 @@ func run() error {
 				return render.IndexedFrame{}, false, fmt.Errorf("advance player portrait: %w", err)
 			}
 			displayChanged = avatarChanged
-			changed := false
-			if nativePumpDue() {
-				var err error
-				if changed, err = runNativeScheduler(false); err != nil {
-					return render.IndexedFrame{}, false, err
-				}
+			changed, err := runNativeScheduler(false)
+			if err != nil {
+				return render.IndexedFrame{}, false, err
 			}
 			if currentScene == 2 && inventoryMenuActive && inventoryCashNeedsRefresh(inventoryCashRendered, inventoryCashRenderedValid, playercash) {
 				if err := renderMarieInventory(); err != nil {
