@@ -119,3 +119,55 @@ func puppetSpeechString(field []byte) ([]byte, error) {
 	}
 	return append([]byte(nil), field[1:1+int(field[0])]...), nil
 }
+
+// PuppetScript is one entry of a PUP's script table, resource 2: 0x28-byte
+// rows after a 0x18-byte header whose +0x16 word is the count, each holding
+// the script resource at +0 and a Pascal name at +8 (FUN_00408C00,
+// FUN_00409160).
+type PuppetScript struct {
+	Name     string
+	Resource uint32
+}
+
+// PuppetFile is what openpuppetfile (FUN_00407E50) reads besides the
+// artwork: the puppet's name from resource 0 +0x85E and its script table.
+type PuppetFile struct {
+	Name    string
+	Scripts []PuppetScript
+}
+
+func (w Workspace) OpenPuppetFile(name string) (PuppetFile, error) {
+	cache, err := w.OpenResourceCache(name)
+	if err != nil {
+		return PuppetFile{}, err
+	}
+	defer cache.Close()
+	metadata, err := readSetResource(cache, 0)
+	if err != nil {
+		return PuppetFile{}, fmt.Errorf("read puppet metadata: %w", err)
+	}
+	if len(metadata) < 0x85f || int(metadata[0x85e])+0x85f > len(metadata) || metadata[0x85e] > 31 {
+		return PuppetFile{}, fmt.Errorf("puppet metadata has no name field")
+	}
+	file := PuppetFile{Name: string(metadata[0x85f : 0x85f+int(metadata[0x85e])])}
+	table, err := readSetResource(cache, 2)
+	if err != nil {
+		return PuppetFile{}, fmt.Errorf("read puppet script table: %w", err)
+	}
+	if len(table) < 0x18 {
+		return PuppetFile{}, fmt.Errorf("puppet script table is shorter than its header")
+	}
+	count := int(int16(binary.LittleEndian.Uint16(table[0x16:0x18])))
+	if count < 0 || 0x18+count*0x28 > len(table) {
+		return PuppetFile{}, fmt.Errorf("puppet script table count %d exceeds its %d bytes", count, len(table))
+	}
+	for index := 0; index < count; index++ {
+		row := table[0x18+index*0x28 : 0x18+(index+1)*0x28]
+		length := int(row[8])
+		if length > 31 {
+			return PuppetFile{}, fmt.Errorf("puppet script %d name is %d bytes", index, length)
+		}
+		file.Scripts = append(file.Scripts, PuppetScript{Name: string(row[9 : 9+length]), Resource: binary.LittleEndian.Uint32(row[0:4])})
+	}
+	return file, nil
+}

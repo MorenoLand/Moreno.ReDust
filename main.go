@@ -1118,14 +1118,47 @@ func run() error {
 	// what the native engine reports in its error dialog and then continues
 	// past; an opcode the host lacks is an evidence gap. Both are logged and
 	// play continues.
-	deliverScriptEvent := func(event scripts.ActorEvent) error {
-		for name, value := range map[string]int32{"day": int32(gameDay), "clock": int32(gameClock), "phase": int32(phase)} {
+	// The engine owns these globals in Go state; scripts read them, and the
+	// ones scripts write are read back after each run.
+	publishScriptGlobals := func() error {
+		for name, value := range map[string]int32{"day": int32(gameDay), "clock": int32(gameClock), "phase": int32(phase), "handflag": int32(handFlag), "playercash": playercash} {
 			if err := scriptInterpreter.SetGlobalNumber(name, value); err != nil {
 				return err
 			}
 		}
+		if err := scriptInterpreter.SetGlobalString("handitem", handItem); err != nil {
+			return err
+		}
+		if _, declared, err := scriptInterpreter.GlobalValue("playerdeath"); err != nil {
+			return err
+		} else if !declared {
+			// advanceday (NEW.FLT) clears it on every day change.
+			return scriptInterpreter.SetGlobalString("playerdeath", "")
+		}
+		return nil
+	}
+	collectScriptGlobals := func() error {
+		if value, declared, err := scriptInterpreter.GlobalValue("handflag"); err != nil {
+			return err
+		} else if declared && value.Kind == 4 {
+			handFlag = int16(value.Int)
+		}
+		if value, declared, err := scriptInterpreter.GlobalValue("playercash"); err != nil {
+			return err
+		} else if declared && value.Kind == 4 {
+			playercash = value.Int
+		}
+		return nil
+	}
+	deliverScriptEvent := func(event scripts.ActorEvent) error {
+		if err := publishScriptGlobals(); err != nil {
+			return err
+		}
 		status, err := scriptHost.Deliver(scriptInterpreter, event)
-		if errors.Is(err, scripts.ErrHostOpcodeUnimplemented) {
+		if collectErr := collectScriptGlobals(); err == nil {
+			err = collectErr
+		}
+		if errors.Is(err, scripts.ErrHostOpcodeUnimplemented) || errors.Is(err, scripts.ErrNotInTask) {
 			log.Printf("script-gap actor=%s message=%s: %v", event.Actor, event.Message, err)
 			return nil
 		}
@@ -4229,9 +4262,212 @@ func run() error {
 		}
 		return startHelpSpeechStage()
 	}
+	// A script conversation: the open puppet, its base, the line playing and
+	// the choice panel, driven by the GameHost through scriptPresenter.
+	var scriptTask *scripts.ScriptTask
+	var convPuppet *render.Puppet
+	var convTable assets.PuppetSpeechTable
+	var convName string
+	var convBase render.IndexedFrame
+	var convDialogue *engine.PuppetDialogue
+	var convSkipped, convChoosing, convHasChoice bool
+	var convChoices []scripts.PuppetChoice
+	var convChosen int32
+	convPressIndex := -1
+	convPose := func() (render.IndexedFrame, error) {
+		return standingPoseOver(convBase, convPuppet, convTable, nil, convName)
+	}
+	drawConvChoices := func(outline int) error {
+		labels := make([]string, len(convChoices))
+		for index, choice := range convChoices {
+			labels[index] = choice.Text
+		}
+		pose, err := convPose()
+		if err != nil {
+			return err
+		}
+		frame, err := convPuppet.ChoiceFrame(pose, convTable.PanelResource, labels)
+		if err != nil {
+			return fmt.Errorf("render %s choice panel: %w", convName, err)
+		}
+		if outline >= 0 {
+			if frame, err = render.DrawNativePuppetChoiceBevel(frame, outline); err != nil {
+				return fmt.Errorf("render %s choice bevel: %w", convName, err)
+			}
+		}
+		currentFrame, stageFrame = frame, frame
+		return nil
+	}
+	scriptHost.Env.Presenter = &scriptPresenter{
+		open: func(file string) error {
+			puppet, err := render.OpenPuppet(workspace, file)
+			if err != nil {
+				return err
+			}
+			table, err := workspace.OpenPuppetSpeechTable(file)
+			if err != nil {
+				_ = puppet.Close()
+				return err
+			}
+			// No world actor survives into a conversation (see the Trotter base).
+			background, _, err := compositeWorld(backgroundFrame, worldPoint, nil)
+			if err != nil {
+				_ = puppet.Close()
+				return err
+			}
+			panel, err := render.StageFrame(stage, currentPixels.Pixels)
+			if err != nil {
+				_ = puppet.Close()
+				return err
+			}
+			base, err := composeMainPanel(background, panel)
+			if err != nil {
+				_ = puppet.Close()
+				return err
+			}
+			if base, err = withPuppetPalette(base, puppet, file); err != nil {
+				_ = puppet.Close()
+				return err
+			}
+			convPuppet, convTable, convName, convBase = puppet, table, file, base
+			convChoosing, convHasChoice, convSkipped = false, false, false
+			if *debug {
+				log.Printf("script-puppet open=%s lines=%d", file, len(table.Entries))
+			}
+			return nil
+		},
+		close: func() error {
+			if convDialogue != nil {
+				if err := convDialogue.Close(); err != nil {
+					return err
+				}
+				convDialogue = nil
+			}
+			if convPuppet != nil {
+				if err := convPuppet.Close(); err != nil {
+					return err
+				}
+			}
+			convPuppet, convChoosing = nil, false
+			return nil
+		},
+		speak: func(line string) (bool, error) {
+			found := false
+			for _, entry := range convTable.Entries {
+				if strings.EqualFold(entry.Name, line) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false, nil
+			}
+			if convDialogue != nil {
+				if err := convDialogue.Close(); err != nil {
+					return false, err
+				}
+			}
+			dialogue, err := engine.NewPuppetDialogue(convPuppet, convTable.Entries, []string{line}, audioContext)
+			if err != nil {
+				return false, err
+			}
+			frame, err := dialogue.Start(convBase, scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
+			if err != nil {
+				return false, err
+			}
+			convDialogue, convSkipped, convChoosing = dialogue, false, false
+			currentFrame, stageFrame = frame, frame
+			if *debug {
+				log.Printf("script-puppet speak=%s", line)
+			}
+			return true, nil
+		},
+		speaking: func() bool { return convDialogue != nil && convDialogue.Active() },
+		skipped:  func() bool { return convSkipped },
+		choose: func(choices []scripts.PuppetChoice) error {
+			convChoices, convChoosing, convHasChoice, convPressIndex = choices, true, false, -1
+			if *debug {
+				labels := make([]string, len(choices))
+				for index, choice := range choices {
+					labels[index] = fmt.Sprintf("%s=%d", choice.Text, choice.EventID)
+				}
+				log.Printf("script-puppet choices=%q", labels)
+			}
+			return drawConvChoices(-1)
+		},
+		chosen: func() (int32, bool) {
+			if !convHasChoice {
+				return 0, false
+			}
+			convHasChoice = false
+			return convChosen, true
+		},
+		show: func(layer string) error {
+			if layer == "puppet" && convPuppet != nil {
+				frame, err := convPose()
+				if err != nil {
+					return err
+				}
+				currentFrame, stageFrame = frame, frame
+				return nil
+			}
+			return refreshWorldScene()
+		},
+		cursor: func(name string) error { return nil },
+	}
+	scriptHost.Env.PuppetFile = workspace.OpenPuppetFile
+	scriptHost.Env.Program = scriptProgram
+	scriptHost.Env.Shop = func(name string) (string, uint32, bool) {
+		// INVEN.PRP is the inventory shop the NEW.FLT boot opens for the
+		// whole game; its shop script is resource 0 +0x924.
+		if !strings.EqualFold(name, "inven") {
+			return "", 0, false
+		}
+		data, err := scriptResource("DATA/INVEN.PRP", 0)
+		if err != nil || len(data) < 0x928 {
+			return "", 0, false
+		}
+		return "DATA/INVEN.PRP", binary.LittleEndian.Uint32(data[0x924:0x928]), true
+	}
+	scriptHost.Env.PropDegree = func(name string) (int16, bool) {
+		return inventoryDegrees[strings.ToLower(name)], true
+	}
+	scriptHost.Env.Ticks = func() uint32 { return scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) }
+	scriptHost.Env.PlayerHeading = func() int16 {
+		degree, _ := render.NativeCurrentDegree(worldPoint[2])
+		return degree
+	}
+	scriptHost.Env.Vector = func(heading, length int16) (int16, int16) {
+		vector, _ := render.NativeDirectionVector(heading, length)
+		return vector[0], vector[1]
+	}
+	scriptHost.Env.CurrentFlat = func() string {
+		return strings.ToLower(string(stage.Scenes[currentScene].Name[1:]))
+	}
+	scriptHost.Env.Fallback = &mainScriptFallback{tiphat: func() error {
+		return startAvatarTiphat(nil)
+	}}
+	// startScriptTask runs an event that may block (a conversation) as a
+	// task the update loop resumes.
+	startScriptTask := func(event scripts.ActorEvent) error {
+		if scriptTask != nil {
+			return nil
+		}
+		task := scripts.StartScriptTask(event.Actor+" "+event.Message, func(task *scripts.ScriptTask) error {
+			scriptHost.SetTask(task)
+			return deliverScriptEvent(event)
+		})
+		if done, err := task.Poll(); done {
+			scriptHost.SetTask(nil)
+			return err
+		}
+		scriptTask = task
+		return nil
+	}
 	runNativeScheduler := func(visualEffectPump bool) (bool, error) {
 		displayChanged := false
-		if !visualEffectPump {
+		scriptsPaused := scriptTask != nil && !scriptHost.PassRequested()
+		if !visualEffectPump && !scriptsPaused {
 			// FUN_0040F4E0 runs the walk and turn jobs before the loops.
 			events, moved := scriptHost.Pass()
 			displayChanged = displayChanged || moved && currentScene == 0
@@ -4486,6 +4722,9 @@ func run() error {
 			}
 			return nativeLoops.Register(loop), nil
 		}, func(loop scripts.ScriptLoop) bool {
+			if scriptsPaused && loop.Kind == scripts.LoopKindActor && scriptManaged[strings.ToLower(loop.Owner)] {
+				return false
+			}
 			return visualEffectPump || loop.Callback != "nightfxs" && loop.Callback != "dayfxs"
 		})
 		if err != nil {
@@ -6587,6 +6826,40 @@ func run() error {
 	runErr := runGame(initialFrame, func() (render.IndexedFrame, bool, error) {
 		displayChanged := false
 		drainMovieAudioTails()
+		if scriptTask != nil {
+			if convDialogue != nil && convDialogue.Active() {
+				frame, changed, err := convDialogue.Update(scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
+				if err != nil {
+					return render.IndexedFrame{}, false, fmt.Errorf("advance script conversation: %w", err)
+				}
+				if changed {
+					currentFrame, stageFrame, displayChanged = frame, frame, true
+				}
+			}
+			if scriptHost.PassRequested() {
+				if _, err := runNativeScheduler(false); err != nil {
+					return render.IndexedFrame{}, false, err
+				}
+				scriptHost.Passed()
+				if err := refreshWorldScene(); err != nil {
+					return render.IndexedFrame{}, false, err
+				}
+				displayChanged = true
+			}
+			done, err := scriptTask.Poll()
+			if done {
+				label := scriptTask.Label
+				scriptTask = nil
+				scriptHost.SetTask(nil)
+				if err != nil {
+					log.Printf("script-task %s: %v", label, err)
+				} else if *debug {
+					log.Printf("script-task %s complete", label)
+				}
+				displayChanged = true
+			}
+			return currentFrame, displayChanged, nil
+		}
 		if hotelVoice != nil {
 			done, err := hotelVoice.Update(scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
 			if err != nil {
@@ -7409,6 +7682,32 @@ func run() error {
 			log.Printf("movie=%s skip-key=%s", movieNames[movieIndex], keyName)
 		}
 	}, func(mouseEvent engine.MouseEvent) (render.IndexedFrame, bool, error) {
+		if scriptTask != nil {
+			if mouseEvent.Button != ebiten.MouseButtonLeft {
+				return currentFrame, false, nil
+			}
+			if convDialogue != nil && convDialogue.Active() {
+				frame, _, err := convDialogue.Skip()
+				if err != nil {
+					return render.IndexedFrame{}, false, err
+				}
+				convSkipped, currentFrame, stageFrame = true, frame, frame
+				return currentFrame, true, nil
+			}
+			if convChoosing {
+				position := image.Pt(int(int16(mouseEvent.Point>>16)), int(int16(mouseEvent.Point)))
+				for index := range convChoices {
+					if position.In(image.Rect(0, 264+index*24, 512, 288+index*24)) {
+						convPressIndex = index
+						if err := drawConvChoices(index); err != nil {
+							return render.IndexedFrame{}, false, err
+						}
+						return currentFrame, true, nil
+					}
+				}
+			}
+			return currentFrame, false, nil
+		}
 		point := mouseEvent.Point
 		if hotelEventsLocked {
 			return currentFrame, false, nil
@@ -7714,6 +8013,12 @@ func run() error {
 				if *debug {
 					log.Printf("world-actor-hit=%s", actorName)
 				}
+				if scriptManaged[strings.ToLower(actorName)] {
+					if err := startScriptTask(scripts.ActorEvent{Actor: actorName, Message: "mousedown(0)"}); err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+					return currentFrame, true, nil
+				}
 				if strings.EqualFold(actorName, "Trotter") {
 					started, err := beginTrotterPuppetTalk()
 					if err != nil {
@@ -7899,6 +8204,23 @@ func run() error {
 		}
 		return applyFlatTarget(action.FlatTarget, action.VisualEffect, action.Duration, handler.ScriptResource)
 	}, func(state engine.MouseState) (render.IndexedFrame, bool, error) {
+		if scriptTask != nil {
+			if !convChoosing || convPressIndex < 0 || !state.LeftReleased {
+				return currentFrame, false, nil
+			}
+			// The native bevel commits on release over the pressed row.
+			pressed := convPressIndex
+			convPressIndex = -1
+			position := image.Pt(int(int16(state.Point>>16)), int(int16(state.Point)))
+			if position.In(image.Rect(0, 264+pressed*24, 512, 288+pressed*24)) {
+				convChosen, convHasChoice, convChoosing = convChoices[pressed].EventID, true, false
+				return currentFrame, false, nil
+			}
+			if err := drawConvChoices(-1); err != nil {
+				return render.IndexedFrame{}, false, err
+			}
+			return currentFrame, true, nil
+		}
 		updateNativeCursor(state.Point)
 		if volumeSliderDragging {
 			changed := false
@@ -8297,4 +8619,53 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// scriptPresenter adapts main's conversation closures to the GameHost.
+type scriptPresenter struct {
+	open     func(file string) error
+	close    func() error
+	speak    func(line string) (bool, error)
+	speaking func() bool
+	skipped  func() bool
+	choose   func([]scripts.PuppetChoice) error
+	chosen   func() (int32, bool)
+	show     func(layer string) error
+	cursor   func(name string) error
+}
+
+func (p *scriptPresenter) OpenPuppet(file string) error              { return p.open(file) }
+func (p *scriptPresenter) ClosePuppet() error                         { return p.close() }
+func (p *scriptPresenter) Speak(line string) (bool, error)            { return p.speak(line) }
+func (p *scriptPresenter) Speaking() bool                             { return p.speaking() }
+func (p *scriptPresenter) Skipped() bool                              { return p.skipped() }
+func (p *scriptPresenter) Choose(choices []scripts.PuppetChoice) error { return p.choose(choices) }
+func (p *scriptPresenter) Chosen() (int32, bool)                      { return p.chosen() }
+func (p *scriptPresenter) Show(layer string) error                    { return p.show(layer) }
+func (p *scriptPresenter) Cursor(name string) error                   { return p.cursor(name) }
+
+// mainScriptFallback handles the flat messages the port routes to existing
+// code until flats run through the interpreter: mainpanel's tiphat.
+type mainScriptFallback struct {
+	tiphat func() error
+}
+
+func (f *mainScriptFallback) Command(call *scripts.ScriptCall) (int, uint16, error) {
+	kind := call.Program.Records[call.Start].Kind
+	if scripts.CommandHandlerName(kind) == "sendtoflat" {
+		target, message, consumed, status, err := call.SendParts()
+		if err != nil || status != 0 {
+			return 0, status, err
+		}
+		if strings.EqualFold(target.Text, "mainpanel") && strings.EqualFold(message, "tiphat") {
+			return consumed, 0, f.tiphat()
+		}
+		return 0, 0, fmt.Errorf("%w: sendtoflat(%q, %s())", scripts.ErrHostOpcodeUnimplemented, target.Text, message)
+	}
+	return 0, 0, fmt.Errorf("%w: %s (%d)", scripts.ErrHostOpcodeUnimplemented, scripts.CommandHandlerName(kind), kind)
+}
+
+func (f *mainScriptFallback) Value(call *scripts.ScriptCall) (scripts.Record, int, uint16, error) {
+	kind := call.Program.Records[call.Start].Kind
+	return scripts.Record{}, 0, 0, fmt.Errorf("%w: %s (%d)", scripts.ErrHostOpcodeUnimplemented, scripts.CommandHandlerName(kind), kind)
 }

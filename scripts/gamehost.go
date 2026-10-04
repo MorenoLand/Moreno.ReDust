@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"redust/assets"
 )
 
 // ErrHostOpcodeUnimplemented reports an opcode the game host has not been
@@ -34,6 +36,22 @@ type GameHostEnv struct {
 	// Chain returns an actor's [actor script, cast script] frames
 	// (FUN_0040CB60).
 	Chain func(actor *ActorRecord) ([]ScriptFrame, error)
+	// Presenter shows conversations; PuppetFile reads a PUP's script table.
+	Presenter  PuppetPresenter
+	PuppetFile func(file string) (assets.PuppetFile, error)
+	// Program loads a script resource from a container.
+	Program func(file string, resource uint32) (*Program, error)
+	// Shop resolves an open shop's script (FUN_00421520).
+	Shop func(name string) (file string, resource uint32, ok bool)
+	// PropDegree is a prop's degree (propdeg).
+	PropDegree func(name string) (int16, bool)
+	// Ticks is the native time-unit clock delay and the fades wait on.
+	Ticks func() uint32
+	// PlayerHeading is DAT_00459A6A; Vector is FUN_00406B10/FUN_00406B40.
+	PlayerHeading func() int16
+	Vector        func(heading, length int16) (dx, dy int16)
+	// CurrentFlat is the open flat's name (FUN_004125C0).
+	CurrentFlat func() string
 	// Fallback handles opcodes this host does not; nil makes them gaps.
 	Fallback ScriptHost
 	// Log receives diagnostics when non-nil.
@@ -47,6 +65,12 @@ type GameHost struct {
 	Actors *ScriptActors
 	Loops  *LoopScheduler
 	Random *NativeRandom
+	// PuppetGrab and PuppetBase are DAT_004599AC and the puppetbase name.
+	PuppetGrab bool
+	PuppetBase string
+	task       *ScriptTask
+	puppet     *puppetSession
+	passWanted bool
 }
 
 func (h *GameHost) logf(format string, args ...any) {
@@ -307,6 +331,9 @@ func (h *GameHost) Command(call *ScriptCall) (int, uint16, error) {
 	case "sendtoactor":
 		return h.sendToActor(call)
 	}
+	if consumed, status, handled, err := h.puppetCommand(name, call); handled {
+		return consumed, status, err
+	}
 	if h.Env.Fallback != nil {
 		return h.Env.Fallback.Command(call)
 	}
@@ -324,8 +351,12 @@ func (h *GameHost) walkToStar(actor *ActorRecord, star string) (uint16, error) {
 	if h.Env.ResolveStar == nil {
 		return 0, fmt.Errorf("walktostar has no star resolver")
 	}
-	destination, ok := h.Env.ResolveStar(actor.Set, star)
-	if !ok {
+	// FUN_0041B960 accepts a literal "x,y,z" destination, after which the
+	// job's star is "custom"; otherwise the star is a named location.
+	destination, ok := parseCoordinateStar(star)
+	if ok {
+		star = "custom"
+	} else if destination, ok = h.Env.ResolveStar(actor.Set, star); !ok {
 		return 0x0a, nil
 	}
 	if h.Env.Heading == nil {
@@ -565,6 +596,9 @@ func (h *GameHost) Value(call *ScriptCall) (Record, int, uint16, error) {
 			return Record{}, 0, 0, fmt.Errorf("%s has no source", name)
 		}
 		return number(source(), consumed)
+	}
+	if value, consumed, status, handled, err := h.puppetValue(name, call); handled {
+		return value, consumed, status, err
 	}
 	if h.Env.Fallback != nil {
 		return h.Env.Fallback.Value(call)

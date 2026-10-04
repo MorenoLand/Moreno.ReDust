@@ -942,3 +942,78 @@ func (in *Interpreter) SetGlobalNumber(name string, value int32) error {
 	}
 	return nil
 }
+
+// SendParts reads a sendto-shaped call, `op(target, message(args))`, without
+// running the message: it evaluates the target and returns it with the
+// message's name and the records the whole call spans.
+func (c *ScriptCall) SendParts() (target ScriptValue, message string, consumed int, status uint16, err error) {
+	if c.Kind(c.Start+1) != opOpen {
+		return ScriptValue{}, "", 0, ScriptStatusMalformed, nil
+	}
+	record, used, status, err := c.Eval(c.Start + 2)
+	if err != nil || status != 0 {
+		return ScriptValue{}, "", 0, status, err
+	}
+	target, status, err = c.Interpreter.Value(record)
+	if err != nil || status != 0 {
+		return ScriptValue{}, "", 0, status, err
+	}
+	at := c.Start + 2 + used
+	if c.Kind(at) != opComma {
+		return ScriptValue{}, "", 0, ScriptStatusMissingComma, nil
+	}
+	name, status, err := identifierAt(*c.Program, at+1)
+	if err != nil || status != 0 {
+		return ScriptValue{}, "", 0, status, err
+	}
+	end, status, err := ParenthesizedBlockScan(c.Program.Records, c.Start+1)
+	if err != nil || status != 0 {
+		return ScriptValue{}, "", 0, status, err
+	}
+	return target, string(name[1:]), end - c.Start, 0, nil
+}
+
+// SetGlobalString declares a global if needed and stores a string in it.
+func (in *Interpreter) SetGlobalString(name, value string) error {
+	pascal := append([]byte{byte(len(name))}, name...)
+	id, status, err := in.Global.ResolveOrCreate(pascal, &Record{})
+	if err != nil {
+		return err
+	}
+	if status != 0 {
+		return fmt.Errorf("global %q cannot be declared: status %#x", name, status)
+	}
+	record, status, err := in.Record(ScriptValue{Kind: 3, Text: value})
+	if err != nil || status != 0 {
+		return fmt.Errorf("global %q string: status %#x %v", name, status, err)
+	}
+	var encoded ExpressionValue
+	binary.LittleEndian.PutUint16(encoded[:2], record.Kind)
+	binary.LittleEndian.PutUint32(encoded[2:6], record.Data)
+	status, err = in.Global.WriteValue(id, encoded, in.Strings)
+	if err != nil {
+		return err
+	}
+	if status != 0 {
+		return fmt.Errorf("global %q cannot be written: status %#x", name, status)
+	}
+	return nil
+}
+
+// GlobalValue reads a global's value; ok is false when it was never declared.
+func (in *Interpreter) GlobalValue(name string) (ScriptValue, bool, error) {
+	pascal := append([]byte{byte(len(name))}, name...)
+	id, status, err := in.Global.Lookup(pascal, &Record{})
+	if err != nil || status != 0 {
+		return ScriptValue{}, false, err
+	}
+	record, status, err := in.Global.ReadValue(id, in.Strings)
+	if err != nil || status != 0 {
+		return ScriptValue{}, false, err
+	}
+	value, status, err := in.Value(record)
+	if err != nil || status != 0 {
+		return ScriptValue{}, false, err
+	}
+	return value, true, nil
+}
