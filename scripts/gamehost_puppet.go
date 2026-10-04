@@ -30,6 +30,13 @@ type PuppetPresenter interface {
 	Show(layer string) error
 	// Cursor sets the pointer shape.
 	Cursor(name string) error
+	// GotoFlat switches the displayed flat ("avatar" is the inventory
+	// screen, "mainpanel" the world panel).
+	GotoFlat(name string) error
+	// PickInventory opens the inventory for choosing a hand item; Picked
+	// reports when the player has finished and left it.
+	PickInventory() error
+	Picked() bool
 }
 
 // puppetSession is the native open-puppet state: DAT_00459A92/94 and the
@@ -374,6 +381,29 @@ func (h *GameHost) puppetCommand(name string, call *ScriptCall) (consumed int, s
 			}
 		}
 		return consumed, 0, true, nil
+	case "gotoflat":
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return 0, status, true, err
+		}
+		if len(args) != 1 || args[0].Kind != 3 {
+			return 0, ScriptStatusWrongType, true, nil
+		}
+		if err := needPresenter(); err != nil {
+			return 0, 0, true, err
+		}
+		return consumed, 0, true, present.GotoFlat(args[0].Text)
+	case "setvisible", "puppetvisible":
+		// The layer switch happens through gotoflat/blacktoscreen; the flag
+		// itself has no separate effect in the port.
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return 0, status, true, err
+		}
+		if len(args) != 1 || args[0].Kind != 2 {
+			return 0, ScriptStatusWrongType, true, nil
+		}
+		return consumed, 0, true, nil
 	case "flushevents":
 		_, consumed, status, err := call.Args()
 		return consumed, status, true, err
@@ -593,4 +623,29 @@ func scanDecimal(text string) int32 {
 		return 0
 	}
 	return int32(value)
+}
+
+// PickInventoryBuiltin replaces INVEN.PRP's handleselect: the player chooses
+// from the inventory screen until they leave it, and the engine's hand item is
+// then published back into the script's globals.
+func (h *GameHost) PickInventoryBuiltin(call *ScriptCall) (int, uint16, error) {
+	_, consumed, status, err := call.Args()
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	if h.Env.Presenter == nil {
+		return 0, 0, fmt.Errorf("handleselect has no presenter")
+	}
+	if err := h.Env.Presenter.PickInventory(); err != nil {
+		return 0, 0, err
+	}
+	if err := h.wait(h.Env.Presenter.Picked); err != nil {
+		return 0, 0, err
+	}
+	if h.Env.Sync != nil {
+		if err := h.Env.Sync(); err != nil {
+			return 0, 0, err
+		}
+	}
+	return consumed, 0, nil
 }

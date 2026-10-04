@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // The general script interpreter. It translates the native call and statement
@@ -215,6 +216,10 @@ type Interpreter struct {
 	// EscapeInterrupt, when non-nil and true, makes each statement boundary
 	// check for the escape key (DAT_00459996 and FUN_0042EB50).
 	EscapeInterrupt func() bool
+	// Builtins replace named script code with native behavior. The inventory
+	// picker (INVEN.PRP handleselect) is one: its script polls the stage's
+	// buttons and props, which the port supplies through its own UI.
+	Builtins map[string]func(call *ScriptCall) (consumed int, status uint16, err error)
 	// ProgramCounter is the record index of the statement being executed, the
 	// value the native frame stores at +0x0C for diagnostics.
 	ProgramCounter int
@@ -768,6 +773,15 @@ func (in *Interpreter) execute(chain []ScriptFrame, frame int, locals *VariableT
 				return status, err
 			}
 			if kindAt(*script, pc+1) == opOpen {
+				if builtin, ok := in.Builtins[strings.ToLower(string(name[1:]))]; ok {
+					call := &ScriptCall{Interpreter: in, Chain: chain, FrameIndex: frame, Locals: locals, Program: script, Start: pc}
+					consumed, status, err := builtin(call)
+					if err != nil || status != 0 {
+						return status, err
+					}
+					advance = consumed
+					break
+				}
 				consumed, status, err := in.callCode(chain, frame, chain, frame, locals, script, pc, nil)
 				if err != nil || status != 0 {
 					return status, err

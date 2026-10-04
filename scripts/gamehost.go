@@ -56,6 +56,11 @@ type GameHostEnv struct {
 	Managed func(name string) bool
 	// CastScript resolves sendtocast's target by the cast's own name.
 	CastScript func(name string) (*Program, bool, error)
+	// Sync publishes the engine's globals to the interpreter, for blocking
+	// commands that resume after the player changed engine state.
+	Sync func() error
+	// Sound plays a UNILIB sound by name (voicesound, singlesound, ...).
+	Sound func(name string) error
 	// CastManaged reports whether any of a cast's actors run from their
 	// scripts; a cast with none keeps its hand-written behavior.
 	CastManaged func(name string) bool
@@ -77,6 +82,9 @@ type GameHost struct {
 	// PuppetGrab and PuppetBase are DAT_004599AC and the puppetbase name.
 	PuppetGrab bool
 	PuppetBase string
+	// Props is the prop table scripts read and write; the game keeps its own
+	// copies of owner and degree in step around script runs.
+	Props      *ScriptProps
 	task       *ScriptTask
 	puppet     *puppetSession
 	passWanted bool
@@ -366,6 +374,9 @@ func (h *GameHost) Command(call *ScriptCall) (int, uint16, error) {
 		return consumed, status, err
 	}
 	if consumed, status, handled, err := h.puppetCommand(name, call); handled {
+		return consumed, status, err
+	}
+	if consumed, status, handled, err := h.propCommand(name, call); handled {
 		return consumed, status, err
 	}
 	if h.Env.Fallback != nil {
@@ -661,6 +672,9 @@ func (h *GameHost) Value(call *ScriptCall) (Record, int, uint16, error) {
 	if value, consumed, status, handled, err := h.puppetValue(name, call); handled {
 		return value, consumed, status, err
 	}
+	if value, consumed, status, handled, err := h.propValue(name, call); handled {
+		return value, consumed, status, err
+	}
 	if h.Env.Fallback != nil {
 		return h.Env.Fallback.Value(call)
 	}
@@ -755,4 +769,17 @@ func (h *GameHost) OpenSet() {
 // engine-raised calls such as sendtocast("gang", initactors()).
 func (h *GameHost) Run(in *Interpreter, source string) (uint16, error) {
 	return in.RunSource(nil, source)
+}
+
+// AbortPuppet closes a conversation a script left open, as happens when a
+// script stops on an error between openpuppetfile and closepuppetfile.
+func (h *GameHost) AbortPuppet() error {
+	if h.puppet == nil {
+		return nil
+	}
+	h.puppet = nil
+	if h.Env.Presenter != nil {
+		return h.Env.Presenter.ClosePuppet()
+	}
+	return nil
 }

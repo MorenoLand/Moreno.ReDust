@@ -1053,7 +1053,7 @@ func run() error {
 		scriptPrograms[key] = &program
 		return &program, nil
 	}
-	scriptHost := &scripts.GameHost{Actors: scriptActors, Loops: &nativeLoops, Random: &nativeRandom, Env: scripts.GameHostEnv{
+	scriptHost := &scripts.GameHost{Actors: scriptActors, Props: scripts.NewScriptProps(), Loops: &nativeLoops, Random: &nativeRandom, Env: scripts.GameHostEnv{
 		CurrentSet: func() string { return activeSetName },
 		Managed:    func(name string) bool { return scriptManaged[strings.ToLower(name)] },
 		CastManaged: func(name string) bool {
@@ -1153,6 +1153,13 @@ func run() error {
 		{"isaophase", func() int32 { return int32(isaoPhase) }, func(v int32) { isaoPhase = int16(v) }},
 	}
 	publishScriptGlobals := func() error {
+		for name, owner := range inventoryOwners {
+			prop := scriptHost.Props.Get(name)
+			prop.Owner = owner
+		}
+		for name, degree := range inventoryDegrees {
+			scriptHost.Props.Get(name).Degree = degree
+		}
 		for _, shared := range sharedPhases {
 			if err := scriptInterpreter.SetGlobalNumber(shared.name, shared.get()); err != nil {
 				return err
@@ -1175,6 +1182,20 @@ func run() error {
 		return nil
 	}
 	collectScriptGlobals := func() error {
+		for _, name := range scriptHost.Props.Names() {
+			prop := scriptHost.Props.Get(name)
+			if previous, tracked := inventoryOwners[name]; tracked && previous != prop.Owner || !tracked && prop.Owner != "none" {
+				inventoryOwners[name] = prop.Owner
+			}
+			if previous, tracked := inventoryDegrees[name]; tracked && previous != prop.Degree || !tracked && prop.Degree != 0 {
+				inventoryDegrees[name] = prop.Degree
+			}
+		}
+		if value, declared, err := scriptInterpreter.GlobalValue("handitem"); err != nil {
+			return err
+		} else if declared && value.Kind == 3 {
+			handItem = value.Text
+		}
 		for _, shared := range sharedPhases {
 			if value, declared, err := scriptInterpreter.GlobalValue(shared.name); err != nil {
 				return err
@@ -4327,6 +4348,7 @@ func run() error {
 	var convBase render.IndexedFrame
 	var convDialogue *engine.PuppetDialogue
 	var convSkipped, convChoosing, convHasChoice bool
+	scriptInventorySeen, convDirty := false, false
 	var convChoices []scripts.PuppetChoice
 	var convChosen int32
 	convPressIndex := -1
@@ -4459,6 +4481,10 @@ func run() error {
 			return convChosen, true
 		},
 		show: func(layer string) error {
+			if layer == "stage" {
+				return nil
+			}
+			convDirty = true
 			if layer == "puppet" && convPuppet != nil {
 				frame, err := convPose()
 				if err != nil {
@@ -4469,7 +4495,36 @@ func run() error {
 			}
 			return refreshWorldScene()
 		},
-		cursor: func(name string) error { return nil },
+		cursor:   func(name string) error { return nil },
+		gotoFlat: func(name string) error { return nil },
+		pick: func() error {
+			scriptInventorySeen, convDirty = false, true
+			if currentScene != 2 {
+				return enterInventoryScene()
+			}
+			return nil
+		},
+		picked: func() bool {
+			if currentScene == 2 {
+				scriptInventorySeen = true
+				return false
+			}
+			if scriptInventorySeen {
+				scriptInventorySeen = false
+				return true
+			}
+			return false
+		},
+	}
+	scriptHost.Env.Sync = publishScriptGlobals
+	scriptInterpreter.Builtins = map[string]func(*scripts.ScriptCall) (int, uint16, error){
+		"handleselect": scriptHost.PickInventoryBuiltin,
+	}
+	scriptHost.Env.Sound = func(name string) error {
+		if soundBank == nil || audioContext == nil {
+			return nil
+		}
+		return soundBank.Play(audioContext, name, 1)
 	}
 	scriptHost.Env.PuppetFile = workspace.OpenPuppetFile
 	scriptHost.Env.Program = scriptProgram
@@ -6902,6 +6957,10 @@ func run() error {
 		displayChanged := false
 		drainMovieAudioTails()
 		if scriptTask != nil {
+			if convDirty {
+				convDirty = false
+				return currentFrame, true, nil
+			}
 			if convDialogue != nil && convDialogue.Active() {
 				frame, changed, err := convDialogue.Update(scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
 				if err != nil {
@@ -6927,6 +6986,16 @@ func run() error {
 				label := scriptTask.Label
 				scriptTask = nil
 				scriptHost.SetTask(nil)
+				if scriptHost.PuppetOpen() {
+					// A script stopped between openpuppetfile and closepuppetfile.
+					log.Printf("script-task %s left a puppet open; closing it", label)
+					if abortErr := scriptHost.AbortPuppet(); abortErr != nil {
+						return render.IndexedFrame{}, false, abortErr
+					}
+					if refreshErr := refreshWorldScene(); refreshErr != nil {
+						return render.IndexedFrame{}, false, refreshErr
+					}
+				}
 				if err != nil {
 					log.Printf("script-task %s: %v", label, err)
 				} else if *debug {
@@ -6934,7 +7003,9 @@ func run() error {
 				}
 				displayChanged = true
 			}
-			return currentFrame, displayChanged, nil
+			if scriptTask == nil || currentScene != 2 {
+				return currentFrame, displayChanged, nil
+			}
 		}
 		if hotelVoice != nil {
 			done, err := hotelVoice.Update(scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
@@ -7753,7 +7824,7 @@ func run() error {
 			log.Printf("movie=%s skip-key=%s", movieNames[movieIndex], keyName)
 		}
 	}, func(mouseEvent engine.MouseEvent) (render.IndexedFrame, bool, error) {
-		if scriptTask != nil {
+		if scriptTask != nil && currentScene != 2 {
 			if mouseEvent.Button != ebiten.MouseButtonLeft {
 				return currentFrame, false, nil
 			}
@@ -7932,7 +8003,7 @@ func run() error {
 				return currentFrame, true, nil
 			}
 		}
-		if marieInteractionStage == marieInteractionInventory && currentScene == 2 && mouseEvent.Button == ebiten.MouseButtonLeft {
+		if (marieInteractionStage == marieInteractionInventory || scriptTask != nil) && currentScene == 2 && mouseEvent.Button == ebiten.MouseButtonLeft {
 			if name, found := render.HitTestFlatProps(marieInventoryProjected, image.Pt(int(int16(point>>16)), int(int16(point)))); found {
 				handItem = name
 				if err := renderMarieInventory(); err != nil {
@@ -8275,7 +8346,7 @@ func run() error {
 		}
 		return applyFlatTarget(action.FlatTarget, action.VisualEffect, action.Duration, handler.ScriptResource)
 	}, func(state engine.MouseState) (render.IndexedFrame, bool, error) {
-		if scriptTask != nil {
+		if scriptTask != nil && currentScene != 2 {
 			if !convChoosing || convPressIndex < 0 || !state.LeftReleased {
 				return currentFrame, false, nil
 			}
@@ -8703,6 +8774,9 @@ type scriptPresenter struct {
 	chosen   func() (int32, bool)
 	show     func(layer string) error
 	cursor   func(name string) error
+	gotoFlat func(name string) error
+	pick     func() error
+	picked   func() bool
 }
 
 func (p *scriptPresenter) OpenPuppet(file string) error              { return p.open(file) }
@@ -8714,6 +8788,9 @@ func (p *scriptPresenter) Choose(choices []scripts.PuppetChoice) error { return 
 func (p *scriptPresenter) Chosen() (int32, bool)                      { return p.chosen() }
 func (p *scriptPresenter) Show(layer string) error                    { return p.show(layer) }
 func (p *scriptPresenter) Cursor(name string) error                   { return p.cursor(name) }
+func (p *scriptPresenter) GotoFlat(name string) error                 { return p.gotoFlat(name) }
+func (p *scriptPresenter) PickInventory() error                       { return p.pick() }
+func (p *scriptPresenter) Picked() bool                               { return p.picked() }
 
 // mainScriptFallback handles the flat messages the port routes to existing
 // code until flats run through the interpreter: mainpanel's tiphat.
