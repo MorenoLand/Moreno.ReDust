@@ -50,6 +50,15 @@ type GameHostEnv struct {
 	// PlayerHeading is DAT_00459A6A; Vector is FUN_00406B10/FUN_00406B40.
 	PlayerHeading func() int16
 	Vector        func(heading, length int16) (dx, dy int16)
+	// Managed reports whether an actor runs from its shipped scripts. Actors
+	// that do not still have hand-written behavior in the game, so messages and
+	// jobs addressed to them are accepted and ignored.
+	Managed func(name string) bool
+	// CastScript resolves sendtocast's target by the cast's own name.
+	CastScript func(name string) (*Program, bool, error)
+	// CastManaged reports whether any of a cast's actors run from their
+	// scripts; a cast with none keeps its hand-written behavior.
+	CastManaged func(name string) bool
 	// CurrentFlat is the open flat's name (FUN_004125C0).
 	CurrentFlat func() string
 	// Fallback handles opcodes this host does not; nil makes them gaps.
@@ -71,6 +80,10 @@ type GameHost struct {
 	task       *ScriptTask
 	puppet     *puppetSession
 	passWanted bool
+}
+
+func (h *GameHost) managed(name string) bool {
+	return h.Env.Managed == nil || h.Env.Managed(name)
 }
 
 func (h *GameHost) logf(format string, args ...any) {
@@ -271,6 +284,9 @@ func (h *GameHost) Command(call *ScriptCall) (int, uint16, error) {
 		if nativeName(args[1].Text) != 0 || nativeName(args[2].Text) != 0 {
 			return 0, 0x1a, nil
 		}
+		if kind == LoopKindActor && !h.managed(args[1].Text) {
+			return consumed, 0, nil
+		}
 		if args[3].Kind != 4 {
 			return 0, ScriptStatusWrongType, nil
 		}
@@ -289,6 +305,9 @@ func (h *GameHost) Command(call *ScriptCall) (int, uint16, error) {
 		kind, ok := LoopKindByName(args[0].Text)
 		if !ok {
 			return 0, 0x0a, nil
+		}
+		if kind == LoopKindActor && !strings.EqualFold(args[1].Text, "all") && !h.managed(args[1].Text) {
+			return consumed, 0, nil
 		}
 		h.Loops.Stop(kind, args[1].Text)
 		return consumed, 0, nil
@@ -330,6 +349,21 @@ func (h *GameHost) Command(call *ScriptCall) (int, uint16, error) {
 		return consumed, 0, nil
 	case "sendtoactor":
 		return h.sendToActor(call)
+	case "sendtocast":
+		if target, _, skipped, status, err := call.SendParts(); err == nil && status == 0 && h.Env.CastManaged != nil && !h.Env.CastManaged(target.Text) {
+			return skipped, 0, nil
+		}
+		consumed, status, err := h.sendToScript(call, "Cast Script: ", func(name string) (*Program, string, uint16, error) {
+			if h.Env.CastScript == nil {
+				return nil, "", 0, fmt.Errorf("sendtocast has no cast table")
+			}
+			program, ok, err := h.Env.CastScript(name)
+			if err != nil || !ok {
+				return nil, "", 0x0a, err
+			}
+			return program, strings.ToLower(name), 0, nil
+		}, nil)
+		return consumed, status, err
 	}
 	if consumed, status, handled, err := h.puppetCommand(name, call); handled {
 		return consumed, status, err
@@ -394,6 +428,14 @@ func (h *GameHost) sendToActor(call *ScriptCall) (int, uint16, error) {
 	actor, status := h.Actors.Lookup(value.Text)
 	if status != 0 {
 		return 0, status, nil
+	}
+	if !h.managed(actor.Name) {
+		// Hand-written actors keep their own behavior; skip the message.
+		end, status, err := ParenthesizedBlockScan(call.Program.Records, call.Start+1)
+		if err != nil || status != 0 {
+			return 0, status, err
+		}
+		return end - call.Start, 0, nil
 	}
 	if h.Env.Chain == nil {
 		return 0, 0, fmt.Errorf("sendtoactor has no chain provider")
@@ -487,6 +529,25 @@ func (h *GameHost) Value(call *ScriptCall) (Record, int, uint16, error) {
 			}
 			return number(32000, consumed)
 		}
+	case "countactors":
+		_, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		return number(int32(h.Actors.Count()), consumed)
+	case "indextoactor":
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		if len(args) != 1 || args[0].Kind != 4 {
+			return Record{}, 0, ScriptStatusWrongType, nil
+		}
+		actor, ok := h.Actors.At(int(args[0].Int))
+		if !ok {
+			return Record{}, 0, 0x0a, nil
+		}
+		return text(actor.Name, consumed)
 	case "iswalk":
 		// FUN_004162B0 -> FUN_0040F840: true while any walk or turn slot
 		// carries the name; the name is not resolved, so an unknown one is
@@ -688,4 +749,10 @@ func (h *GameHost) OpenSet() {
 			h.placeAtStar(actor)
 		}
 	}
+}
+
+// Run compiles and runs a source statement as the System frame does, for
+// engine-raised calls such as sendtocast("gang", initactors()).
+func (h *GameHost) Run(in *Interpreter, source string) (uint16, error) {
+	return in.RunSource(nil, source)
 }

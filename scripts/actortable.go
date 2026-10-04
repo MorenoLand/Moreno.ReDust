@@ -77,6 +77,7 @@ type ActorJob struct {
 // FUN_0040D730 resolves them.
 type ScriptActors struct {
 	actors map[string]*ActorRecord
+	order  []string
 }
 
 func NewScriptActors() *ScriptActors {
@@ -85,7 +86,22 @@ func NewScriptActors() *ScriptActors {
 
 // Add registers an actor. A later cast with the same name replaces it.
 func (t *ScriptActors) Add(actor *ActorRecord) {
-	t.actors[strings.ToLower(actor.Name)] = actor
+	key := strings.ToLower(actor.Name)
+	if _, exists := t.actors[key]; !exists {
+		t.order = append(t.order, key)
+	}
+	t.actors[key] = actor
+}
+
+// Count and At are countactors and indextoactor's table (FUN_0040D030,
+// FUN_0040D090): actors in load order, indexed from 1.
+func (t *ScriptActors) Count() int { return len(t.order) }
+
+func (t *ScriptActors) At(index int) (*ActorRecord, bool) {
+	if index < 1 || index > len(t.order) {
+		return nil, false
+	}
+	return t.actors[t.order[index-1]], true
 }
 
 // Lookup is the resolver FUN_0040D730; a miss is status 0x0A.

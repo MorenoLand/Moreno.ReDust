@@ -45,6 +45,8 @@ type GameProgress struct {
 
 	// ScriptActors holds the interpreter-managed actors' records.
 	ScriptActors map[string]scripts.ActorRecordState `json:"scriptActors,omitempty"`
+	// ScriptGlobals holds the interpreter's global variables.
+	ScriptGlobals []scripts.GlobalVariable `json:"scriptGlobals,omitempty"`
 }
 
 func GameProgressPath(directory, gameName string) (string, error) {

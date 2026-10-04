@@ -1017,3 +1017,61 @@ func (in *Interpreter) GlobalValue(name string) (ScriptValue, bool, error) {
 	}
 	return value, true, nil
 }
+
+// GlobalVariable is the persisted form of one script global.
+type GlobalVariable struct {
+	Name string `json:"name"`
+	Kind uint16 `json:"kind"`
+	Int  int32  `json:"int,omitempty"`
+	Text string `json:"text,omitempty"`
+}
+
+// SnapshotGlobals returns every declared global, for saves.
+func (in *Interpreter) SnapshotGlobals() ([]GlobalVariable, error) {
+	var out []GlobalVariable
+	for id := range in.Global.slots {
+		slot := in.Global.slots[id]
+		name := slot.pascalName()
+		variable := GlobalVariable{Name: string(name[1:]), Kind: slot.ValueType()}
+		record, status, err := in.Global.ReadValue(uint16(id), in.Strings)
+		if err != nil || status != 0 {
+			return nil, fmt.Errorf("read global %q: status %#x %v", variable.Name, status, err)
+		}
+		value, status, err := in.Value(record)
+		if err != nil || status != 0 {
+			return nil, fmt.Errorf("decode global %q: status %#x %v", variable.Name, status, err)
+		}
+		variable.Int, variable.Text = value.Int, value.Text
+		out = append(out, variable)
+	}
+	return out, nil
+}
+
+// RestoreGlobals replaces the global table with saved values.
+func (in *Interpreter) RestoreGlobals(variables []GlobalVariable) error {
+	in.Global = NewVariableTable()
+	for _, variable := range variables {
+		switch variable.Kind {
+		case 3:
+			if err := in.SetGlobalString(variable.Name, variable.Text); err != nil {
+				return err
+			}
+		case 2:
+			if err := in.SetGlobalNumber(variable.Name, variable.Int); err != nil {
+				return err
+			}
+			id, _, _ := in.Global.Lookup(append([]byte{byte(len(variable.Name))}, variable.Name...), &Record{})
+			var encoded ExpressionValue
+			binary.LittleEndian.PutUint16(encoded[:2], 2)
+			binary.LittleEndian.PutUint32(encoded[2:6], uint32(variable.Int))
+			if status, err := in.Global.WriteValue(id, encoded, in.Strings); err != nil || status != 0 {
+				return fmt.Errorf("restore global %q: status %#x %v", variable.Name, status, err)
+			}
+		default:
+			if err := in.SetGlobalNumber(variable.Name, variable.Int); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}

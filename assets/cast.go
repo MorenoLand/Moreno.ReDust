@@ -48,6 +48,9 @@ type Cast struct {
 	// FUN_0040C160 stores in the cast table and sendtoactor runs after the
 	// actor's own script.
 	ScriptResource uint32
+	// ScriptName is the cast's own name, resource 0 +0x928, which sendtocast
+	// resolves (FUN_0040D870) and indextoactor/initactors use for "gang".
+	ScriptName string
 }
 
 func (w Workspace) OpenCast(name string) (Cast, error) {
@@ -115,7 +118,11 @@ func (w Workspace) OpenCast(name string) (Cast, error) {
 	if len(metadata) < 0x928 {
 		return Cast{}, fmt.Errorf("cast metadata is shorter than its script resource field")
 	}
-	return Cast{Name: name, Actors: actors, ScriptResource: binary.LittleEndian.Uint32(metadata[0x924:0x928])}, nil
+	scriptName := ""
+	if len(metadata) > 0x928 && int(metadata[0x928]) < 16 && 0x929+int(metadata[0x928]) <= len(metadata) {
+		scriptName = string(metadata[0x929 : 0x929+int(metadata[0x928])])
+	}
+	return Cast{Name: name, Actors: actors, ScriptResource: binary.LittleEndian.Uint32(metadata[0x924:0x928]), ScriptName: scriptName}, nil
 }
 
 func (a CastActor) PoseResource(name string) (uint32, bool) {
