@@ -469,6 +469,43 @@ func (h *GameHost) puppetCommand(name string, call *ScriptCall) (consumed int, s
 			return 0, ScriptStatusMalformed, true, nil
 		}
 		return message + used + 1 - call.Start, 0, true, nil
+	case "puppetparam":
+		// FUN_00408DD0: puppetparam(index 1..8, value) stores a 16-bit
+		// parameter; anything else is status 0x0E.
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return 0, status, true, err
+		}
+		if len(args) != 2 || args[0].Kind != 4 || args[1].Kind != 4 {
+			return 0, ScriptStatusWrongType, true, nil
+		}
+		if args[0].Int < 1 || args[0].Int > 8 {
+			return 0, ScriptStatusWrongType, true, nil
+		}
+		h.PuppetParams[args[0].Int-1] = int16(args[1].Int)
+		return consumed, 0, true, nil
+	case "sendtoboot":
+		// sendtoboot(message(args)) runs against the BOOTFILE script.
+		if call.Kind(call.Start+1) != opOpen {
+			return 0, ScriptStatusMalformed, true, nil
+		}
+		if h.Env.BootScript == nil {
+			return 0, 0, true, fmt.Errorf("%w: sendtoboot has no boot script", ErrHostOpcodeUnimplemented)
+		}
+		program, err := h.Env.BootScript()
+		if err != nil {
+			return 0, 0, true, err
+		}
+		message := call.Start + 2
+		chain := []ScriptFrame{{Program: program, Me: "boot", Target: "boot", Label: "Boot Message: ", Last: true}}
+		used, status, err := call.Interpreter.callCode(chain, 0, call.Chain, call.FrameIndex, call.Locals, call.Program, message, nil)
+		if err != nil || status != 0 {
+			return 0, status, true, err
+		}
+		if call.Kind(message+used) != opClose {
+			return 0, ScriptStatusMalformed, true, nil
+		}
+		return message + used + 1 - call.Start, 0, true, nil
 	case "flushevents":
 		_, consumed, status, err := call.Args()
 		return consumed, status, true, err
@@ -618,6 +655,15 @@ func (h *GameHost) puppetValue(name string, call *ScriptCall) (Record, int, uint
 			value = dy
 		}
 		return Record{Kind: 4, Data: uint32(int32(value))}, consumed, 0, true, nil
+	case "puppetparam":
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, true, err
+		}
+		if len(args) != 1 || args[0].Kind != 4 || args[0].Int < 1 || args[0].Int > 8 {
+			return Record{}, 0, ScriptStatusWrongType, true, nil
+		}
+		return Record{Kind: 4, Data: uint32(int32(h.PuppetParams[args[0].Int-1]))}, consumed, 0, true, nil
 	case "currentflat":
 		_, consumed, status, err := call.Args()
 		if err != nil || status != 0 {
@@ -627,6 +673,50 @@ func (h *GameHost) puppetValue(name string, call *ScriptCall) (Record, int, uint
 			return Record{}, 0, 0, true, fmt.Errorf("currentflat has no flat source")
 		}
 		record, status, err := call.Interpreter.Record(ScriptValue{Kind: 3, Text: h.Env.CurrentFlat()})
+		return record, consumed, status, true, err
+	case "sendtostagefx":
+		// sendtostagefx(message(args)): the stage message's return value.
+		if call.Kind(call.Start+1) != opOpen {
+			return Record{}, 0, ScriptStatusMalformed, true, nil
+		}
+		if h.Env.StageScript == nil {
+			return Record{}, 0, 0, true, fmt.Errorf("%w: sendtostagefx has no stage script", ErrHostOpcodeUnimplemented)
+		}
+		program, err := h.Env.StageScript("stage")
+		if err != nil {
+			return Record{}, 0, 0, true, err
+		}
+		message := call.Start + 2
+		chain := []ScriptFrame{{Program: program, Me: "stage", Target: "stage", Label: "Stage Message: ", Last: true}}
+		var result Record
+		used, status, err := call.Interpreter.callCode(chain, 0, call.Chain, call.FrameIndex, call.Locals, call.Program, message, &result)
+		if err != nil || status != 0 {
+			return Record{}, 0, status, true, err
+		}
+		if call.Kind(message+used) != opClose {
+			return Record{}, 0, ScriptStatusMalformed, true, nil
+		}
+		return result, message + used + 1 - call.Start, 0, true, nil
+	case "currenttheme":
+		// FUN_0040F130: currenttheme(2) is the playing theme's name, "None"
+		// when nothing plays; other selectors are not implemented.
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, true, err
+		}
+		if len(args) != 1 || args[0].Kind != 4 {
+			return Record{}, 0, ScriptStatusWrongType, true, nil
+		}
+		if args[0].Int != 2 {
+			return Record{}, 0, 0, true, fmt.Errorf("%w: currenttheme(%d)", ErrHostOpcodeUnimplemented, args[0].Int)
+		}
+		name := "None"
+		if h.Env.Theme != nil {
+			if playing := h.Env.Theme(); playing != "" {
+				name = playing
+			}
+		}
+		record, status, err := call.Interpreter.Record(ScriptValue{Kind: 3, Text: name})
 		return record, consumed, status, true, err
 	case "numtostring":
 		// FUN_004164A0 -> FUN_0042E7D0: signed decimal.

@@ -4112,6 +4112,15 @@ func run() error {
 	scriptHost.Env.StageScript = func(string) (*scripts.Program, error) {
 		return scriptProgram("DATA/NEW.FLT", 1)
 	}
+	scriptHost.Env.Theme = func() string {
+		if themePlayer == nil {
+			return ""
+		}
+		return currentThemeName
+	}
+	scriptHost.Env.BootScript = func() (*scripts.Program, error) {
+		return scriptProgram("BootFile", 1)
+	}
 	scriptHost.Env.AdvanceDay = func() error {
 		if scriptAdvanceDay == nil {
 			return fmt.Errorf("day advance is not ready")
@@ -4173,6 +4182,12 @@ func run() error {
 	}
 	scriptHost.Env.Fallback = &mainScriptFallback{tiphat: func() error {
 		return startAvatarTiphat(nil)
+	}, death: func() error {
+		cause, _, err := scriptInterpreter.GlobalValue("playerdeath")
+		if err != nil {
+			return err
+		}
+		return finishPlayerDeath(cause.Text)
 	}}
 	// startScriptTask runs an event that may block (a conversation) as a
 	// task the update loop resumes.
@@ -8185,6 +8200,7 @@ func (p *scriptPresenter) Picked() bool                                { return 
 // code until flats run through the interpreter: mainpanel's tiphat.
 type mainScriptFallback struct {
 	tiphat func() error
+	death  func() error
 }
 
 func (f *mainScriptFallback) Command(call *scripts.ScriptCall) (int, uint16, error) {
@@ -8196,6 +8212,9 @@ func (f *mainScriptFallback) Command(call *scripts.ScriptCall) (int, uint16, err
 		}
 		if strings.EqualFold(target.Text, "mainpanel") && strings.EqualFold(message, "tiphat") {
 			return consumed, 0, f.tiphat()
+		}
+		if strings.EqualFold(target.Text, "death") && strings.EqualFold(message, "death") {
+			return consumed, 0, f.death()
 		}
 		return 0, 0, fmt.Errorf("%w: sendtoflat(%q, %s())", scripts.ErrHostOpcodeUnimplemented, target.Text, message)
 	}

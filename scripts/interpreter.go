@@ -225,6 +225,10 @@ type Interpreter struct {
 	ProgramCounter int
 	forStack       []forEntry
 	whileStack     []int
+	runDepth       int
+	// LastProgram and ProgramCounter locate the statement last executed, for
+	// diagnostics.
+	LastProgram *Program
 }
 
 // NewInterpreter builds an interpreter with fresh global state.
@@ -530,7 +534,7 @@ func (in *Interpreter) execute(chain []ScriptFrame, frame int, locals *VariableT
 		if pc < 0 || pc >= len(records) {
 			return 0, fmt.Errorf("statement index %d is outside the script", pc)
 		}
-		in.ProgramCounter = pc
+		in.ProgramCounter, in.LastProgram = pc, script
 		kind := records[pc].Kind
 		advance := 0
 		switch kind {
@@ -919,6 +923,16 @@ func (in *Interpreter) beginFor(chain []ScriptFrame, frame int, locals *Variable
 // does (FUN_0040CA60): the text must be a complete statement such as
 // `sendtoactor("jones", endwalk())` or a bare call `idle()` against chain.
 func (in *Interpreter) RunSource(chain []ScriptFrame, source string) (uint16, error) {
+	// A top-level run starts from empty expression and string state, as each
+	// native message dispatch does; a nested run (a command that sends a
+	// message) shares its caller's.
+	if in.runDepth == 0 {
+		in.Expressions.Top = 0
+		in.Strings.Reset()
+		in.forStack, in.whileStack = in.forStack[:0], in.whileStack[:0]
+	}
+	in.runDepth++
+	defer func() { in.runDepth-- }()
 	program, err := CompileText([]byte(source))
 	if err != nil {
 		return 0, err
@@ -1095,4 +1109,40 @@ func (in *Interpreter) RestoreGlobals(variables []GlobalVariable) error {
 		}
 	}
 	return nil
+}
+
+// Site renders the statement last executed, with its enclosing code block name.
+func (in *Interpreter) Site() string {
+	program := in.LastProgram
+	if program == nil || in.ProgramCounter < 0 || in.ProgramCounter >= len(program.Records) {
+		return "?"
+	}
+	block := "?"
+	for i := in.ProgramCounter; i >= 0; i-- {
+		if program.Records[i].Kind == opCode && i+1 < len(program.Records) {
+			if name, err := program.IdentifierPascal(i + 1); err == nil {
+				block = string(name[1:])
+			}
+			break
+		}
+	}
+	end := in.ProgramCounter
+	for end < len(program.Records) && program.Records[end].Kind != opLine && program.Records[end].Kind != 0 {
+		end++
+	}
+	statement := FormatProgram(Program{Records: append(append([]Record(nil), program.Records[in.ProgramCounter:end]...), Record{}), StringPool: program.StringPool})
+	_ = statement
+	var parts []string
+	for i := in.ProgramCounter; i < end; i++ {
+		one := FormatProgram(Program{Records: []Record{program.Records[i], {}}, StringPool: nil})
+		if program.Records[i].Kind == 3 || program.Records[i].Kind == 5 {
+			if text, err := program.LiteralPascal(i); err == nil {
+				one = "\"" + string(text[1:]) + "\""
+			} else if id, err := program.IdentifierPascal(i); err == nil {
+				one = string(id[1:])
+			}
+		}
+		parts = append(parts, one)
+	}
+	return block + ": " + strings.Join(parts, " ")
 }

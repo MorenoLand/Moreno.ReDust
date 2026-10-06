@@ -62,8 +62,11 @@ type GameHostEnv struct {
 	// fades, transitions) a blocking command should wait out.
 	OpenSetFile func(name string) error
 	StageScript func(name string) (*Program, error)
-	AdvanceDay  func() error
-	Busy        func() bool
+	BootScript  func() (*Program, error)
+	// Theme is the playing theme's name, "" when none.
+	Theme      func() string
+	AdvanceDay func() error
+	Busy       func() bool
 	// View is the player's scene name and facing ("north".."west");
 	// SetView moves the player to a scene and facing (currentscene,
 	// currentdir).
@@ -94,7 +97,9 @@ type GameHost struct {
 	Random *NativeRandom
 	// PuppetGrab and PuppetBase are DAT_004599AC and the puppetbase name.
 	PuppetGrab bool
-	PuppetBase string
+	// PuppetParams are puppetparam's eight 16-bit slots (DAT_0045999C..AA).
+	PuppetParams [8]int16
+	PuppetBase   string
 	// Props is the prop table scripts read and write; the game keeps its own
 	// copies of owner and degree in step around script runs.
 	Props      *ScriptProps
