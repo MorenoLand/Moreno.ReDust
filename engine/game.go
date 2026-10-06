@@ -226,7 +226,11 @@ func RunSilent(frame render.IndexedFrame, onUpdate func() (render.IndexedFrame, 
 		}
 		return nil
 	}
+	trace := os.Getenv("REDUST_SILENT_TRACE") != ""
 	for index, action := range script.Actions {
+		if trace {
+			fmt.Fprintf(os.Stderr, "silent-trace %s action=%d type=%s\n", time.Now().Format("15:04:05.000"), index+1, action.Type)
+		}
 		if action.X != nil {
 			point = uint32(uint16(*action.X))<<16 | uint32(uint16(*action.Y))
 		}

@@ -556,13 +556,31 @@ func (h *GameHost) puppetValue(name string, call *ScriptCall) (Record, int, uint
 		if err := h.Env.Presenter.Choose(choices); err != nil {
 			return Record{}, 0, 0, true, err
 		}
-		var event int32
+		// FUN_00409F90: a non-negative argument is a timeout in ticks, after
+		// which the event is -2; a negative argument waits indefinitely.
+		event := int32(0)
+		timeout := args[0].Int
+		deadline := uint32(0)
+		if timeout >= 0 && h.Env.Ticks != nil {
+			deadline = h.Env.Ticks() + uint32(timeout)
+		}
 		if err := h.wait(func() bool {
-			chosen, ok := h.Env.Presenter.Chosen()
-			event = chosen
-			return ok
+			if chosen, ok := h.Env.Presenter.Chosen(); ok {
+				event = chosen
+				return true
+			}
+			if timeout >= 0 && h.Env.Ticks != nil && int32(h.Env.Ticks()-deadline) > 0 {
+				event = -2
+				return true
+			}
+			return false
 		}); err != nil {
 			return Record{}, 0, 0, true, err
+		}
+		if event == -2 {
+			if err := h.Env.Presenter.Choose(nil); err != nil {
+				return Record{}, 0, 0, true, err
+			}
 		}
 		return Record{Kind: 4, Data: uint32(event)}, consumed, 0, true, nil
 	case "sendtopuppetfx", "sendtoshopfx":
