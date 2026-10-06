@@ -56,6 +56,19 @@ type GameHostEnv struct {
 	Managed func(name string) bool
 	// CastScript resolves sendtocast's target by the cast's own name.
 	CastScript func(name string) (*Program, bool, error)
+	// OpenSetFile opens a set by file name ("hotlower.set", "nite.set") at its
+	// start view; StageScript returns the script a stage message runs against;
+	// AdvanceDay runs the day advance and Busy reports engine work (movies,
+	// fades, transitions) a blocking command should wait out.
+	OpenSetFile func(name string) error
+	StageScript func(name string) (*Program, error)
+	AdvanceDay  func() error
+	Busy        func() bool
+	// View is the player's scene name and facing ("north".."west");
+	// SetView moves the player to a scene and facing (currentscene,
+	// currentdir).
+	View    func() (scene, direction string)
+	SetView func(scene, direction string) error
 	// Sync publishes the engine's globals to the interpreter, for blocking
 	// commands that resume after the player changed engine state.
 	Sync func() error
@@ -379,6 +392,9 @@ func (h *GameHost) Command(call *ScriptCall) (int, uint16, error) {
 	if consumed, status, handled, err := h.propCommand(name, call); handled {
 		return consumed, status, err
 	}
+	if consumed, status, handled, err := h.worldCommand(name, call); handled {
+		return consumed, status, err
+	}
 	if h.Env.Fallback != nil {
 		return h.Env.Fallback.Command(call)
 	}
@@ -673,6 +689,9 @@ func (h *GameHost) Value(call *ScriptCall) (Record, int, uint16, error) {
 		return value, consumed, status, err
 	}
 	if value, consumed, status, handled, err := h.propValue(name, call); handled {
+		return value, consumed, status, err
+	}
+	if value, consumed, status, handled, err := h.worldValue(name, call); handled {
 		return value, consumed, status, err
 	}
 	if h.Env.Fallback != nil {

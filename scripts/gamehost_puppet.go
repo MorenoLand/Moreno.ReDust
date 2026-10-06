@@ -30,6 +30,10 @@ type PuppetPresenter interface {
 	Show(layer string) error
 	// Cursor sets the pointer shape.
 	Cursor(name string) error
+	// PlayMovie starts a movie and MovieDone reports when it has finished
+	// and the engine is idle again.
+	PlayMovie(name string) error
+	MovieDone() bool
 	// GotoFlat switches the displayed flat ("avatar" is the inventory
 	// screen, "mainpanel" the world panel).
 	GotoFlat(name string) error
@@ -404,6 +408,67 @@ func (h *GameHost) puppetCommand(name string, call *ScriptCall) (consumed int, s
 			return 0, ScriptStatusWrongType, true, nil
 		}
 		return consumed, 0, true, nil
+	case "opensetfile":
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return 0, status, true, err
+		}
+		if len(args) != 1 || args[0].Kind != 3 {
+			return 0, ScriptStatusWrongType, true, nil
+		}
+		if h.Env.OpenSetFile == nil {
+			return 0, 0, true, fmt.Errorf("%w: opensetfile has no set loader", ErrHostOpcodeUnimplemented)
+		}
+		return consumed, 0, true, h.Env.OpenSetFile(args[0].Text)
+	case "closesetfile", "blackscreen", "clut":
+		// The open replaces the previous set; a black screen and a clut name
+		// only matter for the fade ramps the port does not animate yet.
+		_, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return 0, status, true, err
+		}
+		if name == "blackscreen" && present != nil {
+			return consumed, 0, true, present.Show("black")
+		}
+		return consumed, 0, true, nil
+	case "playmovie":
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return 0, status, true, err
+		}
+		if len(args) < 1 || args[0].Kind != 3 {
+			return 0, ScriptStatusWrongType, true, nil
+		}
+		if err := needPresenter(); err != nil {
+			return 0, 0, true, err
+		}
+		if err := present.PlayMovie(args[0].Text); err != nil {
+			return 0, 0, true, err
+		}
+		return consumed, 0, true, h.wait(present.MovieDone)
+	case "sendtostage":
+		// sendtostage(message(args)): one argument, the message, run against
+		// the open stage's script (FUN_00413210).
+		if call.Kind(call.Start+1) != opOpen {
+			return 0, ScriptStatusMalformed, true, nil
+		}
+		if h.Env.StageScript == nil {
+			return 0, 0, true, fmt.Errorf("%w: sendtostage has no stage script", ErrHostOpcodeUnimplemented)
+		}
+		program, err := h.Env.StageScript("stage")
+		if err != nil {
+			return 0, 0, true, err
+		}
+		message := call.Start + 2
+		chain := []ScriptFrame{{Program: program, Me: "stage", Target: "stage", Label: "Stage Message: ", Last: true}}
+		used, status, err := call.Interpreter.callCode(chain, 0, call.Chain, call.FrameIndex, call.Locals, call.Program, message, nil)
+		if err != nil || status != 0 {
+			return 0, status, true, err
+		}
+		if call.Kind(message+used) != opClose {
+			return 0, ScriptStatusMalformed, true, nil
+		}
+		return message + used + 1 - call.Start, 0, true, nil
 	case "flushevents":
 		_, consumed, status, err := call.Args()
 		return consumed, status, true, err
@@ -644,6 +709,28 @@ func (h *GameHost) PickInventoryBuiltin(call *ScriptCall) (int, uint16, error) {
 	}
 	if h.Env.Sync != nil {
 		if err := h.Env.Sync(); err != nil {
+			return 0, 0, err
+		}
+	}
+	return consumed, 0, nil
+}
+
+// AdvanceDayBuiltin replaces NEW.FLT's advanceday with the port's day
+// advance, which already carries the native routes, and waits for the movies
+// and fades it starts.
+func (h *GameHost) AdvanceDayBuiltin(call *ScriptCall) (int, uint16, error) {
+	_, consumed, status, err := call.Args()
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	if h.Env.AdvanceDay == nil {
+		return 0, 0, fmt.Errorf("%w: advanceday has no day advance", ErrHostOpcodeUnimplemented)
+	}
+	if err := h.Env.AdvanceDay(); err != nil {
+		return 0, 0, err
+	}
+	if h.Env.Busy != nil {
+		if err := h.wait(func() bool { return !h.Env.Busy() }); err != nil {
 			return 0, 0, err
 		}
 	}

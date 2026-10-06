@@ -1067,6 +1067,8 @@ func run() error {
 		},
 	}}
 	scriptInterpreter := scripts.NewInterpreter(scriptHost)
+	scriptInterpreter.Builtins = map[string]func(*scripts.ScriptCall) (int, uint16, error){}
+	var scriptBlackFrame render.IndexedFrame
 	// deliverScriptEvent raises an event the native way. A non-zero status is
 	// what the native engine reports in its error dialog and then continues
 	// past; an opcode the host lacks is an evidence gap. Both are logged and
@@ -3908,6 +3910,11 @@ func run() error {
 	// A script conversation: the open puppet, its base, the line playing and
 	// the choice panel, driven by the GameHost through scriptPresenter.
 	var scriptTask *scripts.ScriptTask
+	// Set once the movie, transition and day-advance machinery below exists.
+	var scriptEngineBusy func() bool
+	var scriptPlayMovie func(name string) error
+	var scriptAdvanceDay func() error
+	scriptMovieFinished := false
 	var convPuppet *render.Puppet
 	var convTable assets.PuppetSpeechTable
 	var convName string
@@ -4050,6 +4057,11 @@ func run() error {
 			if layer == "stage" {
 				return nil
 			}
+			if layer == "black" {
+				convDirty = true
+				currentFrame, stageFrame = scriptBlackFrame, scriptBlackFrame
+				return nil
+			}
 			convDirty = true
 			if layer == "puppet" && convPuppet != nil {
 				frame, err := convPose()
@@ -4063,6 +4075,11 @@ func run() error {
 		},
 		cursor:   func(name string) error { return nil },
 		gotoFlat: func(name string) error { return nil },
+		play: func(name string) error {
+			scriptMovieFinished = false
+			return scriptPlayMovie(name)
+		},
+		movie: func() bool { return scriptMovieFinished && !scriptEngineBusy() },
 		pick: func() error {
 			scriptInventorySeen, convDirty = false, true
 			if currentScene != 2 {
@@ -4083,9 +4100,42 @@ func run() error {
 		},
 	}
 	scriptHost.Env.Sync = publishScriptGlobals
-	scriptInterpreter.Builtins = map[string]func(*scripts.ScriptCall) (int, uint16, error){
-		"handleselect": scriptHost.PickInventoryBuiltin,
+	scriptHost.Env.Busy = func() bool { return scriptEngineBusy != nil && scriptEngineBusy() }
+	scriptHost.Env.OpenSetFile = func(name string) error {
+		frame, err := switchSpecialSet(name, "", "")
+		if err != nil {
+			return err
+		}
+		currentFrame, stageFrame, convDirty = frame, frame, true
+		return nil
 	}
+	scriptHost.Env.StageScript = func(string) (*scripts.Program, error) {
+		return scriptProgram("DATA/NEW.FLT", 1)
+	}
+	scriptHost.Env.AdvanceDay = func() error {
+		if scriptAdvanceDay == nil {
+			return fmt.Errorf("day advance is not ready")
+		}
+		return scriptAdvanceDay()
+	}
+	scriptInterpreter.Builtins["advanceday"] = scriptHost.AdvanceDayBuiltin
+	directionNames := map[int16]string{assets.SetDirectionNorth: "north", assets.SetDirectionSouth: "south", assets.SetDirectionEast: "east", assets.SetDirectionWest: "west"}
+	scriptHost.Env.View = func() (string, string) {
+		return strings.ToLower(string(view.Name[1:])), directionNames[worldPoint[2]]
+	}
+	scriptHost.Env.SetView = func(scene, direction string) error {
+		heading := worldPoint[2]
+		for value, name := range directionNames {
+			if name == direction {
+				heading = value
+			}
+		}
+		if _, err := setWorldView(scene, heading); err != nil {
+			return err
+		}
+		return refreshWorldScene()
+	}
+	scriptInterpreter.Builtins["handleselect"] = scriptHost.PickInventoryBuiltin
 	scriptHost.Env.Sound = func(name string) error {
 		if soundBank == nil || audioContext == nil {
 			return nil
@@ -6345,6 +6395,26 @@ func run() error {
 			return map[string]any{"day": gameDay, "clock": gameClock, "phase": gamePhase, "set": activeSetName, "scene": string(stage.Scenes[currentScene].Name[1:]), "point": worldPoint, "cash": playercash, "inventory": inventoryOwners, "inventoryMenu": inventoryMenuActive, "breakfast": hotelHotplateStage != nil && stage == hotelHotplateStage, "jonesPhase": jonesPhase, "jonesRingStory": jonesRingStory, "laurelPhase": laurelPhase, "movieFrame": movieFrame, "movieWaiting": movieWaiting, "scriptActors": scriptActors.Snapshot([]string{"mwife", "blood", "buick", "marie"})}
 		})
 	}
+	scriptBlackFrame = blackFrame
+	scriptEngineBusy = func() bool {
+		return currentScene == 2 || playback != nil || transition != nil || sceneMovieAfter != nil || spotMovieActive
+	}
+	scriptPlayMovie = func(name string) error {
+		return startActionMovie(name, 0, func(bool) (render.IndexedFrame, bool, error) {
+			scriptMovieFinished = true
+			return blackFrame, true, nil
+		})
+	}
+	scriptAdvanceDay = func() error {
+		frame, changed, err := advanceDay()
+		if err != nil {
+			return err
+		}
+		if changed {
+			currentFrame, stageFrame, convDirty = frame, frame, true
+		}
+		return nil
+	}
 	runErr := runGame(initialFrame, func() (render.IndexedFrame, bool, error) {
 		displayChanged := false
 		drainMovieAudioTails()
@@ -6395,7 +6465,7 @@ func run() error {
 				}
 				displayChanged = true
 			}
-			if scriptTask == nil || currentScene != 2 {
+			if scriptTask == nil || !scriptEngineBusy() {
 				return currentFrame, displayChanged, nil
 			}
 		}
@@ -7195,7 +7265,7 @@ func run() error {
 			log.Printf("movie=%s skip-key=%s", movieNames[movieIndex], keyName)
 		}
 	}, func(mouseEvent engine.MouseEvent) (render.IndexedFrame, bool, error) {
-		if scriptTask != nil && currentScene != 2 {
+		if scriptTask != nil && !scriptEngineBusy() {
 			if mouseEvent.Button != ebiten.MouseButtonLeft {
 				return currentFrame, false, nil
 			}
@@ -7696,7 +7766,7 @@ func run() error {
 		}
 		return applyFlatTarget(action.FlatTarget, action.VisualEffect, action.Duration, handler.ScriptResource)
 	}, func(state engine.MouseState) (render.IndexedFrame, bool, error) {
-		if scriptTask != nil && currentScene != 2 {
+		if scriptTask != nil && !scriptEngineBusy() {
 			if !convChoosing || convPressIndex < 0 || !state.LeftReleased {
 				return currentFrame, false, nil
 			}
@@ -8092,6 +8162,8 @@ type scriptPresenter struct {
 	gotoFlat func(name string) error
 	pick     func() error
 	picked   func() bool
+	play     func(name string) error
+	movie    func() bool
 }
 
 func (p *scriptPresenter) OpenPuppet(file string) error                { return p.open(file) }
@@ -8104,6 +8176,8 @@ func (p *scriptPresenter) Chosen() (int32, bool)                       { return 
 func (p *scriptPresenter) Show(layer string) error                     { return p.show(layer) }
 func (p *scriptPresenter) Cursor(name string) error                    { return p.cursor(name) }
 func (p *scriptPresenter) GotoFlat(name string) error                  { return p.gotoFlat(name) }
+func (p *scriptPresenter) PlayMovie(name string) error                 { return p.play(name) }
+func (p *scriptPresenter) MovieDone() bool                             { return p.movie() }
 func (p *scriptPresenter) PickInventory() error                        { return p.pick() }
 func (p *scriptPresenter) Picked() bool                                { return p.picked() }
 

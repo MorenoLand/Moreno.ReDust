@@ -373,6 +373,13 @@ func (in *Interpreter) callCode(chain []ScriptFrame, frame int, caller []ScriptF
 	if consumed < 0 {
 		return 0, ScriptStatusMalformed, nil
 	}
+	if name, status, err := identifierAt(*program, start); err == nil && status == 0 {
+		if builtin, ok := in.Builtins[strings.ToLower(string(name[1:]))]; ok {
+			call := &ScriptCall{Interpreter: in, Chain: caller, FrameIndex: callerFrame, Locals: callerLocals, Program: program, Start: start}
+			_, status, err := builtin(call)
+			return consumed, status, err
+		}
+	}
 	for ; frame < len(chain); frame++ {
 		status, err := in.searchFrame(chain, frame, caller, callerFrame, callerLocals, program, start, result)
 		if err != nil {

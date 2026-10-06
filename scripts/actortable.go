@@ -71,6 +71,8 @@ type ActorJob struct {
 	Heading int16
 	Walk    *NativeActorWalkJob
 	Paused  bool
+	// Pause is the pausewalk count (FUN_004106B0).
+	Pause int16
 }
 
 // ScriptActors holds every loaded actor, keyed case-insensitively as

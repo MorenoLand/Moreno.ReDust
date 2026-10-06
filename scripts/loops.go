@@ -182,6 +182,20 @@ func (s *LoopScheduler) SetPaused(kind uint16, owner string, paused bool) {
 	}
 }
 
+// PauseDepth is FUN_0040FCD0: the pause count of the first loop of that kind
+// and owner, or zero.
+func (s *LoopScheduler) PauseDepth(kind uint16, owner string) int {
+	if s == nil {
+		return 0
+	}
+	for _, slot := range s.slots {
+		if slot != nil && slot.Kind == kind && strings.EqualFold(slot.Owner, owner) {
+			return int(slot.PauseDepth)
+		}
+	}
+	return 0
+}
+
 func (s *LoopScheduler) Snapshot() LoopSchedulerState {
 	state := LoopSchedulerState{Slots: make([]*ScriptLoop, 32)}
 	if s != nil {
