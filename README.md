@@ -26,11 +26,13 @@ For scripted headless input and screenshots:
 go run . --work=bin/ --silent-script=bin/check.json --silent-seed=1
 ```
 
-The script runs the game's input callbacks with audio muted. It accepts `key`, `click`, `mouse_down`, `mouse_up`, `mouse_move`, `wait`, and `snapshot` actions; snapshots must be PNGs inside the project's `bin/` directory. For example:
+The script runs the game's input callbacks with audio muted. It accepts `key`, `click`, `mouse_down`, `mouse_up`, `mouse_move`, `wait`, `wait_until`, `assert`, and `snapshot` actions; snapshots must be PNGs inside the project's `bin/` directory. For example:
 
 ```json
 {"actions":[{"type":"key","key":"Space"},{"type":"wait","milliseconds":500},{"type":"snapshot","path":"bin/check.png"}]}
 ```
+
+Use `assert` with an `expect` object to check game state. `wait_until` takes the same object and a `milliseconds` timeout (up to 60000), updating the game until it matches. Dialogue state includes `conversation.open`, `conversation.choosing`, `conversation.choiceEvents`, and `conversation.taskActive`.
 
 ## Build
 

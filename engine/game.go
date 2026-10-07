@@ -283,6 +283,27 @@ func RunSilent(frame render.IndexedFrame, onUpdate func() (render.IndexedFrame, 
 			} else {
 				err = assertSilentState(stateProvider[0](), action.Expect)
 			}
+		case "wait_until":
+			if len(stateProvider) == 0 || stateProvider[0] == nil {
+				err = fmt.Errorf("wait_until action requires a state provider")
+				break
+			}
+			deadline := time.Now().Add(time.Duration(*action.Milliseconds) * time.Millisecond)
+			for {
+				if err = step(nil, nil, false); err != nil {
+					break
+				}
+				mismatch := assertSilentState(stateProvider[0](), action.Expect)
+				if mismatch == nil {
+					break
+				}
+				remaining := time.Until(deadline)
+				if remaining <= 0 {
+					err = fmt.Errorf("wait_until timed out: %w", mismatch)
+					break
+				}
+				time.Sleep(min(remaining, time.Second/60))
+			}
 		}
 		if err != nil {
 			return fmt.Errorf("silent action %d (%s): %w", index+1, action.Type, err)
@@ -292,6 +313,9 @@ func RunSilent(frame render.IndexedFrame, onUpdate func() (render.IndexedFrame, 
 }
 
 func validateSilentAction(action silentAction, outputRoot string) error {
+	if action.Expect != nil && action.Type != "assert" && action.Type != "wait_until" {
+		return fmt.Errorf("%s action has unrelated expect field", action.Type)
+	}
 	switch action.Type {
 	case "key":
 		if _, exists := silentKeys[action.Key]; !exists {
@@ -310,12 +334,15 @@ func validateSilentAction(action silentAction, outputRoot string) error {
 		if action.Key != "" || action.Milliseconds != nil || action.Path != "" {
 			return fmt.Errorf("mouse action has unrelated fields")
 		}
-	case "wait":
+	case "wait", "wait_until":
 		if action.Milliseconds == nil || *action.Milliseconds < 0 || *action.Milliseconds > 60000 {
 			return fmt.Errorf("wait requires milliseconds in 0..60000")
 		}
 		if action.X != nil || action.Y != nil || action.Key != "" || action.Button != "" || action.Path != "" {
 			return fmt.Errorf("wait action has unrelated fields")
+		}
+		if action.Type == "wait_until" && action.Expect == nil {
+			return fmt.Errorf("wait_until requires an expect object")
 		}
 	case "snapshot":
 		path, err := filepath.Abs(action.Path)

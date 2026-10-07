@@ -624,6 +624,10 @@ func run() error {
 	inventoryDegrees := make(map[string]int16)
 	var boneDragging bool
 	var boneDragLast image.Point
+	var heldItemDragging bool
+	var heldItemDragFrame render.PuppetFrame
+	var heldItemDragName string
+	var heldItemDragLast image.Point
 	defer func() {
 		if trotterDialogue != nil {
 			_ = trotterDialogue.Close()
@@ -1136,12 +1140,18 @@ func run() error {
 		if err != nil {
 			return render.IndexedFrame{}, err
 		}
-		if !boneDragging {
+		if !boneDragging && !heldItemDragging {
 			item := strings.ToLower(handItem)
 			if inventoryOwners[item] == "stranger" && !inventoryHidden[item] {
-				if itemFrame, found := inventoryLargeFrames[item]; found {
-					return render.CompositePuppetFrame(frame, itemFrame, image.Pt(316, 320))
+				itemFrame, found := inventoryLargeFrames[item]
+				if !found {
+					itemFrame, err = loadPropFrame(inventoryArchive, item, "large", 0, inventoryDegrees[item])
+					if err != nil {
+						return render.IndexedFrame{}, err
+					}
+					inventoryLargeFrames[item] = itemFrame
 				}
+				return render.CompositePuppetFrame(frame, itemFrame, image.Pt(316, 320))
 			}
 		}
 		return frame, nil
@@ -5000,7 +5010,24 @@ func run() error {
 			if playback != nil {
 				movieFrame, movieWaiting = playback.FrameIndex(), playback.WaitingForInput()
 			}
-			return map[string]any{"day": gameDay, "clock": gameClock, "phase": gamePhase, "set": activeSetName, "scene": string(stage.Scenes[currentScene].Name[1:]), "point": worldPoint, "cash": playercash, "inventory": inventoryOwners, "inventoryMenu": inventoryMenuActive, "breakfast": hotelHotplateStage != nil && stage == hotelHotplateStage, "jonesPhase": jonesPhase, "jonesRingStory": jonesRingStory, "laurelPhase": laurelPhase, "helpPhase": helpPhase, "bone": map[string]any{"visible": boneWorldProp.Visible, "owner": boneOwner, "position": boneWorldProp.Position, "view": boneWorldProp.View.Name}, "movieFrame": movieFrame, "movieWaiting": movieWaiting, "scriptActors": scriptActors.Snapshot([]string{"mwife", "blood", "buick", "marie", "jones", "leroy", "help"})}
+			choiceEvents := make([]int32, len(convChoices))
+			engineBusy := scriptEngineBusy != nil && scriptEngineBusy()
+			for index, choice := range convChoices {
+				choiceEvents[index] = choice.EventID
+			}
+			globals := map[string]any{}
+			if values, err := scriptInterpreter.SnapshotGlobals(); err == nil {
+				for _, value := range values {
+					if value.Kind == 3 {
+						globals[value.Name] = value.Text
+					} else {
+						globals[value.Name] = value.Int
+					}
+				}
+			} else {
+				globals["snapshotError"] = err.Error()
+			}
+			return map[string]any{"day": gameDay, "clock": gameClock, "phase": gamePhase, "set": activeSetName, "scene": string(stage.Scenes[currentScene].Name[1:]), "point": worldPoint, "cash": playercash, "inventory": inventoryOwners, "inventoryMenu": inventoryMenuActive, "breakfast": hotelHotplateStage != nil && stage == hotelHotplateStage, "jonesPhase": jonesPhase, "jonesRingStory": jonesRingStory, "laurelPhase": laurelPhase, "helpPhase": helpPhase, "scriptGlobals": globals, "engineBusy": engineBusy, "bone": map[string]any{"visible": boneWorldProp.Visible, "owner": boneOwner, "position": boneWorldProp.Position, "view": boneWorldProp.View.Name}, "movieFrame": movieFrame, "movieWaiting": movieWaiting, "conversation": map[string]any{"open": convPuppet != nil, "choosing": convChoosing, "choiceEvents": choiceEvents, "taskActive": scriptTask != nil}, "scriptActors": scriptActors.Snapshot([]string{"mwife", "blood", "buick", "marie", "jones", "leroy", "help"})}
 		})
 	}
 	scriptBlackFrame = blackFrame
@@ -5058,6 +5085,9 @@ func run() error {
 			done, err := scriptTask.Poll()
 			if collectErr := collectScriptGlobals(); err == nil {
 				err = collectErr
+			}
+			if convDirty {
+				convDirty, displayChanged = false, true
 			}
 			if done {
 				label := scriptTask.Label
@@ -6034,6 +6064,28 @@ func run() error {
 			}
 		}
 		if !hit && currentScene == 0 {
+			item := strings.ToLower(handItem)
+			if item != "bone" && inventoryOwners[item] == "stranger" && !inventoryHidden[item] && mouseEvent.Button == ebiten.MouseButtonLeft {
+				if itemFrame, found := inventoryLargeFrames[item]; found {
+					mousePoint := image.Pt(int(int16(point>>16)), int(int16(point)))
+					hitItem, err := render.HitTestPuppetFrame(itemFrame, image.Pt(316, 320), mousePoint)
+					if err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+					if hitItem {
+						heldItemDragging, heldItemDragFrame, heldItemDragName, heldItemDragLast = true, itemFrame, item, mousePoint
+						if err := refreshWorldScene(); err != nil {
+							return render.IndexedFrame{}, false, err
+						}
+						dragFrame, err := render.CompositePuppetFrame(currentFrame, itemFrame, mousePoint)
+						if err != nil {
+							return render.IndexedFrame{}, false, err
+						}
+						currentFrame, stageFrame = dragFrame, dragFrame
+						return currentFrame, true, nil
+					}
+				}
+			}
 			if boneInInventory && strings.EqualFold(handItem, "Bone") && !boneDragging && mouseEvent.Button == ebiten.MouseButtonLeft {
 				mousePoint := image.Pt(int(int16(point>>16)), int(int16(point)))
 				hitBone, err := render.HitTestPuppetFrame(boneInventoryFrame, image.Pt(316, 320), mousePoint)
@@ -6473,6 +6525,38 @@ func run() error {
 			}
 			return currentFrame, false, nil
 		}
+		if heldItemDragging {
+			point := image.Pt(int(int16(state.Point>>16)), int(int16(state.Point)))
+			if state.LeftDown {
+				if point == heldItemDragLast {
+					return currentFrame, false, nil
+				}
+				heldItemDragLast = point
+				if err := refreshWorldScene(); err != nil {
+					return render.IndexedFrame{}, false, err
+				}
+				dragFrame, err := render.CompositePuppetFrame(currentFrame, heldItemDragFrame, point)
+				if err != nil {
+					return render.IndexedFrame{}, false, err
+				}
+				currentFrame, stageFrame = dragFrame, dragFrame
+				return currentFrame, true, nil
+			}
+			if state.LeftReleased {
+				heldItemDragging = false
+				actor, hit := render.HitTestWorldActors(projectedActors, point)
+				if err := refreshWorldScene(); err != nil {
+					return render.IndexedFrame{}, false, err
+				}
+				if hit && scriptManaged[strings.ToLower(actor)] {
+					if err := startScriptTask(scripts.ActorEvent{Actor: actor, Message: fmt.Sprintf("offerobject(%q)", heldItemDragName)}); err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+				}
+				return currentFrame, true, nil
+			}
+			return currentFrame, false, nil
+		}
 		if boneDragging {
 			point := image.Pt(int(int16(state.Point>>16)), int(int16(state.Point)))
 			if state.LeftDown {
@@ -6493,6 +6577,15 @@ func run() error {
 			if state.LeftReleased {
 				boneDragging = false
 				actorName, hit := render.HitTestWorldActors(projectedActors, point)
+				if hit && scriptManaged[strings.ToLower(actorName)] {
+					if err := refreshWorldScene(); err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+					if err := startScriptTask(scripts.ActorEvent{Actor: actorName, Message: `offerobject("bone")`}); err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+					return currentFrame, true, nil
+				}
 				if hit && strings.EqualFold(actorName, "dog") && boneInInventory && boneOwner == "stranger" && gameDay != 5 {
 					dogVisibleState = false
 					nativeLoops.Stop(scripts.LoopKindActor, "dog")
