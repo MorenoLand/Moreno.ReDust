@@ -711,6 +711,11 @@ type ActorEvent struct {
 	Message string
 }
 
+// actorFrameWrap bounds the free-running frame counter; the pose lookup takes
+// it modulo the pose's sequence length, and 27720 is divisible by every
+// plausible length.
+const actorFrameWrap = 27720
+
 // Pass advances every actor job once, as the native walk pass FUN_00410290
 // does, and returns the endwalk/endturn events to deliver. moved reports
 // whether any actor in the open set changed position or heading.
@@ -719,10 +724,19 @@ func (h *GameHost) Pass() (events []ActorEvent, moved bool) {
 	for _, key := range h.Actors.Names() {
 		actor := h.Actors.actors[key]
 		job := actor.Job
+		inSet := strings.EqualFold(actor.Set, current)
+		if inSet && actor.Visible {
+			// FUN_0040DEC0 steps the pose's frame sequence on every draw;
+			// the pump draws once per pass. Poses other than "stand" are the
+			// ones whose sequences animate, so only they force a redraw.
+			actor.Frame = (actor.Frame + 1) % actorFrameWrap
+			if !strings.EqualFold(actor.Pose, "stand") {
+				moved = true
+			}
+		}
 		if job == nil || job.Paused {
 			continue
 		}
-		inSet := strings.EqualFold(actor.Set, current)
 		switch job.Mode {
 		case ActorJobTurn:
 			if !inSet {
@@ -748,6 +762,22 @@ func (h *GameHost) Pass() (events []ActorEvent, moved bool) {
 			moved = true
 			events = append(events, ActorEvent{Actor: actor.Name, Message: "endwalk()"})
 		case ActorJobWalk:
+			if !job.TurnDone {
+				// FUN_00410290 first turns toward the route bearing and
+				// raises endturn() when it arrives, before any step is taken;
+				// the script's endturn() is what switches to the walk pose.
+				if inSet {
+					actor.Heading = NativeTurnStep(actor.Heading, job.Heading, actor.TurnRate)
+					moved = true
+				} else {
+					actor.Heading = job.Heading
+				}
+				if actor.Heading == job.Heading {
+					job.TurnDone = true
+					events = append(events, ActorEvent{Actor: actor.Name, Message: "endturn()"})
+				}
+				continue
+			}
 			position, heading, walking := job.Walk.Pass(actor.Position, actor.Heading, actor.TurnRate)
 			if inSet && (position != actor.Position || heading != actor.Heading) {
 				moved = true

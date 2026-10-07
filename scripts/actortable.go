@@ -71,6 +71,8 @@ type ActorJob struct {
 	Heading int16
 	Walk    *NativeActorWalkJob
 	Paused  bool
+	// TurnDone marks that a walk's initial turn to the route bearing finished.
+	TurnDone bool
 	// Pause is the pausewalk count (FUN_004106B0).
 	Pause int16
 }
@@ -226,7 +228,7 @@ func (t *ScriptActors) Restore(states map[string]ActorRecordState) error {
 				if err != nil {
 					return fmt.Errorf("saved script actor %q walk: %w", name, err)
 				}
-				job.Walk = walk
+				job.Walk, job.TurnDone = walk, true
 			}
 			actor.Job = job
 		}
