@@ -424,17 +424,10 @@ func run() error {
 		stage.Close()
 		return fmt.Errorf("resolve startup town actors: %w", err)
 	}
-	helpPosition, hasHelp, err := nightSet.ResolveLocation("town.help")
-	if err != nil {
-		stage.Close()
-		return fmt.Errorf("resolve G15 Help position: %w", err)
-	}
-	actorPoses := map[string]string{"leroy": "stand", "dog": "stand", "help": "stand", "jones": "stand", "buick": "stand", "marie": "stand", "isao": "stand", "trotter": "stand", "laurel": "stand"}
+	actorPoses := map[string]string{"leroy": "stand", "dog": "stand", "jones": "stand", "buick": "stand", "marie": "stand", "isao": "stand", "trotter": "stand", "laurel": "stand"}
 	actorPoses["laurel"] = "stand"
-	actorHeadings := map[string]int16{"leroy": 0, "dog": 32, "help": 0, "jones": 0, "buick": 0, "marie": 128, "isao": 64, "trotter": 0, "laurel": 0}
-	actorTurnTargets := map[string]int16{"leroy": 0, "help": 0, "jones": 0, "buick": 0, "marie": 128, "isao": 64}
-	helpTurnActive := false
-	helpVisible, helpPhase, helpAttention := false, int16(0), int32(0)
+	actorHeadings := map[string]int16{"leroy": 0, "dog": 32, "jones": 0, "buick": 0, "marie": 128, "isao": 64, "trotter": 0, "laurel": 0}
+	helpPhase := int16(0)
 	var isaoPosition [3]int16
 	var trotterPosition [3]int16
 	isaoVisible, isaoBouncer, isaoDirGo := false, false, false
@@ -447,7 +440,9 @@ func run() error {
 	scriptActors := scripts.NewScriptActors()
 	scriptActorCasts := map[string]assets.Cast{}
 	scriptActorRecords := map[string]assets.CastActor{}
-	scriptManaged := map[string]bool{"mwife": true, "blood": true, "buick": true, "marie": true, "jones": true, "leroy": true}
+	scriptManaged := map[string]bool{"mwife": true, "blood": true, "buick": true, "marie": true, "jones": true, "leroy": true, "help": true}
+	var scriptTask *scripts.ScriptTask
+	var startScriptTask func(event scripts.ActorEvent) error
 	for _, cast := range []assets.Cast{gangCast, extraCast} {
 		for _, actor := range cast.Actors {
 			key := strings.ToLower(actor.Name)
@@ -462,20 +457,8 @@ func run() error {
 			scriptActorCasts[key], scriptActorRecords[key] = cast, actor
 		}
 	}
-	const helpWalkRate int16 = 3
-	const helpTurnRate int16 = 7
 	const townCastWalkRate int16 = 3
 	const townActorHotDistance = 384
-	const (
-		helpInteractionIdle uint8 = iota
-		helpInteractionMoving
-		helpInteractionFacing
-		helpInteractionPuppetPending
-		helpInteractionPuppetSpeaking
-		helpInteractionPuppetChoices
-		helpInteractionPuppetDelay
-		helpInteractionReturning
-	)
 	const (
 		isaoInteractionIdle uint8 = iota
 		isaoInteractionPuppetPending
@@ -500,7 +483,6 @@ func run() error {
 	// under the standing pose and made the figure appear twice, so **there is no choice base
 	// any more**: each choice screen builds its own from the conversation base, which is scene
 	// only, plus the standing pose it draws itself.
-	helpInteractionStage := helpInteractionIdle
 	jonesPhase, laurelPhase := int16(0), int16(0)
 	jonesRingStory := int16(0)
 	laurelGood, hankerchiefDegree := int16(0), int16(0)
@@ -625,8 +607,6 @@ func run() error {
 	var isaoInventoryReturnPending bool
 	var isaoInventoryReturnCode string
 	var isaoGiftCounter int32
-	helpActorPosition, helpReturnPosition := helpPosition, helpPosition
-	var helpWalk *scripts.NativeActorWalkJob
 
 	mariePhase := int16(0)
 	handItem, handFlag, inventoryMenuActive := "", int16(0), false
@@ -635,24 +615,6 @@ func run() error {
 	var marieHandBevelChoices []scripts.PuppetChoice
 	var inventoryCashRendered int32
 	var inventoryCashRenderedValid bool
-	var helpPuppet *render.Puppet
-	var helpPuppetTable assets.PuppetSpeechTable
-	var helpPuppetProgram scripts.Program
-	var helpDialogue *engine.PuppetDialogue
-	var helpDialogueSkip bool
-	var helpConversationBase render.IndexedFrame
-	var helpActiveChoices []scripts.PuppetChoice
-	var helpPage string
-	var helpChoicePressActive bool
-	var helpChoicePressEvent int32
-	helpChoicePressIndex, helpChoiceOutline := -1, -1
-	var helpSpeechStages []scripts.HelpSpeechStage
-	var helpSpeechStageIndex int
-	var helpPendingResult scripts.HelpChoiceResult
-	var helpDelayUntil uint32
-	var helpDelayReady bool
-	var helpActorValue int32
-	var helpInitialPage bool
 	boneWorldProp := render.WorldPropSprite{Name: "Bone", Set: "town", Position: bonePosition, Heading: 32, Scale: 1200, Archive: inventoryArchive, View: boneSmallView}
 	boneOwner := "none"
 	var boneInventoryFrame render.PuppetFrame
@@ -662,7 +624,6 @@ func run() error {
 	inventoryDegrees := make(map[string]int16)
 	var boneDragging bool
 	var boneDragLast image.Point
-	var dog2PhaseAfterHelp bool
 	defer func() {
 		if trotterDialogue != nil {
 			_ = trotterDialogue.Close()
@@ -675,12 +636,6 @@ func run() error {
 		}
 		if isaoPuppet != nil {
 			_ = isaoPuppet.Close()
-		}
-		if helpDialogue != nil {
-			_ = helpDialogue.Close()
-		}
-		if helpPuppet != nil {
-			_ = helpPuppet.Close()
 		}
 	}()
 	compositeWorld := func(background render.IndexedFrame, point [3]int16, actors []render.WorldActorSprite) (render.IndexedFrame, []render.ProjectedWorldActor, error) {
@@ -758,19 +713,6 @@ func run() error {
 		}
 		if activeSetName != "town" {
 			return actors, nil
-		}
-		for _, actor := range gangCast.Actors {
-			if helpVisible && strings.EqualFold(actor.Name, "help") {
-				if !hasHelp {
-					return nil, fmt.Errorf("NITE.SET has no town.help coordinate")
-				}
-				actor.Position, actor.Located = helpActorPosition, true
-				sprite, err := render.LoadCastActorFrame(workspace, gangCast, actor, actorPoses["help"], 0, 1450, render.NativeActorViewAngle(helpActorPosition, point, actorHeadings["help"]), 32)
-				if err != nil {
-					return nil, fmt.Errorf("load G15 actor %s: %w", actor.Name, err)
-				}
-				actors = append(actors, sprite)
-			}
 		}
 		for _, actor := range townActors {
 			if !dogVisibleState || gameDay != 1 || !strings.EqualFold(actor.Name, "dog") {
@@ -975,7 +917,17 @@ func run() error {
 		{"helpphase", func() int32 { return int32(helpPhase) }, func(v int32) { helpPhase = int16(v) }},
 		{"isaophase", func() int32 { return int32(isaoPhase) }, func(v int32) { isaoPhase = int16(v) }},
 	}
+	publishBone := func() {
+		prop := scriptHost.Props.Get("bone")
+		prop.Owner, prop.Visible, prop.View, prop.Set = boneOwner, boneWorldProp.Visible, boneWorldProp.View.Name, boneWorldProp.Set
+		prop.X, prop.Y, prop.Z = int32(boneWorldProp.Position[0]), int32(boneWorldProp.Position[1]), int32(boneWorldProp.Position[2])
+		prop.Degree, prop.Scale, prop.ZClip = boneWorldProp.Heading, int32(boneWorldProp.Scale), int32(boneWorldProp.ZClip)
+	}
+	publishBone()
 	publishScriptGlobals := func() error {
+		if dog, status := scriptActors.Lookup("dog"); status == 0 {
+			dog.Visible = dogVisibleState
+		}
 		for name, owner := range inventoryOwners {
 			prop := scriptHost.Props.Get(name)
 			prop.Owner = owner
@@ -1013,6 +965,21 @@ func run() error {
 			if previous, tracked := inventoryDegrees[name]; tracked && previous != prop.Degree || !tracked && prop.Degree != 0 {
 				inventoryDegrees[name] = prop.Degree
 			}
+		}
+		bone := scriptHost.Props.Get("bone")
+		if bone.View != boneWorldProp.View.Name {
+			view, err := inventoryArchive.View("bone", bone.View)
+			if err != nil {
+				return err
+			}
+			boneWorldProp.View = view
+		}
+		boneOwner, boneInInventory = bone.Owner, strings.EqualFold(bone.Owner, "stranger")
+		boneWorldProp.Set, boneWorldProp.Visible = bone.Set, bone.Visible
+		boneWorldProp.Position = [3]int16{int16(bone.X), int16(bone.Y), int16(bone.Z)}
+		boneWorldProp.Heading, boneWorldProp.Scale, boneWorldProp.ZClip = bone.Degree, int16(bone.Scale), int16(bone.ZClip)
+		if boneInInventory {
+			boneInventoryFrame = inventoryLargeFrames["bone"]
 		}
 		if value, declared, err := scriptInterpreter.GlobalValue("handitem"); err != nil {
 			return err
@@ -1374,7 +1341,7 @@ func run() error {
 			}
 			return true, nil
 		}
-		if !avatarIdleActive || currentScene == 0 && (helpInteractionStage != helpInteractionIdle || isaoInteractionStage != isaoInteractionIdle || trotterInteractionStage != trotterInteractionIdle) {
+		if !avatarIdleActive || currentScene == 0 && (isaoInteractionStage != isaoInteractionIdle || trotterInteractionStage != trotterInteractionIdle) {
 			return false, nil
 		}
 		if now < avatarIdleNext {
@@ -1612,13 +1579,10 @@ func run() error {
 		if previousName == "town" && semanticName != "town" {
 			townReturnScene = string(view.Name[1:])
 			nativeLoops.Stop(scripts.LoopKindScene, "scene g14")
-			for _, owner := range []string{"dog", "help", "isao"} {
+			for _, owner := range []string{"dog", "isao"} {
 				nativeLoops.Stop(scripts.LoopKindActor, owner)
 			}
 			nativeLoops.Stop(scripts.LoopKindActor, "laurel")
-			helpWalk = nil
-			actorPoses["help"] = "stand"
-			helpTurnActive = false
 		}
 		activeSet, activeSetName, activeSetOwned = nextSet, semanticName, nextOwned
 		view, worldPoint, backgroundFrame = nextView, nextPoint, background
@@ -1715,11 +1679,6 @@ func run() error {
 					}
 				}
 			}
-			if helpVisible {
-				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "help", Callback: "helpidle", Remaining: 19}); status != 0 {
-					return render.IndexedFrame{}, fmt.Errorf("register Help idle loop after town return returned status %#x", status)
-				}
-			}
 			if currentThemeName == "nightwind3" {
 				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindScene, Owner: "scene g14", Callback: "nightfxs", Remaining: 2}); status != 0 {
 					return render.IndexedFrame{}, fmt.Errorf("register NITE nightfxs loop after town return returned status %#x", status)
@@ -1748,286 +1707,6 @@ func run() error {
 			}
 		}
 		return nextFrame, nil
-	}
-	setupHelpActor := func() error {
-		if !hasHelp {
-			return fmt.Errorf("GANG.CST Help setup has no town.help coordinate")
-		}
-		helpActorPosition = helpPosition
-		if !helpVisible {
-			actorHeadings["help"] = 0
-		}
-		helpVisible, actorPoses["help"] = true, "stand"
-		nativeLoops.Stop(scripts.LoopKindActor, "help")
-		camera := render.NativeActorCameraPosition(worldPoint)
-		player := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
-		dogVisible := false
-		for _, actor := range worldActors {
-			if strings.EqualFold(actor.Name, "dog") && actor.Visible {
-				dogVisible = true
-				break
-			}
-		}
-		step, found := scripts.HelpIdleStep("helpidle", scripts.NativeActorDistance2D(helpActorPosition, player) < 384, dogVisible, gameDay, helpPhase)
-		if !found {
-			return fmt.Errorf("unknown Help idle callback")
-		}
-		actorPoses["help"] = step.Pose
-		if step.ClearAttention {
-			helpAttention = 0
-		}
-		if step.Attention != 0 {
-			helpAttention = step.Attention
-		}
-		if step.TurnToCamera {
-			actorTurnTargets["help"] = render.NativeActorHeadingToPoint(helpPosition, player)
-			helpTurnActive = actorHeadings["help"] != actorTurnTargets["help"]
-		}
-		if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "help", Callback: step.Callback, Remaining: step.Remaining}); status != 0 {
-			return fmt.Errorf("register Help idle loop returned status %#x", status)
-		}
-		if *debug {
-			log.Printf("actor=help setup=dog point=%v pose=%s callback=%s ticks=%d attention=%d", helpActorPosition, step.Pose, step.Callback, step.Remaining, helpAttention)
-		}
-		return nil
-	}
-	resumeHelpIdle := func() error {
-		camera := render.NativeActorCameraPosition(worldPoint)
-		player := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
-		dogVisible := false
-		for _, actor := range worldActors {
-			if strings.EqualFold(actor.Name, "dog") && actor.Visible {
-				dogVisible = true
-				break
-			}
-		}
-		step, found := scripts.HelpIdleStep("helpidle", scripts.NativeActorDistance2D(helpActorPosition, player) < 384, dogVisible, gameDay, helpPhase)
-		if !found {
-			return fmt.Errorf("unknown Help idle callback")
-		}
-		actorPoses["help"], helpTurnActive = step.Pose, false
-		if step.ClearAttention {
-			helpAttention = 0
-		}
-		if step.Attention != 0 {
-			helpAttention = step.Attention
-		}
-		if step.TurnToCamera {
-			actorTurnTargets["help"] = render.NativeActorHeadingToPoint(helpActorPosition, player)
-			helpTurnActive = actorHeadings["help"] != actorTurnTargets["help"]
-		}
-		nativeLoops.Stop(scripts.LoopKindActor, "help")
-		if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "help", Callback: step.Callback, Remaining: step.Remaining}); status != 0 {
-			return fmt.Errorf("register Help idle loop returned status %#x", status)
-		}
-		if *debug {
-			log.Printf("actor=help idle=return point=%v pose=%s callback=%s ticks=%d heading=%d target=%d attention=%d", helpActorPosition, step.Pose, step.Callback, step.Remaining, actorHeadings["help"], actorTurnTargets["help"], helpAttention)
-		}
-		return nil
-	}
-	beginHelpPuppetTalk := func() (bool, error) {
-		if !helpVisible || gameDay == 5 || helpInteractionStage != helpInteractionIdle {
-			return false, nil
-		}
-		camera := render.NativeActorCameraPosition(worldPoint)
-		playerPosition := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
-		distance := scripts.NativeActorDistance2D(helpActorPosition, playerPosition)
-		if distance >= 384 {
-			return false, nil
-		}
-		if !scripts.NativeWalktopuppetAxisAligned(helpActorPosition, playerPosition) {
-			if *debug {
-				log.Printf("actor=help walktopuppet=blocked-axis-alignment actor=%v player=%v", helpActorPosition, playerPosition)
-			}
-			return false, nil
-		}
-		destination := [3]int16{playerPosition[0], playerPosition[1], 0}
-		routeHeading := render.NativeActorHeadingToPoint(helpActorPosition, destination)
-		helpReturnPosition = helpActorPosition
-		walk := scripts.NewNativeActorWalkJob(helpActorPosition, destination, routeHeading, helpWalkRate)
-		helpWalk, helpInteractionStage = &walk, helpInteractionMoving
-		helpTurnActive, actorPoses["help"] = false, "stand"
-		nativeLoops.Stop(scripts.LoopKindActor, "help")
-		if *debug {
-			log.Printf("actor=help walktopuppet distance=%d destination=%v heading=%d puppet=HELP1.PUP", distance, destination, routeHeading)
-		}
-		return true, nil
-	}
-	openHelpPuppet := func() error {
-		if helpPuppet != nil {
-			return nil
-		}
-		puppet, err := render.OpenPuppet(workspace, "PUPPETS/HELP1.PUP")
-		if err != nil {
-			return err
-		}
-		cache, err := workspace.OpenResourceCache("PUPPETS/HELP1.PUP")
-		if err != nil {
-			_ = puppet.Close()
-			return err
-		}
-		defer cache.Close()
-		lease, err := cache.Acquire(33)
-		if err != nil {
-			_ = puppet.Close()
-			return err
-		}
-		scriptData, err := lease.Bytes()
-		if closeErr := lease.Close(); err == nil {
-			err = closeErr
-		}
-		if err != nil {
-			_ = puppet.Close()
-			return err
-		}
-		program, err := scripts.ParseProgram(scriptData)
-		if err != nil {
-			_ = puppet.Close()
-			return err
-		}
-		table, err := workspace.OpenPuppetSpeechTable("PUPPETS/HELP1.PUP")
-		if err != nil {
-			_ = puppet.Close()
-			return err
-		}
-		helpPuppet, helpPuppetTable, helpPuppetProgram = puppet, table, program
-		return nil
-	}
-	drawHelpChoices := func(outline int) error {
-		labels := make([]string, len(helpActiveChoices))
-		for index, choice := range helpActiveChoices {
-			labels[index] = choice.Text
-		}
-		choiceBackground, err := standingPoseOver(helpConversationBase,
-			helpPuppet, helpPuppetTable, nil, "Help")
-		if err != nil {
-			return err
-		}
-		frame, err := helpPuppet.ChoiceFrame(choiceBackground, helpPuppetTable.PanelResource, labels)
-		if err != nil {
-			return fmt.Errorf("render Help choice panel: %w", err)
-		}
-		if outline >= 0 {
-			frame, err = render.DrawNativePuppetChoiceBevel(frame, outline)
-			if err != nil {
-				return fmt.Errorf("render Help choice bevel: %w", err)
-			}
-		}
-		currentFrame, stageFrame = frame, frame
-		helpChoiceOutline = outline
-		return nil
-	}
-	showHelpChoices := func(page string) error {
-		choices, err := scripts.PuppetBevelChoices(helpPuppetProgram, page)
-		if err != nil {
-			return err
-		}
-		if len(choices) == 0 {
-			return fmt.Errorf("HELP1.PUP %s reached its event wait with no choices", page)
-		}
-		helpPage, helpActiveChoices = page, choices
-		helpChoicePressActive = false
-		helpChoicePressIndex, helpChoiceOutline = -1, -1
-		if err := drawHelpChoices(-1); err != nil {
-			return err
-		}
-		helpInteractionStage = helpInteractionPuppetChoices
-		return nil
-	}
-	startHelpSpeechStage := func() error {
-		stage := helpSpeechStages[helpSpeechStageIndex]
-		if stage.DelayBefore > 0 && !helpDelayReady {
-			helpDelayUntil = scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) + stage.DelayBefore
-			helpInteractionStage = helpInteractionPuppetDelay
-			return nil
-		}
-		helpDelayReady = false
-		if helpDialogue != nil {
-			if err := helpDialogue.Close(); err != nil {
-				return err
-			}
-		}
-		dialogue, err := engine.NewPuppetDialogue(helpPuppet, helpPuppetTable.Entries, stage.Lines, audioContext)
-		if err != nil {
-			return err
-		}
-		helpDialogue = dialogue
-		frame, err := helpDialogue.Start(helpConversationBase, scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
-		if err != nil {
-			return err
-		}
-		currentFrame, stageFrame = frame, frame
-		helpInteractionStage = helpInteractionPuppetSpeaking
-		if *debug {
-			log.Printf("puppet=help page=%s lines=%d", helpPage, len(stage.Lines))
-		}
-		return nil
-	}
-	startHelpPage := func(page string) error {
-		lines, err := scripts.PuppetSpeechCalls(helpPuppetProgram, page, scripts.LookupOpcode("puppetclear"))
-		if err != nil {
-			return err
-		}
-		helpPage, helpInitialPage = page, true
-		if len(lines) == 0 {
-			helpInitialPage = false
-			return showHelpChoices(page)
-		}
-		helpSpeechStages, helpSpeechStageIndex = []scripts.HelpSpeechStage{{Lines: lines}}, 0
-		return startHelpSpeechStage()
-	}
-	startHelpPuppet := func() error {
-		if err := openHelpPuppet(); err != nil {
-			return fmt.Errorf("open Help dialogue: %w", err)
-		}
-		// **No world actor survives into a conversation.** The puppet fills the 512x264
-		// viewport as a foreground close-up, so a bystander left standing behind it appears
-		// inside the portrait -- the speaker's giant face with a smaller figure showing
-		// through it. The room and the panel stay; the cast does not.
-		dialogueActors := make([]render.WorldActorSprite, 0)
-		dialogueBackground, _, err := compositeWorld(backgroundFrame, worldPoint, dialogueActors)
-		if err != nil {
-			return fmt.Errorf("hide Help world sprite for dialogue: %w", err)
-		}
-		dialoguePanel, err := render.StageFrame(stage, currentPixels.Pixels)
-		if err != nil {
-			return fmt.Errorf("render Help dialogue panel: %w", err)
-		}
-		helpConversationBase, err = composeMainPanel(dialogueBackground, dialoguePanel)
-		if err != nil {
-			return fmt.Errorf("compose Help dialogue background: %w", err)
-		}
-		helpConversationBase, err = withPuppetPalette(helpConversationBase, helpPuppet, "Help")
-		if err != nil {
-			return err
-		}
-		helpPendingResult = scripts.HelpChoiceResult{}
-		helpDelayReady, helpInitialPage = false, false
-		return startHelpPage(scripts.HelpPuppetEntryPage(helpPhase, dogVisibleState))
-	}
-	completeHelpReturn := func() error {
-		actorPoses["help"] = "stand"
-		helpActorValue++
-		helpInteractionStage = helpInteractionIdle
-		if dog2PhaseAfterHelp {
-			gamePhase, dog2PhaseAfterHelp = 2, false
-			if *debug {
-				log.Printf("actor=dog offerobject=complete phase=%d", gamePhase)
-			}
-		}
-		return resumeHelpIdle()
-	}
-	returnHelpToStar := func() error {
-		if helpActorPosition == helpReturnPosition {
-			if err := completeHelpReturn(); err != nil {
-				return err
-			}
-			return refreshWorldScene()
-		}
-		heading := render.NativeActorHeadingToPoint(helpActorPosition, helpReturnPosition)
-		walk := scripts.NewNativeActorWalkJob(helpActorPosition, helpReturnPosition, heading, helpWalkRate)
-		helpWalk, helpInteractionStage = &walk, helpInteractionReturning
-		return nil
 	}
 	openTrotterPuppet := func() error {
 		if trotterPuppet != nil {
@@ -3162,66 +2841,8 @@ func run() error {
 		laurelInteractionStage = laurelInteractionInventory
 		return enterInventoryScene()
 	}
-	finishHelpChoice := func() error {
-		if helpPendingResult.SetPhase {
-			helpPhase = helpPendingResult.Phase
-		}
-		if helpPendingResult.GiveRing {
-			inventoryOwners["ring"], handItem = "stranger", "ring"
-			if err := soundBank.Play(audioContext, "inven", 1); err != nil {
-				return fmt.Errorf("play Ring inventory sound: %w", err)
-			}
-		}
-		if helpPendingResult.HideHelp {
-			helpVisible = false
-			helpWalk = nil
-			helpInteractionStage = helpInteractionIdle
-			nativeLoops.Stop(scripts.LoopKindActor, "help")
-		}
-		if helpPendingResult.GiveRing && helpPendingResult.HideHelp {
-			if err := deliverScriptEvent(scripts.ActorEvent{Actor: "jones", Message: `setupactor("bar")`}); err != nil {
-				return fmt.Errorf("setup Jones after Ring handoff: %w", err)
-			}
-		}
-		if helpPendingResult.GiveBone {
-			boneWorldProp.Position, boneWorldProp.Heading, boneWorldProp.Scale = bonePosition, 32, 1200
-			boneWorldProp.View, boneWorldProp.Visible, boneOwner = boneSmallView, true, "none"
-			if *debug {
-				log.Printf("prop=Bone setup=street owner=%s view=small point=%v degree=%d scale=%d", boneOwner, boneWorldProp.Position, boneWorldProp.Heading, boneWorldProp.Scale)
-			}
-			if err := refreshWorldScene(); err != nil {
-				return fmt.Errorf("show Bone after Help dialogue: %w", err)
-			}
-		}
-		if helpPendingResult.NextPage != "" {
-			nextPage := helpPendingResult.NextPage
-			helpPendingResult = scripts.HelpChoiceResult{}
-			return startHelpPage(nextPage)
-		}
-		if helpPendingResult.Complete {
-			if helpPendingResult.HideHelp {
-				helpPendingResult = scripts.HelpChoiceResult{}
-				return refreshWorldScene()
-			}
-			return returnHelpToStar()
-		}
-		return fmt.Errorf("HELP1.PUP page %s has no verified continuation", helpPage)
-	}
-	startHelpChoice := func(event int32) error {
-		result, found := scripts.HelpPuppetChoice(helpPage, event)
-		if !found {
-			return fmt.Errorf("HELP1.PUP %s returned unsupported event %d", helpPage, event)
-		}
-		helpPendingResult, helpSpeechStages, helpSpeechStageIndex = result, result.Speech, 0
-		helpInitialPage, helpDelayReady = false, false
-		if len(helpSpeechStages) == 0 {
-			return finishHelpChoice()
-		}
-		return startHelpSpeechStage()
-	}
 	// A script conversation: the open puppet, its base, the line playing and
 	// the choice panel, driven by the GameHost through scriptPresenter.
-	var scriptTask *scripts.ScriptTask
 	var scriptTaskDone func()
 	// Set once the movie, transition and day-advance machinery below exists.
 	var scriptEngineBusy func() bool
@@ -3259,7 +2880,7 @@ func run() error {
 				return fmt.Errorf("render %s choice bevel: %w", convName, err)
 			}
 		}
-		currentFrame, stageFrame = frame, frame
+		currentFrame, stageFrame, convDirty = frame, frame, true
 		return nil
 	}
 	scriptHost.Env.Presenter = &scriptPresenter{
@@ -3340,7 +2961,7 @@ func run() error {
 				return false, err
 			}
 			convDialogue, convSkipped, convChoosing = dialogue, false, false
-			currentFrame, stageFrame = frame, frame
+			currentFrame, stageFrame, convDirty = frame, frame, true
 			if *debug {
 				log.Printf("script-puppet speak=%s", line)
 			}
@@ -3486,6 +3107,10 @@ func run() error {
 	scriptHost.Env.PropDegree = func(name string) (int16, bool) {
 		return inventoryDegrees[strings.ToLower(name)], true
 	}
+	scriptHost.Env.PropScript = func(name string) (string, uint32, string, bool) {
+		definition, found := inventoryArchive.Definition(name)
+		return "DATA/INVEN.PRP", definition.ScriptResource, "inven", found
+	}
 	scriptHost.Env.Ticks = func() uint32 { return scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) }
 	scriptHost.Env.PlayerHeading = func() int16 {
 		degree, _ := render.NativeCurrentDegree(worldPoint[2])
@@ -3518,7 +3143,11 @@ func run() error {
 			scriptHost.SetTask(task)
 			return runScript(label, source)
 		})
-		if finished, err := task.Poll(); finished {
+		finished, err := task.Poll()
+		if collectErr := collectScriptGlobals(); err == nil {
+			err = collectErr
+		}
+		if finished {
 			scriptHost.SetTask(nil)
 			if done != nil {
 				scriptTaskDone = nil
@@ -3535,7 +3164,7 @@ func run() error {
 	// conversation from its idle loop. With no task running the event becomes one;
 	// while one is suspended the event runs inline and cannot block.
 	var dispatchScriptEvent func(event scripts.ActorEvent) error
-	startScriptTask := func(event scripts.ActorEvent) error {
+	startScriptTask = func(event scripts.ActorEvent) error {
 		return startScriptSource(event.Actor+" "+event.Message, fmt.Sprintf("sendtoactor(%q,%s)", event.Actor, event.Message), nil)
 	}
 	dispatchScriptEvent = func(event scripts.ActorEvent) error {
@@ -3617,36 +3246,6 @@ func run() error {
 				displayChanged = displayChanged || currentScene == 0
 				if *debug && *debugLoops {
 					log.Printf("actor=dog pose=%s next=%s ticks=%d", step.Pose, step.Callback, step.Remaining)
-				}
-			case "helpidle":
-				camera := render.NativeActorCameraPosition(worldPoint)
-				player := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
-				dogVisible := false
-				for _, actor := range worldActors {
-					if strings.EqualFold(actor.Name, "dog") && actor.Visible {
-						dogVisible = true
-						break
-					}
-				}
-				step, found := scripts.HelpIdleStep(loop.Callback, scripts.NativeActorDistance2D(helpPosition, player) < 384, dogVisible, gameDay, helpPhase)
-				if !found {
-					return 0, fmt.Errorf("unknown Help idle callback %q", loop.Callback)
-				}
-				previousPose := actorPoses["help"]
-				actorPoses["help"], loop.Callback, loop.Remaining = step.Pose, step.Callback, step.Remaining
-				if step.ClearAttention {
-					helpAttention = 0
-				}
-				if step.Attention != 0 {
-					helpAttention = step.Attention
-				}
-				if step.TurnToCamera {
-					actorTurnTargets["help"] = render.NativeActorHeadingToPoint(helpPosition, player)
-					helpTurnActive = actorHeadings["help"] != actorTurnTargets["help"]
-				}
-				displayChanged = displayChanged || currentScene == 0 && previousPose != step.Pose
-				if *debug && *debugLoops {
-					log.Printf("actor=help pose=%s next=%s ticks=%d attention=%d", step.Pose, step.Callback, step.Remaining, helpAttention)
 				}
 			case "trigger":
 				if hotelSceneOpenAction == nil || activeSetName != "hotupper" {
@@ -3750,46 +3349,6 @@ func run() error {
 		if status != 0 {
 			return false, fmt.Errorf("native scene scheduler returned status %#x", status)
 		}
-		if !visualEffectPump && pumpDue && helpTurnActive {
-			actorHeadings["help"] = scripts.NativeTurnStep(actorHeadings["help"], actorTurnTargets["help"], helpTurnRate)
-			helpTurnActive = actorHeadings["help"] != actorTurnTargets["help"]
-			displayChanged = displayChanged || currentScene == 0
-			if *debug && *debugLoops {
-				log.Printf("actor=help turn heading=%d target=%d active=%t", actorHeadings["help"], actorTurnTargets["help"], helpTurnActive)
-			}
-		}
-		if !visualEffectPump && helpInteractionStage == helpInteractionFacing && !helpTurnActive {
-			helpInteractionStage = helpInteractionPuppetPending
-		}
-		if pumpDue && helpWalk != nil {
-			previousPosition, previousHeading := helpActorPosition, actorHeadings["help"]
-			var walking bool
-			helpActorPosition, actorHeadings["help"], walking = helpWalk.Pass(helpActorPosition, actorHeadings["help"], helpTurnRate)
-			displayChanged = displayChanged || helpActorPosition != previousPosition || actorHeadings["help"] != previousHeading
-			if *debug && (*debugLoops || !walking) && (helpActorPosition != previousPosition || actorHeadings["help"] != previousHeading) {
-				log.Printf("actor=help walk point=%v heading=%d active=%t", helpActorPosition, actorHeadings["help"], walking)
-			}
-			if !walking {
-				helpWalk = nil
-				if helpInteractionStage == helpInteractionMoving {
-					currentDegree, found := render.NativeCurrentDegree(worldPoint[2])
-					if !found {
-						return false, fmt.Errorf("NITE.SET orientation %d has no native currentdeg", worldPoint[2])
-					}
-					actorTurnTargets["help"] = int16((int(currentDegree) + 128) % 256)
-					helpTurnActive = actorHeadings["help"] != actorTurnTargets["help"]
-					helpInteractionStage = helpInteractionFacing
-					if !helpTurnActive {
-						helpInteractionStage = helpInteractionPuppetPending
-					}
-				} else if helpInteractionStage == helpInteractionReturning {
-					if err := completeHelpReturn(); err != nil {
-						return false, fmt.Errorf("resume Help idle callback: %w", err)
-					}
-					displayChanged = true
-				}
-			}
-		}
 		if trotterWalk != nil {
 			now := scripts.NativeFrameUnits(scripts.NativeTickMilliseconds())
 			if now >= trotterWalkNext {
@@ -3834,70 +3393,6 @@ func run() error {
 			if err := refreshWorldScene(); err != nil {
 				return false, err
 			}
-		}
-		if !visualEffectPump && helpInteractionStage == helpInteractionPuppetPending {
-			if err := startHelpPuppet(); err != nil {
-				return false, err
-			}
-			return true, nil
-		}
-		if !visualEffectPump && helpInteractionStage == helpInteractionPuppetSpeaking {
-			if helpDialogue == nil {
-				return false, fmt.Errorf("Help dialogue state is missing its puppet player")
-			}
-			frameTick := scripts.NativeFrameUnits(scripts.NativeTickMilliseconds())
-			var frame render.IndexedFrame
-			var changed bool
-			var err error
-			if helpDialogueSkip {
-				frame, changed, err = helpDialogue.Skip()
-				helpDialogueSkip = false
-			} else {
-				frame, changed, err = helpDialogue.Update(frameTick)
-			}
-			if err != nil {
-				return false, fmt.Errorf("advance Help dialogue: %w", err)
-			}
-			if changed {
-				currentFrame, stageFrame = frame, frame
-				if !helpDialogue.Active() {
-					if helpInitialPage {
-						helpInitialPage = false
-						if err := showHelpChoices(helpPage); err != nil {
-							return false, fmt.Errorf("show Help choices: %w", err)
-						}
-					} else if helpSpeechStageIndex+1 < len(helpSpeechStages) {
-						helpSpeechStageIndex++
-						if err := startHelpSpeechStage(); err != nil {
-							return false, fmt.Errorf("start Help speech stage: %w", err)
-						}
-					} else if err := finishHelpChoice(); err != nil {
-						return false, fmt.Errorf("finish Help choice: %w", err)
-					}
-				}
-				return true, nil
-			}
-			if displayChanged {
-				frame, err = helpDialogue.Frame()
-				if err != nil {
-					return false, fmt.Errorf("refresh Help dialogue frame: %w", err)
-				}
-				currentFrame, stageFrame = frame, frame
-				return true, nil
-			}
-		}
-		if !visualEffectPump && helpInteractionStage == helpInteractionPuppetDelay && scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) >= helpDelayUntil {
-			helpDelayReady = true
-			if err := startHelpSpeechStage(); err != nil {
-				return false, fmt.Errorf("continue delayed Help speech: %w", err)
-			}
-			return true, nil
-		}
-		if !visualEffectPump && displayChanged && helpInteractionStage == helpInteractionPuppetChoices {
-			if err := drawHelpChoices(helpChoiceOutline); err != nil {
-				return false, fmt.Errorf("refresh Help choice panel: %w", err)
-			}
-			return true, nil
 		}
 		if !visualEffectPump && laurelInteractionStage == laurelInteractionChoices && laurelChoiceUntil != 0 && scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) >= laurelChoiceUntil {
 			laurelChoiceUntil, laurelChoicePressActive = 0, false
@@ -4257,11 +3752,6 @@ func run() error {
 					cursor = "touch"
 				}
 			}
-			if helpInteractionStage == helpInteractionPuppetChoices {
-				if _, found := scripts.NativePuppetChoiceAt(point, helpActiveChoices); found {
-					cursor = "touch"
-				}
-			}
 			if isaoInteractionStage == isaoInteractionPuppetChoices {
 				if _, found := scripts.NativePuppetChoiceAt(point, isaoActiveChoices); found {
 					cursor = "touch"
@@ -4409,8 +3899,8 @@ func run() error {
 		}
 	}
 	captureGameProgress := func() save.GameProgress {
-		positions := map[string][3]int16{"help": helpActorPosition, "isao": isaoPosition, "trotter": trotterPosition, "laurel": laurelPosition, "bone": boneWorldProp.Position}
-		progress := save.GameProgress{Version: 1, Day: gameDay, Clock: gameClock, Phase: int16(phase), GamePhase: gamePhase, SetName: activeSetName, ViewName: string(view.Name[1:]), TownReturnScene: townReturnScene, Point: worldPoint, PlayerCash: playercash, InventoryOwners: cloneStringMap(inventoryOwners), InventoryHidden: cloneBoolMap(inventoryHidden), HandItem: handItem, HandFlag: handFlag, BoneOwner: boneOwner, BoneInInventory: boneInInventory, BoneWorldVisible: boneWorldProp.Visible, DogVisible: dogVisibleState, ActorPoses: cloneStringMap(actorPoses), ActorHeadings: actorHeadings, ActorPositions: positions, StoryValues: map[string]int32{"isaoActorValue": isaoActorValue, "isaoGiftCounter": isaoGiftCounter, "isaoPhase": int32(isaoPhase), "trotterPhase": int32(trotterPhase), "helpActorValue": helpActorValue, "helpPhase": int32(helpPhase), "jonesPhase": int32(jonesPhase), "mariePhase": int32(mariePhase), "laurelPhase": int32(laurelPhase), "oonaActorValue": oonaActorValue}, StoryFlags: map[string]bool{"isaoVisible": isaoVisible, "isaoBouncer": isaoBouncer, "isaoDirGo": isaoDirGo, "helpVisible": helpVisible}}
+		positions := map[string][3]int16{"isao": isaoPosition, "trotter": trotterPosition, "laurel": laurelPosition, "bone": boneWorldProp.Position}
+		progress := save.GameProgress{Version: 1, Day: gameDay, Clock: gameClock, Phase: int16(phase), GamePhase: gamePhase, SetName: activeSetName, ViewName: string(view.Name[1:]), TownReturnScene: townReturnScene, Point: worldPoint, PlayerCash: playercash, InventoryOwners: cloneStringMap(inventoryOwners), InventoryHidden: cloneBoolMap(inventoryHidden), HandItem: handItem, HandFlag: handFlag, BoneOwner: boneOwner, BoneInInventory: boneInInventory, BoneWorldVisible: boneWorldProp.Visible, DogVisible: dogVisibleState, ActorPoses: cloneStringMap(actorPoses), ActorHeadings: actorHeadings, ActorPositions: positions, StoryValues: map[string]int32{"isaoActorValue": isaoActorValue, "isaoGiftCounter": isaoGiftCounter, "isaoPhase": int32(isaoPhase), "trotterPhase": int32(trotterPhase), "helpPhase": int32(helpPhase), "jonesPhase": int32(jonesPhase), "mariePhase": int32(mariePhase), "laurelPhase": int32(laurelPhase), "oonaActorValue": oonaActorValue}, StoryFlags: map[string]bool{"isaoVisible": isaoVisible, "isaoBouncer": isaoBouncer, "isaoDirGo": isaoDirGo}}
 		progress.StoryValues["trotterGiftCounter"] = trotterGiftCounter
 		progress.StoryValues["jonesRingStory"] = int32(jonesRingStory)
 		progress.StoryValues["trotterActorValue"] = trotterActorValue
@@ -4513,9 +4003,6 @@ func run() error {
 		if visible, found := progress.StoryFlags["trotterVisible"]; found {
 			trotterVisible = visible
 		}
-		if value, found := progress.StoryValues["helpActorValue"]; found {
-			helpActorValue = value
-		}
 		if value, found := progress.StoryValues["helpPhase"]; found {
 			helpPhase = int16(value)
 		}
@@ -4561,12 +4048,12 @@ func run() error {
 		for name, heading := range progress.ActorHeadings {
 			actorHeadings[name] = heading
 		}
-		for name, target := range map[string]*[3]int16{"help": &helpActorPosition, "isao": &isaoPosition, "trotter": &trotterPosition, "bone": &boneWorldProp.Position} {
+		for name, target := range map[string]*[3]int16{"isao": &isaoPosition, "trotter": &trotterPosition, "bone": &boneWorldProp.Position} {
 			if position, found := progress.ActorPositions[name]; found {
 				*target = position
 			}
 		}
-		for name, target := range map[string]*bool{"isaoVisible": &isaoVisible, "isaoBouncer": &isaoBouncer, "isaoDirGo": &isaoDirGo, "trotterVisible": &trotterVisible, "helpVisible": &helpVisible} {
+		for name, target := range map[string]*bool{"isaoVisible": &isaoVisible, "isaoBouncer": &isaoBouncer, "isaoDirGo": &isaoDirGo, "trotterVisible": &trotterVisible} {
 			if value, found := progress.StoryFlags[name]; found {
 				*target = value
 			}
@@ -4603,6 +4090,7 @@ func run() error {
 			setInventoryLoopsPaused(false)
 		}
 		currentScene, inventoryMenuActive = 0, false
+		publishBone()
 		startAvatarNoFace(scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
 		if err := refreshWorldScene(); err != nil {
 			return err
@@ -4640,8 +4128,7 @@ func run() error {
 	}
 	startDeathMovie := func() error {
 		nativeLoops = scripts.LoopScheduler{}
-		helpWalk, trotterWalk = nil, nil
-		helpTurnActive = false
+		trotterWalk = nil
 		if themePlayer != nil {
 			if err := themePlayer.Close(); err != nil {
 				return err
@@ -4710,8 +4197,8 @@ func run() error {
 	}
 	startNewGame := func() error {
 		nativeLoops = scripts.LoopScheduler{}
-		helpWalk, trotterWalk = nil, nil
-		helpInteractionStage, isaoInteractionStage, trotterInteractionStage = helpInteractionIdle, isaoInteractionIdle, trotterInteractionIdle
+		trotterWalk = nil
+		isaoInteractionStage, trotterInteractionStage = isaoInteractionIdle, trotterInteractionIdle
 		laurelInteractionStage, laurelWalk, laurelInventoryReturnPending = laurelInteractionIdle, nil, false
 		laurelPendingStep, laurelChoices, laurelContinuation, laurelChoicePressActive = scripts.LaurelStep{}, nil, nil, false
 		isaoInventoryReturnPending, trotterInventoryReturnPending, avatarTipActive = false, false, false
@@ -4771,7 +4258,7 @@ func run() error {
 		}
 		finish := func(bool) (render.IndexedFrame, bool, error) {
 			gameDay, gameClock, gamePhase, phase = route.Day, route.Clock, route.Phase, int(route.Phase)
-			dogVisibleState, helpVisible, trotterVisible, trotterPhase = false, false, false, 0
+			dogVisibleState, trotterVisible, trotterPhase = false, false, 0
 			hotelSavedScene, hotelSavedDirection = route.SavedScene, route.SavedDirection
 			townReturnScene = route.TownReturnScene
 			if route.FightOn {
@@ -5513,7 +5000,7 @@ func run() error {
 			if playback != nil {
 				movieFrame, movieWaiting = playback.FrameIndex(), playback.WaitingForInput()
 			}
-			return map[string]any{"day": gameDay, "clock": gameClock, "phase": gamePhase, "set": activeSetName, "scene": string(stage.Scenes[currentScene].Name[1:]), "point": worldPoint, "cash": playercash, "inventory": inventoryOwners, "inventoryMenu": inventoryMenuActive, "breakfast": hotelHotplateStage != nil && stage == hotelHotplateStage, "jonesPhase": jonesPhase, "jonesRingStory": jonesRingStory, "laurelPhase": laurelPhase, "movieFrame": movieFrame, "movieWaiting": movieWaiting, "scriptActors": scriptActors.Snapshot([]string{"mwife", "blood", "buick", "marie", "jones", "leroy"})}
+			return map[string]any{"day": gameDay, "clock": gameClock, "phase": gamePhase, "set": activeSetName, "scene": string(stage.Scenes[currentScene].Name[1:]), "point": worldPoint, "cash": playercash, "inventory": inventoryOwners, "inventoryMenu": inventoryMenuActive, "breakfast": hotelHotplateStage != nil && stage == hotelHotplateStage, "jonesPhase": jonesPhase, "jonesRingStory": jonesRingStory, "laurelPhase": laurelPhase, "helpPhase": helpPhase, "bone": map[string]any{"visible": boneWorldProp.Visible, "owner": boneOwner, "position": boneWorldProp.Position, "view": boneWorldProp.View.Name}, "movieFrame": movieFrame, "movieWaiting": movieWaiting, "scriptActors": scriptActors.Snapshot([]string{"mwife", "blood", "buick", "marie", "jones", "leroy", "help"})}
 		})
 	}
 	scriptBlackFrame = blackFrame
@@ -5569,6 +5056,9 @@ func run() error {
 				displayChanged = true
 			}
 			done, err := scriptTask.Poll()
+			if collectErr := collectScriptGlobals(); err == nil {
+				err = collectErr
+			}
 			if done {
 				label := scriptTask.Label
 				scriptTask = nil
@@ -5721,24 +5211,18 @@ func run() error {
 				}
 			}
 			if dog2OfferStage == dog2OfferDelayAfterEast && now >= dog2OfferUntil {
-				if err := setupHelpActor(); err != nil {
+				if err := runScript("help setup", `sendtoactor("help",setupactor("dog"))`); err != nil {
 					return render.IndexedFrame{}, false, fmt.Errorf("setup Help after DOG2.MOV: %w", err)
 				}
 				if err := refreshWorldScene(); err != nil {
 					return render.IndexedFrame{}, false, fmt.Errorf("show Help after DOG2.MOV: %w", err)
 				}
-				started, err := beginHelpPuppetTalk()
-				if err != nil {
+				if err := startScriptSource("help after dog", `sendtoactor("help",mousedown(0))`, func() { gamePhase, phase = 2, 2 }); err != nil {
 					return render.IndexedFrame{}, false, fmt.Errorf("run Help mousedown after DOG2.MOV: %w", err)
 				}
 				dog2OfferStage = dog2OfferIdle
-				if started {
-					dog2PhaseAfterHelp = true
-				} else {
-					gamePhase = 2
-				}
 				if *debug {
-					log.Printf("actor=dog offerobject=help-mousedown started=%t phase-pending=%t", started, dog2PhaseAfterHelp)
+					log.Printf("actor=dog offerobject=help-mousedown script-task=true")
 				}
 				return currentFrame, true, nil
 			}
@@ -5942,7 +5426,7 @@ func run() error {
 					}
 					if dogMovieNeedsHelp {
 						dogMovieNeedsHelp = false
-						if err := setupHelpActor(); err != nil {
+						if err := runScript("help setup", `sendtoactor("help",setupactor("dog"))`); err != nil {
 							return render.IndexedFrame{}, false, fmt.Errorf("setup Help after DOG1.MOV: %w", err)
 						}
 						if err := refreshWorldScene(); err != nil {
@@ -6090,7 +5574,7 @@ func run() error {
 		}
 		if dogMovieNeedsHelp {
 			dogMovieNeedsHelp = false
-			if err := setupHelpActor(); err != nil {
+			if err := runScript("help setup", `sendtoactor("help",setupactor("dog"))`); err != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("setup Help after DOG1.MOV: %w", err)
 			}
 			if err := refreshWorldScene(); err != nil {
@@ -6206,18 +5690,6 @@ func run() error {
 			} else if *debug {
 				log.Printf("wavevolume=%d slider=%d,%d", waveVolume, slider.X, slider.Y)
 			}
-			return
-		}
-		if helpInteractionStage == helpInteractionPuppetSpeaking {
-			if key == ebiten.KeySpace || key == ebiten.KeyEscape || key == ebiten.KeyQ || key == ebiten.KeyPeriod {
-				helpDialogueSkip = true
-			}
-			return
-		}
-		if helpInteractionStage != helpInteractionIdle && helpInteractionStage != helpInteractionPuppetChoices {
-			return
-		}
-		if helpInteractionStage == helpInteractionPuppetChoices {
 			return
 		}
 		if laurelInteractionStage == laurelInteractionSpeaking {
@@ -6443,21 +5915,6 @@ func run() error {
 			if mouseEvent.Button == ebiten.MouseButtonLeft {
 				return readingMouseDown(point)
 			}
-			return currentFrame, false, nil
-		}
-		if helpInteractionStage != helpInteractionIdle && helpInteractionStage != helpInteractionPuppetChoices {
-			return currentFrame, false, nil
-		}
-		if helpInteractionStage == helpInteractionPuppetChoices {
-			if mouseEvent.Button != ebiten.MouseButtonLeft {
-				return currentFrame, false, nil
-			}
-			event, found := scripts.NativePuppetChoiceAt(point, helpActiveChoices)
-			if !found {
-				return currentFrame, false, nil
-			}
-			helpChoicePressActive, helpChoicePressEvent = true, event
-			helpChoicePressIndex = (int(int16(point)) - 264) / 24
 			return currentFrame, false, nil
 		}
 		if laurelInteractionStage == laurelInteractionSpeaking {
@@ -6692,6 +6149,7 @@ func run() error {
 					if distance < 512 {
 						boneInventoryFrame = inventoryLargeFrames["bone"]
 						boneInInventory, boneOwner, inventoryOwners["bone"], handItem, boneWorldProp.View, boneWorldProp.Visible = true, "stranger", "stranger", "Bone", boneLargeView, false
+						publishBone()
 						if err := soundBank.Play(audioContext, "inven", 1); err != nil {
 							return render.IndexedFrame{}, false, fmt.Errorf("play Bone inventory sound: %w", err)
 						}
@@ -6704,13 +6162,6 @@ func run() error {
 						return currentFrame, true, nil
 					}
 					return currentFrame, false, nil
-				}
-				if strings.EqualFold(actorName, "Help") {
-					started, err := beginHelpPuppetTalk()
-					if err != nil {
-						return render.IndexedFrame{}, false, err
-					}
-					return currentFrame, started, nil
 				}
 				if strings.EqualFold(actorName, "dog") && activeSetName == "town" {
 					camera := render.NativeActorCameraPosition(worldPoint)
@@ -6954,41 +6405,6 @@ func run() error {
 			}
 			return currentFrame, false, nil
 		}
-		if helpInteractionStage == helpInteractionPuppetChoices && helpChoicePressActive {
-			event, found := scripts.NativePuppetChoiceAt(state.Point, helpActiveChoices)
-			outline := -1
-			if found && event == helpChoicePressEvent {
-				outline = (int(int16(state.Point)) - 264) / 24
-			}
-			if state.LeftDown {
-				if outline == helpChoiceOutline {
-					return currentFrame, false, nil
-				}
-				if err := drawHelpChoices(outline); err != nil {
-					return render.IndexedFrame{}, false, err
-				}
-				return currentFrame, true, nil
-			}
-			if state.LeftReleased {
-				selected := outline >= 0 && outline == helpChoicePressIndex
-				selectedEvent := helpChoicePressEvent
-				helpChoicePressActive, helpChoicePressIndex = false, -1
-				if selected {
-					if err := startHelpChoice(selectedEvent); err != nil {
-						return render.IndexedFrame{}, false, fmt.Errorf("run Help choice %d: %w", selectedEvent, err)
-					}
-					return currentFrame, true, nil
-				}
-				if helpChoiceOutline >= 0 {
-					if err := drawHelpChoices(-1); err != nil {
-						return render.IndexedFrame{}, false, err
-					}
-					return currentFrame, true, nil
-				}
-				return currentFrame, false, nil
-			}
-			return currentFrame, false, nil
-		}
 		if isaoInteractionStage == isaoInteractionPuppetChoices && isaoChoicePressActive {
 			event, found := scripts.NativePuppetChoiceAt(state.Point, isaoActiveChoices)
 			outline := -1
@@ -7082,6 +6498,7 @@ func run() error {
 					nativeLoops.Stop(scripts.LoopKindActor, "dog")
 					if activeSetName == "town" && view.Resource == 135 && worldPoint[2] == assets.SetDirectionNorth {
 						boneInInventory, boneOwner, boneWorldProp.Visible = false, "none", false
+						publishBone()
 						inventoryOwners["bone"], handItem = "none", ""
 						dog2OfferStage, pendingSpotMovie = dog2OfferMovie, "MOVIES/DOG2.MOV"
 						if *debug {

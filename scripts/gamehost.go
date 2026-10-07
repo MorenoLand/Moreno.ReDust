@@ -42,7 +42,8 @@ type GameHostEnv struct {
 	// Program loads a script resource from a container.
 	Program func(file string, resource uint32) (*Program, error)
 	// Shop resolves an open shop's script (FUN_00421520).
-	Shop func(name string) (file string, resource uint32, ok bool)
+	Shop       func(name string) (file string, resource uint32, ok bool)
+	PropScript func(name string) (file string, resource uint32, shop string, ok bool)
 	// PropDegree is a prop's degree (propdeg).
 	PropDegree func(name string) (int16, bool)
 	// Ticks is the native time-unit clock delay and the fades wait on.
@@ -355,7 +356,7 @@ func (h *GameHost) Command(call *ScriptCall) (int, uint16, error) {
 		if args[1].Kind != 4 {
 			return 0, ScriptStatusWrongType, nil
 		}
-		actor.Job = &ActorJob{Mode: ActorJobTurn, Heading: int16(args[1].Int & 0xff)}
+		actor.Job = &ActorJob{Mode: ActorJobTurn, Target: actor.Star, Heading: int16(args[1].Int & 0xff)}
 		return consumed, 0, nil
 	case "walktostar":
 		actor, args, consumed, status, err := h.actorArgs(call, 2)

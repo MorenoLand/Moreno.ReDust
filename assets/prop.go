@@ -28,9 +28,10 @@ type PropArchive struct {
 }
 
 type PropDefinition struct {
-	Resource uint32
-	Name     string
-	views    map[string]uint32
+	Resource       uint32
+	ScriptResource uint32
+	Name           string
+	views          map[string]uint32
 }
 
 type PropView struct {
@@ -126,7 +127,7 @@ func parsePropDefinition(resource uint32, data []byte, resourceCount uint32) (Pr
 		return PropDefinition{}, fmt.Errorf("definition %q view count %d exceeds resource size %d", name, countValue, len(data))
 	}
 	count := int(countValue)
-	definition := PropDefinition{Resource: resource, Name: name, views: make(map[string]uint32, count)}
+	definition := PropDefinition{Resource: resource, ScriptResource: binary.LittleEndian.Uint32(data[0x26:0x2a]), Name: name, views: make(map[string]uint32, count)}
 	for index := range count {
 		row := data[propViewRowsOffset+index*propViewRowSize : propViewRowsOffset+(index+1)*propViewRowSize]
 		descriptor := binary.LittleEndian.Uint32(row[:4])
@@ -144,6 +145,11 @@ func parsePropDefinition(resource uint32, data []byte, resourceCount uint32) (Pr
 		definition.views[key] = descriptor
 	}
 	return definition, nil
+}
+
+func (a *PropArchive) Definition(name string) (PropDefinition, bool) {
+	definition, found := a.definitions[asciiUpper(name)]
+	return definition, found
 }
 
 func (a *PropArchive) View(propName, viewName string) (PropView, error) {

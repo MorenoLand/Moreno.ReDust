@@ -641,7 +641,7 @@ func (h *GameHost) puppetValue(name string, call *ScriptCall) (Record, int, uint
 			return Record{}, 0, ScriptStatusWrongType, true, nil
 		}
 		destination := ""
-		if actor, missing := h.Actors.Lookup(args[0].Text); missing == 0 && actor.Job != nil && actor.Job.Mode != ActorJobTurn {
+		if actor, missing := h.Actors.Lookup(args[0].Text); missing == 0 && actor.Job != nil {
 			destination = actor.Job.Target
 		}
 		record, status, err := call.Interpreter.Record(ScriptValue{Kind: 3, Text: destination})

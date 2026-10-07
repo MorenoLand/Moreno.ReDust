@@ -30,6 +30,11 @@ type PropRecord struct {
 // ScriptProps holds the props scripts have touched, keyed case-insensitively.
 type ScriptProps struct {
 	props map[string]*PropRecord
+	Balls [16]PropBallJob
+}
+type PropBallJob struct {
+	Name   string
+	Active bool
 }
 
 func NewScriptProps() *ScriptProps { return &ScriptProps{props: map[string]*PropRecord{}} }
@@ -106,6 +111,33 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 		case "propstar":
 			prop.Star = args[1].Text
 		}
+		if name == "propset" || name == "propstar" {
+			h.Props.StopBall(prop.Name)
+			if strings.EqualFold(prop.Set, h.currentSet()) && h.Env.ResolveStar != nil {
+				if position, ok := h.Env.ResolveStar(prop.Set, prop.Star); ok {
+					prop.X, prop.Y, prop.Z = int32(position[0]), int32(position[1]), int32(position[2])
+				}
+			}
+		}
+		return consumed, 0, true, nil
+	case "sendtoprop":
+		consumed, status, err := h.sendToProp(call)
+		return consumed, status, true, err
+	case "stopball":
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return 0, status, true, err
+		}
+		if len(args) != 1 || args[0].Kind != 3 {
+			return 0, ScriptStatusWrongType, true, nil
+		}
+		if status := nativeName(args[0].Text); status != 0 {
+			return 0, status, true, nil
+		}
+		if h.Props == nil {
+			return 0, 0, true, fmt.Errorf("props are unavailable")
+		}
+		h.Props.StopBall(args[0].Text)
 		return consumed, 0, true, nil
 	case "propdeg", "propvalue", "propscale", "propzclip", "propspeed":
 		prop, args, consumed, status, err := h.propArgs(call, 2)
@@ -214,4 +246,64 @@ func (h *GameHost) propValue(name string, call *ScriptCall) (Record, int, uint16
 		return Record{}, 0, ScriptStatusWrongType, true, nil
 	}
 	return Record{}, 0, 0, false, nil
+}
+func (t *ScriptProps) StopBall(name string) {
+	for index := range t.Balls {
+		if strings.EqualFold(name, "all") {
+			t.Balls[index].Active = false
+			continue
+		}
+		if t.Balls[index].Active && strings.EqualFold(t.Balls[index].Name, name) {
+			t.Balls[index].Active = false
+			return
+		}
+	}
+}
+func (h *GameHost) sendToProp(call *ScriptCall) (int, uint16, error) {
+	if call.Kind(call.Start+1) != opOpen {
+		return 0, ScriptStatusMalformed, nil
+	}
+	target, consumed, status, err := call.Eval(call.Start + 2)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	value, status, err := call.Interpreter.Value(target)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	if value.Kind != 3 {
+		return 0, ScriptStatusWrongType, nil
+	}
+	if status := nativeName(value.Text); status != 0 {
+		return 0, status, nil
+	}
+	message := call.Start + 2 + consumed
+	if call.Kind(message) != opComma {
+		return 0, ScriptStatusMissingComma, nil
+	}
+	message++
+	if h.Env.PropScript == nil || h.Env.Program == nil {
+		return 0, 0, fmt.Errorf("%w: sendtoprop has no prop script resolver", ErrHostOpcodeUnimplemented)
+	}
+	file, resource, shop, found := h.Env.PropScript(value.Text)
+	if !found {
+		return 0, 0x0a, nil
+	}
+	program, err := h.Env.Program(file, resource)
+	if err != nil {
+		return 0, 0, err
+	}
+	shared, me, status, err := h.shopScript(shop)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	chain := []ScriptFrame{{Program: program, Me: value.Text, Target: value.Text, Label: "Prop Script: "}, {Program: shared, Me: me, Target: value.Text, Label: "Shop Script: ", Last: true}}
+	used, status, err := call.Interpreter.Call(chain, call.Chain, call.FrameIndex, call.Locals, call.Program, message)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	if call.Kind(message+used) != opClose {
+		return 0, ScriptStatusMalformed, nil
+	}
+	return message + used + 1 - call.Start, 0, nil
 }
