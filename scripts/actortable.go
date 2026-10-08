@@ -162,7 +162,7 @@ func nativeName(value string) uint16 {
 }
 
 func (a *ActorRecord) String() string {
-	return fmt.Sprintf("%s set=%s star=%s pos=%v deg=%d pose=%s visible=%t", a.Name, a.Set, a.Star, a.Position, a.Heading, a.Pose, a.Visible)
+	return fmt.Sprintf("%s set=%s star=%s pos=%v deg=%d pose=%s frame=%d scale=%d visible=%t", a.Name, a.Set, a.Star, a.Position, a.Heading, a.Pose, a.Frame, a.Scale, a.Visible)
 }
 
 // ActorRecordState is the persisted form of an ActorRecord.

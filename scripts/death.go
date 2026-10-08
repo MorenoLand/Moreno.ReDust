@@ -35,7 +35,7 @@ type DeathButtonAction struct {
 }
 
 func NewDeathSequence(workspace assets.Workspace, cause string, random *NativeRandom) (DeathSequence, error) {
-	programs, err := loadTrotterPrograms(workspace, "DATA/NEW.FLT", []uint32{14})
+	programs, err := loadProgramResources(workspace, "DATA/NEW.FLT", []uint32{14})
 	if err != nil {
 		return DeathSequence{}, err
 	}
