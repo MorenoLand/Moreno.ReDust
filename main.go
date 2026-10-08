@@ -1441,6 +1441,7 @@ func run() error {
 			}
 		}
 		activeSet, activeSetName, activeSetOwned = nextSet, semanticName, nextOwned
+		render.SetNativeCamera(nextSet.CameraPullback(), nextSet.CameraHeight())
 		view, worldPoint, backgroundFrame = nextView, nextPoint, background
 		scriptHost.OpenSet()
 		doorOwner = ""

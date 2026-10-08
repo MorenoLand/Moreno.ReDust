@@ -67,7 +67,16 @@ type Set struct {
 	palette            []byte
 	secondaryResource  uint32
 	resourceCount      uint32
+	cameraPullback     int
+	cameraHeight       int
 }
+
+// CameraPullback and CameraHeight are the set's camera fields, loaded by
+// FUN_004195F0 from the metadata resource (offsets 0x18 and 0x1A) into the
+// globals DAT_00459A4C and DAT_00459A4E that FUN_00406570 builds the camera
+// from.
+func (s *Set) CameraPullback() int { return s.cameraPullback }
+func (s *Set) CameraHeight() int   { return s.cameraHeight }
 
 func (w Workspace) OpenSet(name string) (*Set, error) {
 	cache, err := w.OpenResourceCache(name)
@@ -123,7 +132,7 @@ func (w Workspace) OpenSet(name string) (*Set, error) {
 		views[index] = SetView{SceneID: binary.LittleEndian.Uint16(row[0:2]), DirectionID: binary.LittleEndian.Uint16(row[2:4]), Flags: binary.LittleEndian.Uint16(row[8:10]), ReferenceIndex: binary.LittleEndian.Uint16(row[10:12]), Name: viewName, Resource: resource}
 	}
 	failed = false
-	return &Set{cache: cache, views: views, backgroundResource: backgroundResource, backgroundCount: backgroundCount, backgroundTable: backgroundTable, palette: append([]byte(nil), metadata[setPaletteOffset:setPaletteOffset+setPaletteSize]...), secondaryResource: secondaryResource, resourceCount: header.CountB}, nil
+	return &Set{cache: cache, views: views, backgroundResource: backgroundResource, backgroundCount: backgroundCount, backgroundTable: backgroundTable, palette: append([]byte(nil), metadata[setPaletteOffset:setPaletteOffset+setPaletteSize]...), secondaryResource: secondaryResource, resourceCount: header.CountB, cameraPullback: int(binary.LittleEndian.Uint16(metadata[0x18:0x1a])), cameraHeight: int(binary.LittleEndian.Uint16(metadata[0x1a:0x1c]))}, nil
 }
 
 func readSetResource(cache *ResourceCache, index uint32) ([]byte, error) {

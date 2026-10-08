@@ -85,6 +85,15 @@ func NativeDirectionVector(heading, length int16) ([2]int16, bool) {
 	}
 }
 
+// The camera pull-back and height come from the open set (DAT_00459A4C and
+// DAT_00459A4E); town and NITE use 64 and 62, interiors differ.
+var nativeCameraPullback, nativeCameraHeight = 64, 62
+
+// SetNativeCamera records the open set's camera fields.
+func SetNativeCamera(pullback, height int) {
+	nativeCameraPullback, nativeCameraHeight = pullback, height
+}
+
 func NativeActorCameraPosition(point [3]int16) [3]int {
 	forwardX, forwardY := 0, -1
 	switch point[2] {
@@ -96,7 +105,7 @@ func NativeActorCameraPosition(point [3]int16) [3]int {
 		forwardX, forwardY = -1, 0
 	}
 	centerX, centerY := int(point[0])*256+128, int(point[1])*256+128
-	return [3]int{centerX - 64*forwardX, centerY - 64*forwardY, 62}
+	return [3]int{centerX - nativeCameraPullback*forwardX, centerY - nativeCameraPullback*forwardY, nativeCameraHeight}
 }
 
 // nativeActorBearing returns a bearing from a delta to the 256-unit circle, with the first
