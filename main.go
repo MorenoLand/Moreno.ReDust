@@ -424,12 +424,10 @@ func run() error {
 		stage.Close()
 		return fmt.Errorf("resolve startup town actors: %w", err)
 	}
-	actorPoses := map[string]string{"leroy": "stand", "dog": "stand", "jones": "stand", "buick": "stand", "marie": "stand", "isao": "stand"}
+	actorPoses := map[string]string{"leroy": "stand", "dog": "stand", "jones": "stand", "buick": "stand", "marie": "stand"}
 	
-	actorHeadings := map[string]int16{"leroy": 0, "dog": 32, "jones": 0, "buick": 0, "marie": 128, "isao": 64}
+	actorHeadings := map[string]int16{"leroy": 0, "dog": 32, "jones": 0, "buick": 0, "marie": 128}
 	helpPhase := int16(0)
-	var isaoPosition [3]int16
-	isaoVisible, isaoBouncer, isaoDirGo := false, false, false
 	// Script-managed actors are driven by the general interpreter over their
 	// shipped scripts instead of hand-written state. The table holds every cast
 	// actor, built by the native constructor (FUN_0040C1F0); only the managed
@@ -438,7 +436,7 @@ func run() error {
 	scriptActors := scripts.NewScriptActors()
 	scriptActorCasts := map[string]assets.Cast{}
 	scriptActorRecords := map[string]assets.CastActor{}
-	scriptManaged := map[string]bool{"mwife": true, "blood": true, "buick": true, "marie": true, "jones": true, "leroy": true, "help": true, "laurel": true, "trotter": true}
+	scriptManaged := map[string]bool{"mwife": true, "blood": true, "buick": true, "marie": true, "jones": true, "leroy": true, "help": true, "laurel": true, "trotter": true, "isao": true}
 	var scriptTask *scripts.ScriptTask
 	var startScriptTask func(event scripts.ActorEvent) error
 	for _, cast := range []assets.Cast{gangCast, extraCast} {
@@ -457,15 +455,6 @@ func run() error {
 	}
 	const townCastWalkRate int16 = 3
 	const townActorHotDistance = 384
-	const (
-		isaoInteractionIdle uint8 = iota
-		isaoInteractionPuppetPending
-		isaoInteractionPuppetSpeaking
-		isaoInteractionPuppetChoices
-		isaoInteractionPuppetDelay
-		isaoInteractionInventory
-		isaoInteractionInventoryReturning
-	)
 	leroyPhase := int16(0)
 
 	// A choice base used to be captured from `currentFrame` on entry, so the choice screen
@@ -499,8 +488,7 @@ func run() error {
 	
 	
 	
-	isaoInteractionStage := isaoInteractionIdle
-	isaoPhase, trotterPhase, isaoActorValue, oonaActorValue := int16(0), int16(0), int32(0), int32(0)
+	isaoPhase, trotterPhase, oonaActorValue := int16(0), int16(0), int32(0)
 	var bloodPhase, docPhase, fightOn int16
 	var fearPhase int16
 	hotelSavedScene, hotelSavedDirection := "Scene C4", "east"
@@ -546,32 +534,10 @@ func run() error {
 			_ = deathBank.Close()
 		}
 	}()
-	var isaoPuppet *render.Puppet
-	var isaoPuppetTable assets.PuppetSpeechTable
-	var isaoDialogue *engine.PuppetDialogue
-	var isaoConversationBase render.IndexedFrame
-	var isaoChoiceGroups map[string][][]scripts.PuppetChoice
-	var isaoActiveChoices []scripts.PuppetChoice
-	var isaoCurrentCode string
-	isaoChoiceOutline := -1
-	isaoNextCode, isaoNextChoiceGroup := "", -1
-	var isaoChoicePressActive bool
-	var isaoChoicePressEvent int32
-	isaoChoicePressIndex := -1
-	var isaoDialogueSkip bool
-	var isaoSpeechFinishesRun bool
-	var isaoSecondRun bool
-	var isaoDelayUntil uint32
-	var isaoKeyMoviePending, isaoKeyMovieActive, isaoThemeResume bool
-	var isaoInventoryReturnPending bool
-	var isaoInventoryReturnCode string
-	var isaoGiftCounter int32
 
 	mariePhase := int16(0)
 	handItem, handFlag, inventoryMenuActive := "", int16(0), false
 	var marieInventoryProjected []render.ProjectedFlatProp
-	var marieInventoryProgram scripts.Program
-	var marieHandBevelChoices []scripts.PuppetChoice
 	var inventoryCashRendered int32
 	var inventoryCashRenderedValid bool
 	boneWorldProp := render.WorldPropSprite{Name: "Bone", Set: "town", Position: bonePosition, Heading: 32, Scale: 1200, Archive: inventoryArchive, View: boneSmallView}
@@ -588,12 +554,6 @@ func run() error {
 	var heldItemDragName string
 	var heldItemDragLast image.Point
 	defer func() {
-		if isaoDialogue != nil {
-			_ = isaoDialogue.Close()
-		}
-		if isaoPuppet != nil {
-			_ = isaoPuppet.Close()
-		}
 	}()
 	compositeWorld := func(background render.IndexedFrame, point [3]int16, actors []render.WorldActorSprite) (render.IndexedFrame, []render.ProjectedWorldActor, error) {
 		return render.CompositeWorldActorsAndProps(background, point, activeSetName, actors, []render.WorldPropSprite{boneWorldProp}, render.WorldOccludersForView(activeSetName, point))
@@ -625,20 +585,6 @@ func run() error {
 		// cost a regression. See assets.ActorCellVisible, which is kept as the measured
 		// cell arithmetic but is deliberately not wired in.
 		if activeSetName == "sallower" {
-			if isaoVisible {
-				for _, actor := range gangCast.Actors {
-					if !strings.EqualFold(actor.Name, "Isao") {
-						continue
-					}
-					actor.Position, actor.Located = isaoPosition, true
-					sprite, err := render.LoadCastActorFrame(workspace, gangCast, actor, actorPoses["isao"], 0, 4200, render.NativeActorViewAngle(isaoPosition, point, actorHeadings["isao"]), 32)
-					if err != nil {
-						return nil, fmt.Errorf("load Sallowers actor Isao: %w", err)
-					}
-					actors = append(actors, sprite)
-					break
-				}
-			}
 			return actors, nil
 		}
 		if activeSetName != "town" {
@@ -865,6 +811,9 @@ func run() error {
 		}
 		for name, degree := range inventoryDegrees {
 			scriptHost.Props.Get(name).Degree = degree
+		}
+		if oona, status := scriptActors.Lookup("oona"); status == 0 {
+			oona.Value = oonaActorValue
 		}
 		for _, shared := range sharedPhases {
 			if err := scriptInterpreter.SetGlobalNumber(shared.name, shared.get()); err != nil {
@@ -1214,16 +1163,6 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("refresh NITE actors: %w", err)
 		}
-		if *debug && activeSetName == "sallower" {
-			projectedCount := 0
-			for _, actor := range projected {
-				if strings.EqualFold(actor.Name, "Isao") {
-					projectedCount++
-					log.Printf("actor=isao projection depth=%d bounds=%d,%d,%d,%d", actor.Depth, actor.Bounds.Min.X, actor.Bounds.Min.Y, actor.Bounds.Max.X, actor.Bounds.Max.Y)
-				}
-			}
-			log.Printf("actor=isao scene-refresh set=%s view=%s point=%v visible=%t pose=%s heading=%d projected=%d", activeSetName, view.Name[1:], worldPoint, isaoVisible, actorPoses["isao"], actorHeadings["isao"], projectedCount)
-		}
 		panel, err := render.StageFrame(stage, currentPixels.Pixels)
 		if err != nil {
 			return fmt.Errorf("refresh mainpanel: %w", err)
@@ -1282,7 +1221,7 @@ func run() error {
 			}
 			return true, nil
 		}
-		if !avatarIdleActive || currentScene == 0 && (isaoInteractionStage != isaoInteractionIdle) {
+		if !avatarIdleActive {
 			return false, nil
 		}
 		if now < avatarIdleNext {
@@ -1530,18 +1469,11 @@ func run() error {
 			gamePhase = openTrotter.SetGamePhase
 		}
 		if semanticName == "sallower" {
-			position, found, err := nextSet.ResolveLocation("sallower.isao")
-			if err != nil || !found {
-				return render.IndexedFrame{}, fmt.Errorf("resolve Sallowers Isao position: point=%v found=%t err=%v", position, found, err)
+			if err := deliverScriptEvent(scripts.ActorEvent{Actor: "isao", Message: "setupactor(\"bar\")"}); err != nil {
+				return render.IndexedFrame{}, err
 			}
-			isaoPosition, isaoVisible, actorPoses["isao"], actorHeadings["isao"] = position, true, "stand", 64
-			isaoBouncer, isaoDirGo = false, false
-			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "isao", Callback: "isaoidle", Remaining: 2}); status != 0 {
-				return render.IndexedFrame{}, fmt.Errorf("register Isao idle loop returned status %#x", status)
-			}
-		} else {
-			isaoVisible = false
-			nativeLoops.Stop(scripts.LoopKindActor, "isao")
+		} else if err := deliverScriptEvent(scripts.ActorEvent{Actor: "isao", Message: "putdownactor()"}); err != nil {
+			return render.IndexedFrame{}, err
 		}
 		if semanticName == "hotlower" && (gameDay == 1 && laurelPhase < 2 && gamePhase < 7 || gameDay == 2 && (gamePhase == 1 && gameClock == 1 || gameClock == 3 && gamePhase == 0) || gameDay == 3 && gameClock == 2 && laurelPhase == 0) {
 			if err := deliverScriptEvent(scripts.ActorEvent{Actor: "laurel", Message: "setupactor(\"hotel\")"}); err != nil { return render.IndexedFrame{}, err }
@@ -1614,388 +1546,6 @@ func run() error {
 		}
 		return nextFrame, nil
 	}
-	openIsaoPuppet := func() error {
-		if isaoPuppet != nil {
-			return nil
-		}
-		puppet, err := render.OpenPuppet(workspace, "PUPPETS/ISAO.PUP")
-		if err != nil {
-			return err
-		}
-		table, err := workspace.OpenPuppetSpeechTable("PUPPETS/ISAO.PUP")
-		if err != nil {
-			_ = puppet.Close()
-			return err
-		}
-		cache, err := workspace.OpenResourceCache("PUPPETS/ISAO.PUP")
-		if err != nil {
-			_ = puppet.Close()
-			return err
-		}
-		lease, err := cache.Acquire(22)
-		if err != nil {
-			_ = cache.Close()
-			_ = puppet.Close()
-			return err
-		}
-		data, err := lease.Bytes()
-		if closeErr := lease.Close(); err == nil {
-			err = closeErr
-		}
-		if closeErr := cache.Close(); err == nil {
-			err = closeErr
-		}
-		if err != nil {
-			_ = puppet.Close()
-			return err
-		}
-		program, err := scripts.ParseProgram(data)
-		if err != nil {
-			_ = puppet.Close()
-			return err
-		}
-		if len(marieInventoryProgram.Records) == 0 {
-			inventoryData, err := inventoryArchive.Resource(1)
-			if err != nil {
-				_ = puppet.Close()
-				return err
-			}
-			inventoryProgram, err := scripts.ParseProgram(inventoryData)
-			if err != nil {
-				_ = puppet.Close()
-				return err
-			}
-			handChoices, err := scripts.PuppetBevelChoices(inventoryProgram, "addhandbevel")
-			if err != nil {
-				_ = puppet.Close()
-				return err
-			}
-			marieInventoryProgram, marieHandBevelChoices = inventoryProgram, handChoices
-		}
-		groups := make(map[string][][]scripts.PuppetChoice, 5)
-		for _, code := range []string{"runyoself", "whoareyou", "byenow", "brushoff", "ring"} {
-			groups[code], err = scripts.PuppetBevelChoiceGroups(program, code)
-			if err != nil {
-				_ = puppet.Close()
-				return err
-			}
-		}
-		isaoPuppet, isaoPuppetTable, isaoChoiceGroups = puppet, table, groups
-		return nil
-	}
-	var buildIsaoConversationBase func() error
-	var resumeIsaoInventory func() error
-	var openIsaoInventory func() error
-	var drawIsaoChoices func(int) error
-	var showIsaoChoices func(string, int) error
-	var startIsaoSpeech func([]string, string, int, bool) error
-	var startIsaoConversation func() error
-	var finishIsaoSpeech func() error
-	var finishIsaoPuppetRun func() error
-	var startIsaoEventResponse func(int32) error
-	drawIsaoChoices = func(outline int) error {
-		labels := make([]string, len(isaoActiveChoices))
-		for index, choice := range isaoActiveChoices {
-			labels[index] = choice.Text
-		}
-		choiceBackground, err := standingPoseOver(isaoConversationBase,
-			isaoPuppet, isaoPuppetTable, nil, "Isao")
-		if err != nil {
-			return err
-		}
-		frame, err := isaoPuppet.ChoiceFrame(choiceBackground, isaoPuppetTable.PanelResource, labels)
-		if err != nil {
-			return fmt.Errorf("render Isao choice panel: %w", err)
-		}
-		if outline >= 0 {
-			frame, err = render.DrawNativePuppetChoiceBevel(frame, outline)
-			if err != nil {
-				return fmt.Errorf("render Isao choice bevel: %w", err)
-			}
-		}
-		currentFrame, stageFrame, isaoChoiceOutline = frame, frame, outline
-		return nil
-	}
-	finishIsaoSpeech = func() error {
-		if isaoDialogue != nil {
-			if err := isaoDialogue.Close(); err != nil {
-				return err
-			}
-			isaoDialogue = nil
-		}
-		if isaoNextCode != "" {
-			code, group := isaoNextCode, isaoNextChoiceGroup
-			isaoNextCode, isaoNextChoiceGroup = "", -1
-			return showIsaoChoices(code, group)
-		}
-		if isaoSpeechFinishesRun {
-			isaoSpeechFinishesRun = false
-			return finishIsaoPuppetRun()
-		}
-		return nil
-	}
-	showIsaoChoices = func(code string, group int) error {
-		groups, found := isaoChoiceGroups[code]
-		if !found || group < 0 || group >= len(groups) {
-			return fmt.Errorf("Isao %s choice group %d is unavailable", code, group)
-		}
-		choices := append([]scripts.PuppetChoice(nil), groups[group]...)
-		if code == "ring" && len(choices) == 2 {
-			if inventoryOwners["ring"] == "isao" {
-				choices = choices[:1]
-			} else {
-				choices = choices[1:]
-			}
-		}
-		if code == "runyoself" && group == 0 && (handFlag == 1 || handItem != "" && !inventoryHidden[strings.ToLower(handItem)]) {
-			var handChoice scripts.PuppetChoice
-			var hasHandChoice bool
-			var err error
-			if handFlag == 1 && len(marieHandBevelChoices) > 0 {
-				handChoice, hasHandChoice = marieHandBevelChoices[0], true
-			} else if handItem != "" {
-				handChoice, hasHandChoice, err = scripts.PuppetBevelChoiceInCase(marieInventoryProgram, "addhandbevel", "handitem", handItem)
-			}
-			if err != nil {
-				return err
-			}
-			if hasHandChoice {
-				choices = append(choices, handChoice)
-			}
-		}
-		if len(choices) == 0 {
-			return fmt.Errorf("Isao %s choice group %d is empty", code, group)
-		}
-		isaoCurrentCode, isaoActiveChoices = code, choices
-		isaoChoicePressActive = false
-		isaoChoicePressIndex, isaoChoiceOutline = -1, -1
-		if err := drawIsaoChoices(-1); err != nil {
-			return err
-		}
-		isaoInteractionStage = isaoInteractionPuppetChoices
-		return nil
-	}
-	startIsaoSpeech = func(calls []string, nextCode string, nextGroup int, finishRun bool) error {
-		if isaoDialogue != nil {
-			if err := isaoDialogue.Close(); err != nil {
-				return err
-			}
-		}
-		dialogue, err := engine.NewPuppetDialogue(isaoPuppet, isaoPuppetTable.Entries, calls, audioContext)
-		if err != nil {
-			return err
-		}
-		frame, err := dialogue.Start(isaoConversationBase, scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
-		if err != nil {
-			_ = dialogue.Close()
-			return err
-		}
-		isaoDialogue, isaoNextCode, isaoNextChoiceGroup, isaoSpeechFinishesRun = dialogue, nextCode, nextGroup, finishRun
-		isaoInteractionStage = isaoInteractionPuppetSpeaking
-		currentFrame, stageFrame = frame, frame
-		if *debug {
-			log.Printf("puppet=isao speech-lines=%d next-code=%s next-choice-group=%d finish-run=%t", len(calls), nextCode, nextGroup, finishRun)
-		}
-		return nil
-	}
-	buildIsaoConversationBase = func() error {
-		if isaoPuppet == nil {
-			return fmt.Errorf("Isao PUP is unavailable")
-		}
-		dialogueBackground, _, err := render.CompositeWorldActors(backgroundFrame, worldPoint, worldActors)
-		if err != nil {
-			return fmt.Errorf("render Isao dialogue actors: %w", err)
-		}
-		panel, err := render.StageFrame(stage, currentPixels.Pixels)
-		if err != nil {
-			return fmt.Errorf("render Isao dialogue panel: %w", err)
-		}
-		base, err := composeMainPanel(dialogueBackground, panel)
-		if err != nil {
-			return fmt.Errorf("compose Isao dialogue background: %w", err)
-		}
-		base, err = withPuppetPalette(base, isaoPuppet, "Isao")
-		if err != nil {
-			return err
-		}
-		isaoConversationBase = base
-		return nil
-	}
-	resumeIsaoInventory = func() error {
-		code := isaoInventoryReturnCode
-		isaoInventoryReturnCode = ""
-		if handItem != "" {
-			gift, found := scripts.IsaoGift(isaoGiftCounter)
-			if !found {
-				return fmt.Errorf("Isao gift script has no counter case %d for %q", isaoGiftCounter, handItem)
-			}
-			giftedItem := handItem
-			inventoryHidden[strings.ToLower(handItem)], isaoGiftCounter = true, gift.Counter
-			if err := buildIsaoConversationBase(); err != nil {
-				return err
-			}
-			if *debug {
-				log.Printf("puppet=isao gift=%s lines=%d counter=%d", giftedItem, len(gift.Speech), isaoGiftCounter)
-			}
-			return startIsaoSpeech(gift.Speech, "byenow", 0, false)
-		}
-		if err := buildIsaoConversationBase(); err != nil {
-			return err
-		}
-		currentFrame, stageFrame = isaoConversationBase, isaoConversationBase
-		isaoInteractionStage = isaoInteractionPuppetChoices
-		return showIsaoChoices(code, 0)
-	}
-	resumeIsaoTheme := func() error {
-		if !isaoThemeResume {
-			return nil
-		}
-		if themePlayer != nil {
-			if err := themePlayer.Close(); err != nil {
-				return err
-			}
-			themePlayer = nil
-		}
-		if currentTheme.Name == "" || audioContext == nil {
-			return fmt.Errorf("Isao saved theme state is unavailable")
-		}
-		player, err := currentTheme.Play(audioContext)
-		if err != nil {
-			return err
-		}
-		themePlayer, isaoThemeResume = player, false
-		return nil
-	}
-	returnIsaoToIdle := func() error {
-		isaoSecondRun, isaoInteractionStage = false, isaoInteractionIdle
-		actorPoses["isao"] = "stand"
-		if isaoVisible && activeSetName == "sallower" {
-			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "isao", Callback: "isaoidle", Remaining: 2}); status != 0 {
-				return fmt.Errorf("register Isao idle loop after dialogue returned status %#x", status)
-			}
-		}
-		if err := resumeIsaoTheme(); err != nil {
-			return fmt.Errorf("resume Isao theme: %w", err)
-		}
-		if *debug {
-			log.Printf("actor=isao mousedown-complete actorvalue=%d isaophase=%d visible=%t", isaoActorValue, isaoPhase, isaoVisible)
-		}
-		return refreshWorldScene()
-	}
-	finishIsaoPuppetRun = func() error {
-		if isaoDialogue != nil {
-			if err := isaoDialogue.Close(); err != nil {
-				return err
-			}
-			isaoDialogue = nil
-		}
-		if err := refreshWorldScene(); err != nil {
-			return fmt.Errorf("restore Sallower after Isao PUP run: %w", err)
-		}
-		if !isaoSecondRun {
-			isaoActorValue++
-			if gameDay == 3 && gameClock == 1 {
-				isaoKeyMoviePending = true
-				isaoDelayUntil = scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) + 60
-				isaoInteractionStage = isaoInteractionPuppetDelay
-				return nil
-			}
-			return returnIsaoToIdle()
-		}
-		isaoActorValue++
-		return returnIsaoToIdle()
-	}
-	startIsaoEventResponse = func(event int32) error {
-		state := scripts.IsaoState{Day: gameDay, Clock: gameClock, Phase: gamePhase, IsaoPhase: isaoPhase, TrotterPhase: trotterPhase, OonaActorValue: oonaActorValue, RingOwner: inventoryOwners["ring"]}
-		randomChoice := uint32(0)
-		if isaoCurrentCode == "whoareyou" && event == 102 {
-			randomChoice = nativeRandom.Inclusive(3)
-		}
-		step, err := scripts.IsaoPuppetResponse(isaoCurrentCode, event, state, randomChoice)
-		if err != nil {
-			return err
-		}
-		if step.SetIsaoPhaseValid {
-			isaoPhase = step.SetIsaoPhase
-		}
-		if step.OpenInventory {
-			if handItem == "" || handFlag == 1 {
-				return openIsaoInventory()
-			}
-			gift, found := scripts.IsaoGift(isaoGiftCounter)
-			if !found {
-				return fmt.Errorf("Isao gift script has no counter case %d for %q", isaoGiftCounter, handItem)
-			}
-			giftedItem := handItem
-			inventoryHidden[strings.ToLower(handItem)], isaoGiftCounter = true, gift.Counter
-			if err := buildIsaoConversationBase(); err != nil {
-				return err
-			}
-			if *debug {
-				log.Printf("puppet=isao gift=%s lines=%d counter=%d", giftedItem, len(gift.Speech), isaoGiftCounter)
-			}
-			return startIsaoSpeech(gift.Speech, "byenow", 0, false)
-		}
-		if len(step.Speech) > 0 {
-			return startIsaoSpeech(step.Speech, step.NextCode, step.NextGroup, step.Finish)
-		}
-		if step.NextCode != "" {
-			return showIsaoChoices(step.NextCode, step.NextGroup)
-		}
-		if step.Finish {
-			return finishIsaoPuppetRun()
-		}
-		return nil
-	}
-	startIsaoConversation = func() error {
-		if err := openIsaoPuppet(); err != nil {
-			return fmt.Errorf("open Isao dialogue: %w", err)
-		}
-		if err := buildIsaoConversationBase(); err != nil {
-			return err
-		}
-		state := scripts.IsaoState{Day: gameDay, Clock: gameClock, Phase: gamePhase, IsaoPhase: isaoPhase, TrotterPhase: trotterPhase, OonaActorValue: oonaActorValue, RingOwner: inventoryOwners["ring"]}
-		step := scripts.IsaoEntry(state)
-		if step.SetIsaoPhaseValid {
-			isaoPhase = step.SetIsaoPhase
-			isaoSecondRun = true
-		}
-		if len(step.Speech) > 0 {
-			return startIsaoSpeech(step.Speech, "", -1, true)
-		}
-		if *debug {
-			log.Printf("puppet=isao entry-code=%s day=%d clock=%d phase=%d isaophase=%d oonapvalue=%d", step.Code, gameDay, gameClock, gamePhase, isaoPhase, oonaActorValue)
-		}
-		currentFrame, stageFrame = isaoConversationBase, isaoConversationBase
-		return showIsaoChoices(step.Code, 0)
-	}
-	beginIsaoPuppetTalk := func() (bool, error) {
-		if activeSetName != "sallower" || !isaoVisible || isaoInteractionStage != isaoInteractionIdle {
-			return false, nil
-		}
-		camera := render.NativeActorCameraPosition(worldPoint)
-		player := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
-		distance := scripts.NativeActorDistance2D(isaoPosition, player)
-		if distance >= townActorHotDistance {
-			if *debug {
-				log.Printf("actor=isao mousedown=ignored distance=%d hotdist=%d", distance, townActorHotDistance)
-			}
-			return false, nil
-		}
-		isaoThemeResume = themePlayer != nil && currentTheme.Name != ""
-		if themePlayer != nil {
-			if err := themePlayer.Close(); err != nil {
-				return false, fmt.Errorf("halt Isao background theme: %w", err)
-			}
-			themePlayer = nil
-		}
-		nativeLoops.Stop(scripts.LoopKindActor, "isao")
-		isaoInteractionStage = isaoInteractionPuppetPending
-		if *debug {
-			log.Printf("actor=isao mousedown=accepted distance=%d point=%v", distance, worldPoint)
-		}
-		return true, nil
-	}
 	renderMarieInventory = func() error {
 		lease, err := stage.AcquireSceneFrameResource(2)
 		if err != nil {
@@ -2063,12 +1613,6 @@ func run() error {
 		currentScene, currentPixels, inventoryMenuActive = 2, nextPixels, true
 		return renderMarieInventory()
 	}
-	openIsaoInventory = func() error {
-		handFlag = 0
-		isaoInventoryReturnCode = isaoCurrentCode
-		isaoInteractionStage = isaoInteractionInventory
-		return enterInventoryScene()
-	}
 	
 	// A script conversation: the open puppet, its base, the line playing and
 	// the choice panel, driven by the GameHost through scriptPresenter.
@@ -2077,7 +1621,7 @@ func run() error {
 	var scriptEngineBusy func() bool
 	var scriptPlayMovie func(name string) error
 	var scriptAdvanceDay func() error
-	scriptMovieFinished := false
+	scriptMovieFinished, scriptActionFrameOne := false, false
 	var convPuppet *render.Puppet
 	var convTable assets.PuppetSpeechTable
 	var convName string
@@ -2268,6 +1812,26 @@ func run() error {
 		},
 	}
 	scriptHost.Env.Sync = publishScriptGlobals
+	scriptHost.Env.HaltTheme = func() {
+		if themePlayer != nil {
+			if err := themePlayer.Close(); err != nil {
+				log.Printf("halttheme: %v", err)
+			}
+			themePlayer = nil
+		}
+	}
+	scriptHost.Env.PlayTheme = func(string) {
+		if themePlayer != nil || currentTheme.Name == "" || audioContext == nil {
+			return
+		}
+		player, err := currentTheme.Play(audioContext)
+		if err != nil {
+			log.Printf("playtheme: %v", err)
+			return
+		}
+		themePlayer = player
+	}
+	scriptHost.Env.ActionFrame = func(n int) (bool, bool) { return scriptActionFrameOne, n == 1 }
 	scriptHost.Env.Busy = func() bool { return scriptEngineBusy != nil && scriptEngineBusy() }
 	scriptHost.Env.OpenSetFile = func(name string) error {
 		frame, err := switchSpecialSet(name, "", "")
@@ -2539,28 +2103,6 @@ func run() error {
 				}
 				return 0, nil
 			
-			case "isaoidle":
-				if isaoBouncer {
-					actorPoses["isao"], isaoBouncer = "stand", false
-				} else {
-					actorPoses["isao"], isaoBouncer = "up", true
-				}
-				if isaoDirGo {
-					actorHeadings["isao"] -= 2
-					if actorHeadings["isao"] < 44 {
-						isaoDirGo = false
-					}
-				} else {
-					actorHeadings["isao"] += 2
-					if actorHeadings["isao"] > 84 {
-						isaoDirGo = true
-					}
-				}
-				loop.Remaining = 2
-				displayChanged = displayChanged || currentScene == 0
-				if *debug && *debugLoops {
-					log.Printf("actor=isao pose=%s heading=%d next=%s ticks=%d", actorPoses["isao"], actorHeadings["isao"], loop.Callback, loop.Remaining)
-				}
 			default:
 				return 0, fmt.Errorf("unknown native loop callback %q", loop.Callback)
 			}
@@ -2586,68 +2128,7 @@ func run() error {
 		
 		
 		
-		if !visualEffectPump && isaoInteractionStage == isaoInteractionPuppetPending {
-			if err := startIsaoConversation(); err != nil {
-				return false, err
-			}
-			return true, nil
-		}
 		
-		if !visualEffectPump && isaoInteractionStage == isaoInteractionPuppetSpeaking {
-			if isaoDialogue == nil {
-				return false, fmt.Errorf("Isao dialogue state is missing its puppet player")
-			}
-			frameTick := scripts.NativeFrameUnits(scripts.NativeTickMilliseconds())
-			var frame render.IndexedFrame
-			var changed bool
-			var err error
-			if isaoDialogueSkip {
-				frame, changed, err = isaoDialogue.Skip()
-				isaoDialogueSkip = false
-			} else {
-				frame, changed, err = isaoDialogue.Update(frameTick)
-			}
-			if err != nil {
-				return false, fmt.Errorf("advance Isao dialogue: %w", err)
-			}
-			if changed {
-				currentFrame, stageFrame = frame, frame
-				if !isaoDialogue.Active() {
-					if err := finishIsaoSpeech(); err != nil {
-						return false, fmt.Errorf("finish Isao dialogue: %w", err)
-					}
-				}
-				return true, nil
-			}
-			if displayChanged {
-				frame, err = isaoDialogue.Frame()
-				if err != nil {
-					return false, fmt.Errorf("refresh Isao dialogue frame: %w", err)
-				}
-				currentFrame, stageFrame = frame, frame
-				return true, nil
-			}
-		}
-		if !visualEffectPump && displayChanged && isaoInteractionStage == isaoInteractionPuppetChoices {
-			if err := drawIsaoChoices(isaoChoiceOutline); err != nil {
-				return false, fmt.Errorf("refresh Isao choices: %w", err)
-			}
-			return true, nil
-		}
-		if !visualEffectPump && isaoInteractionStage == isaoInteractionPuppetDelay && scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) >= isaoDelayUntil {
-			if isaoKeyMoviePending {
-				isaoKeyMoviePending, isaoKeyMovieActive = false, true
-				pendingSpotMovie = "MOVIES/KEYS.MOV"
-				if *debug {
-					log.Printf("actor=isao movie=KEYS.MOV after-frame-delay=60")
-				}
-				return true, nil
-			}
-			if err := startIsaoConversation(); err != nil {
-				return false, fmt.Errorf("start Isao follow-up: %w", err)
-			}
-			return true, nil
-		}
 		return displayChanged, nil
 	}
 	startSceneMovie := func(name string) error {
@@ -2810,14 +2291,9 @@ func run() error {
 					cursor = "touch"
 				}
 			}
-			if isaoInteractionStage == isaoInteractionPuppetChoices {
-				if _, found := scripts.NativePuppetChoiceAt(point, isaoActiveChoices); found {
-					cursor = "touch"
-				}
-			}
 			
 			
-			if (inventoryMenuActive || isaoInteractionStage == isaoInteractionInventory) && currentScene == 2 {
+			if inventoryMenuActive && currentScene == 2 {
 				if _, found := render.HitTestFlatProps(marieInventoryProjected, image.Pt(int(int16(point>>16)), int(int16(point)))); found {
 					cursor = "touch"
 				}
@@ -2944,8 +2420,8 @@ func run() error {
 		}
 	}
 	captureGameProgress := func() save.GameProgress {
-		positions := map[string][3]int16{"isao": isaoPosition, "bone": boneWorldProp.Position}
-		progress := save.GameProgress{Version: 1, Day: gameDay, Clock: gameClock, Phase: int16(phase), GamePhase: gamePhase, SetName: activeSetName, ViewName: string(view.Name[1:]), TownReturnScene: townReturnScene, Point: worldPoint, PlayerCash: playercash, InventoryOwners: cloneStringMap(inventoryOwners), InventoryHidden: cloneBoolMap(inventoryHidden), HandItem: handItem, HandFlag: handFlag, BoneOwner: boneOwner, BoneInInventory: boneInInventory, BoneWorldVisible: boneWorldProp.Visible, DogVisible: dogVisibleState, ActorPoses: cloneStringMap(actorPoses), ActorHeadings: actorHeadings, ActorPositions: positions, StoryValues: map[string]int32{"isaoActorValue": isaoActorValue, "isaoGiftCounter": isaoGiftCounter, "isaoPhase": int32(isaoPhase), "trotterPhase": int32(trotterPhase), "helpPhase": int32(helpPhase), "jonesPhase": int32(jonesPhase), "mariePhase": int32(mariePhase), "laurelPhase": int32(laurelPhase), "oonaActorValue": oonaActorValue}, StoryFlags: map[string]bool{"isaoVisible": isaoVisible, "isaoBouncer": isaoBouncer, "isaoDirGo": isaoDirGo}}
+		positions := map[string][3]int16{"bone": boneWorldProp.Position}
+		progress := save.GameProgress{Version: 1, Day: gameDay, Clock: gameClock, Phase: int16(phase), GamePhase: gamePhase, SetName: activeSetName, ViewName: string(view.Name[1:]), TownReturnScene: townReturnScene, Point: worldPoint, PlayerCash: playercash, InventoryOwners: cloneStringMap(inventoryOwners), InventoryHidden: cloneBoolMap(inventoryHidden), HandItem: handItem, HandFlag: handFlag, BoneOwner: boneOwner, BoneInInventory: boneInInventory, BoneWorldVisible: boneWorldProp.Visible, DogVisible: dogVisibleState, ActorPoses: cloneStringMap(actorPoses), ActorHeadings: actorHeadings, ActorPositions: positions, StoryValues: map[string]int32{"isaoPhase": int32(isaoPhase), "trotterPhase": int32(trotterPhase), "helpPhase": int32(helpPhase), "jonesPhase": int32(jonesPhase), "mariePhase": int32(mariePhase), "laurelPhase": int32(laurelPhase), "oonaActorValue": oonaActorValue}, StoryFlags: map[string]bool{}}
 		progress.StoryValues["jonesRingStory"] = int32(jonesRingStory)
 		progress.StoryValues["bloodPhase"], progress.StoryValues["docPhase"], progress.StoryValues["fightOn"] = int32(bloodPhase), int32(docPhase), int32(fightOn)
 		progress.StoryValues["fearPhase"] = int32(fearPhase)
@@ -3002,12 +2478,6 @@ func run() error {
 			boneWorldProp.View = boneSmallView
 		}
 		dogVisibleState = progress.DogVisible
-		if value, found := progress.StoryValues["isaoActorValue"]; found {
-			isaoActorValue = value
-		}
-		if value, found := progress.StoryValues["isaoGiftCounter"]; found {
-			isaoGiftCounter = value
-		}
 		if value, found := progress.StoryValues["isaoPhase"]; found {
 			isaoPhase = int16(value)
 		}
@@ -3065,14 +2535,9 @@ func run() error {
 		for name, heading := range progress.ActorHeadings {
 			actorHeadings[name] = heading
 		}
-		for name, target := range map[string]*[3]int16{"isao": &isaoPosition, "bone": &boneWorldProp.Position} {
+		for name, target := range map[string]*[3]int16{"bone": &boneWorldProp.Position} {
 			if position, found := progress.ActorPositions[name]; found {
 				*target = position
-			}
-		}
-		for name, target := range map[string]*bool{"isaoVisible": &isaoVisible, "isaoBouncer": &isaoBouncer, "isaoDirGo": &isaoDirGo} {
-			if value, found := progress.StoryFlags[name]; found {
-				*target = value
 			}
 		}
 		worldPoint = progress.Point
@@ -3197,7 +2662,49 @@ func run() error {
 				}
 			}
 		}
-		delete(actorPoses, "laurel"); delete(actorHeadings, "laurel"); delete(actorPoses, "trotter"); delete(actorHeadings, "trotter")
+		if _, migrated := progress.ScriptActors["isao"]; !migrated {
+			if visible, legacy := progress.StoryFlags["isaoVisible"]; legacy {
+				actor, status := scriptActors.Lookup("isao")
+				if status != 0 {
+					return fmt.Errorf("legacy Isao actor missing: %#x", status)
+				}
+				nativeLoops.Stop(scripts.LoopKindActor, "isao")
+				actor.StopJob()
+				actor.Visible, actor.Placed, actor.Value, actor.Frame = visible, true, progress.StoryValues["isaoActorValue"], 0
+				actor.Set, actor.Star = "sallower", "sallower.isao"
+				actor.Scale, actor.Speed, actor.TurnRate, actor.ZClip = 4200, 4, 8, 32
+				if position, found := progress.ActorPositions["isao"]; found {
+					actor.Position = position
+				}
+				if heading, found := progress.ActorHeadings["isao"]; found {
+					actor.Heading = heading
+				}
+				if pose, found := progress.ActorPoses["isao"]; found && pose != "" {
+					actor.Pose = pose
+				}
+				for old, name := range map[string]string{"isaoBouncer": "bouncer", "isaoDirGo": "dirgo"} {
+					value := int32(0)
+					if progress.StoryFlags[old] {
+						value = 1
+					}
+					if err := scriptInterpreter.SetGlobalNumber(name, value); err != nil {
+						return err
+					}
+				}
+				if counter, found := progress.StoryValues["isaoGiftCounter"]; found {
+					if err := scriptInterpreter.SetGlobalNumber("counter", counter); err != nil {
+						return err
+					}
+				}
+			} else if activeSetName == "sallower" {
+				// An older save carries no Isao state; the initialisation above
+				// cleared the placement the set-open step just made.
+				if err := deliverScriptEvent(scripts.ActorEvent{Actor: "isao", Message: "setupactor(\"bar\")"}); err != nil {
+					return err
+				}
+			}
+		}
+		delete(actorPoses, "laurel"); delete(actorHeadings, "laurel"); delete(actorPoses, "trotter"); delete(actorHeadings, "trotter"); delete(actorPoses, "isao"); delete(actorHeadings, "isao")
 		currentScene, inventoryMenuActive = 0, false
 		publishBone()
 		startAvatarNoFace(scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
@@ -3305,10 +2812,9 @@ func run() error {
 	}
 	startNewGame := func() error {
 		nativeLoops = scripts.LoopScheduler{}
-		isaoInteractionStage = isaoInteractionIdle
 		
 		
-		isaoInventoryReturnPending, avatarTipActive = false, false
+		avatarTipActive = false
 		deathStage = 0
 		if err := applyGameProgress(initialProgress, "NEW.FLT/death/new"); err != nil {
 			return err
@@ -3992,9 +3498,6 @@ func run() error {
 		} else if !mainFlat {
 			stageFrame = nextFrame
 		}
-		if isaoInteractionStage == isaoInteractionInventory && target == 0 {
-			isaoInventoryReturnPending, isaoInteractionStage = true, isaoInteractionInventoryReturning
-		}
 		
 		if effect != 0 {
 			if _, err := runNativeScheduler(true); err != nil {
@@ -4033,20 +3536,13 @@ func run() error {
 				}
 			}
 			if transition != nil {
-				if effectName == "plain" || isaoInventoryReturnPending {
+				if effectName == "plain" {
 					transitionMode = 2
 				}
 				return transition.CurrentFrame(), true, nil
 			}
 		}
 		currentFrame = nextFrame
-		if isaoInventoryReturnPending {
-			isaoInventoryReturnPending = false
-			if err := resumeIsaoInventory(); err != nil {
-				return render.IndexedFrame{}, false, err
-			}
-			return currentFrame, true, nil
-		}
 		if *debug {
 			log.Printf("scene transition=%s resource=%d", stage.Scenes[target].Name[1:], stage.Scenes[target].Fields[1])
 		}
@@ -4096,7 +3592,7 @@ func run() error {
 			} else {
 				globals["snapshotError"] = err.Error()
 			}
-			return map[string]any{"day": gameDay, "clock": gameClock, "phase": gamePhase, "set": activeSetName, "scene": string(stage.Scenes[currentScene].Name[1:]), "point": worldPoint, "cash": playercash, "inventory": inventoryOwners, "inventoryMenu": inventoryMenuActive, "breakfast": hotelHotplateStage != nil && stage == hotelHotplateStage, "jonesPhase": jonesPhase, "jonesRingStory": jonesRingStory, "laurelPhase": laurelPhase, "helpPhase": helpPhase, "scriptGlobals": globals, "engineBusy": engineBusy, "bone": map[string]any{"visible": boneWorldProp.Visible, "owner": boneOwner, "position": boneWorldProp.Position, "view": boneWorldProp.View.Name}, "movieFrame": movieFrame, "movieWaiting": movieWaiting, "conversation": map[string]any{"open": convPuppet != nil, "choosing": convChoosing, "choiceEvents": choiceEvents, "taskActive": scriptTask != nil}, "scriptActors": scriptActors.Snapshot([]string{"mwife", "blood", "buick", "marie", "jones", "leroy", "help", "laurel", "trotter"})}
+			return map[string]any{"day": gameDay, "clock": gameClock, "phase": gamePhase, "set": activeSetName, "scene": string(stage.Scenes[currentScene].Name[1:]), "point": worldPoint, "cash": playercash, "inventory": inventoryOwners, "inventoryMenu": inventoryMenuActive, "breakfast": hotelHotplateStage != nil && stage == hotelHotplateStage, "jonesPhase": jonesPhase, "jonesRingStory": jonesRingStory, "laurelPhase": laurelPhase, "helpPhase": helpPhase, "scriptGlobals": globals, "engineBusy": engineBusy, "bone": map[string]any{"visible": boneWorldProp.Visible, "owner": boneOwner, "position": boneWorldProp.Position, "view": boneWorldProp.View.Name}, "movieFrame": movieFrame, "movieWaiting": movieWaiting, "conversation": map[string]any{"open": convPuppet != nil, "choosing": convChoosing, "choiceEvents": choiceEvents, "taskActive": scriptTask != nil}, "scriptActors": scriptActors.Snapshot([]string{"mwife", "blood", "buick", "marie", "jones", "leroy", "help", "laurel", "trotter", "isao"})}
 		})
 	}
 	scriptBlackFrame = blackFrame
@@ -4108,8 +3604,8 @@ func run() error {
 		return busy
 	}
 	scriptPlayMovie = func(name string) error {
-		return startActionMovie(name, 0, func(bool) (render.IndexedFrame, bool, error) {
-			scriptMovieFinished = true
+		return startActionMovie(name, 0, func(actionOne bool) (render.IndexedFrame, bool, error) {
+			scriptMovieFinished, scriptActionFrameOne = true, actionOne
 			return blackFrame, true, nil
 		})
 	}
@@ -4488,38 +3984,6 @@ func run() error {
 					completedSpotMovie := spotMovieName
 					currentFrame, stageFrame, transition, transitionMode = transition.TargetFrame(), transition.TargetFrame(), nil, 0
 					spotMovieActive, spotMovieName = false, ""
-					if isaoKeyMovieActive {
-						isaoKeyMovieActive = false
-						action, found := scripts.IsaoKeyMovieResponse(spotMovieActionFrameOne, inventoryOwners["ring"])
-						if !found {
-							if err := returnIsaoToIdle(); err != nil {
-								return render.IndexedFrame{}, false, err
-							}
-							return currentFrame, true, nil
-						}
-						if action.AddInventoryItem != "" {
-							inventoryOwners[action.AddInventoryItem], handItem = "stranger", action.AddInventoryItem
-							if err := soundBank.Play(audioContext, "inven", 1); err != nil {
-								return render.IndexedFrame{}, false, fmt.Errorf("play Isao ring inventory sound: %w", err)
-							}
-							if err := returnIsaoToIdle(); err != nil {
-								return render.IndexedFrame{}, false, err
-							}
-							return currentFrame, true, nil
-						}
-						if action.RunPuppet != "" {
-							if action.SetIsaoPhaseValid {
-								isaoPhase = action.SetIsaoPhase
-							}
-							isaoSecondRun = true
-							isaoDelayUntil = scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) + uint32(action.DelayFrames)
-							isaoInteractionStage = isaoInteractionPuppetDelay
-							if *debug {
-								log.Printf("actor=isao movie=%s actionframe=%t ring-owner=%s followup=%s delay=%d", completedSpotMovie, spotMovieActionFrameOne, inventoryOwners["ring"], action.RunPuppet, action.DelayFrames)
-							}
-							return currentFrame, true, nil
-						}
-					}
 					if *debug {
 						log.Printf("spotmovie=%s postmovie=restored clock=%d", completedSpotMovie, gameClock)
 					}
@@ -4562,13 +4026,6 @@ func run() error {
 				if transitionMode == 2 {
 					stageFrame = currentFrame
 					transitionMode = 0
-					if isaoInventoryReturnPending {
-						isaoInventoryReturnPending = false
-						if err := resumeIsaoInventory(); err != nil {
-							return render.IndexedFrame{}, false, err
-						}
-						return currentFrame, true, nil
-					}
 					return currentFrame, true, nil
 				}
 			}
@@ -4794,15 +4251,6 @@ func run() error {
 		
 		
 		
-		if isaoInteractionStage == isaoInteractionPuppetSpeaking {
-			if key == ebiten.KeySpace || key == ebiten.KeyEscape || key == ebiten.KeyQ || key == ebiten.KeyPeriod {
-				isaoDialogueSkip = true
-			}
-			return
-		}
-		if isaoInteractionStage != isaoInteractionIdle {
-			return
-		}
 		if pendingSceneMovie != "" {
 			return
 		}
@@ -4967,18 +4415,6 @@ func run() error {
 		
 		
 		
-		if isaoInteractionStage == isaoInteractionPuppetChoices {
-			if mouseEvent.Button != ebiten.MouseButtonLeft {
-				return currentFrame, false, nil
-			}
-			event, found := scripts.NativePuppetChoiceAt(point, isaoActiveChoices)
-			if !found {
-				return currentFrame, false, nil
-			}
-			isaoChoicePressActive, isaoChoicePressEvent = true, event
-			isaoChoicePressIndex = (int(int16(point)) - 264) / 24
-			return currentFrame, false, nil
-		}
 		if inventoryMenuActive && currentScene == 2 && mouseEvent.Button == ebiten.MouseButtonLeft {
 			if name, found := render.HitTestFlatProps(marieInventoryProjected, image.Pt(int(int16(point>>16)), int(int16(point)))); found {
 				handItem = name
@@ -4990,21 +4426,6 @@ func run() error {
 				}
 				return currentFrame, true, nil
 			}
-		}
-		if isaoInteractionStage == isaoInteractionInventory && currentScene == 2 && mouseEvent.Button == ebiten.MouseButtonLeft {
-			if name, found := render.HitTestFlatProps(marieInventoryProjected, image.Pt(int(int16(point>>16)), int(int16(point)))); found {
-				handItem = name
-				if err := renderMarieInventory(); err != nil {
-					return render.IndexedFrame{}, false, err
-				}
-				if *debug {
-					log.Printf("inventory-select item=%s owner=%s flat=avatar recipient=isao", handItem, inventoryOwners[strings.ToLower(handItem)])
-				}
-				return currentFrame, true, nil
-			}
-		}
-		if isaoInteractionStage != isaoInteractionIdle && isaoInteractionStage != isaoInteractionInventory {
-			return currentFrame, false, nil
 		}
 		if stage == mainStage && currentScene == 3 && mouseEvent.Button == ebiten.MouseButtonLeft {
 			if level, found := scoreMenuVolumeAt(point, scoreVolumeTrack); found {
@@ -5161,13 +4582,6 @@ func run() error {
 					return currentFrame, true, nil
 				}
 				
-				if strings.EqualFold(actorName, "Isao") {
-					started, err := beginIsaoPuppetTalk()
-					if err != nil {
-						return render.IndexedFrame{}, false, err
-					}
-					return currentFrame, started, nil
-				}
 				if strings.EqualFold(actorName, "Bone") && boneWorldProp.Visible && boneOwner == "none" {
 					camera := render.NativeActorCameraPosition(worldPoint)
 					playerPosition := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
@@ -5398,41 +4812,6 @@ func run() error {
 			return currentFrame, false, nil
 		}
 		
-		if isaoInteractionStage == isaoInteractionPuppetChoices && isaoChoicePressActive {
-			event, found := scripts.NativePuppetChoiceAt(state.Point, isaoActiveChoices)
-			outline := -1
-			if found && event == isaoChoicePressEvent {
-				outline = (int(int16(state.Point)) - 264) / 24
-			}
-			if state.LeftDown {
-				if outline == isaoChoiceOutline {
-					return currentFrame, false, nil
-				}
-				if err := drawIsaoChoices(outline); err != nil {
-					return render.IndexedFrame{}, false, err
-				}
-				return currentFrame, true, nil
-			}
-			if state.LeftReleased {
-				selected := outline >= 0 && outline == isaoChoicePressIndex
-				selectedEvent := isaoChoicePressEvent
-				isaoChoicePressActive, isaoChoicePressIndex = false, -1
-				if selected {
-					if err := startIsaoEventResponse(selectedEvent); err != nil {
-						return render.IndexedFrame{}, false, fmt.Errorf("run Isao choice %d: %w", selectedEvent, err)
-					}
-					return currentFrame, true, nil
-				}
-				if isaoChoiceOutline >= 0 {
-					if err := drawIsaoChoices(-1); err != nil {
-						return render.IndexedFrame{}, false, err
-					}
-					return currentFrame, true, nil
-				}
-				return currentFrame, false, nil
-			}
-			return currentFrame, false, nil
-		}
 		if heldItemDragging {
 			point := image.Pt(int(int16(state.Point>>16)), int(int16(state.Point)))
 			if state.LeftDown {
