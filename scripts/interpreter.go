@@ -1168,3 +1168,23 @@ func (in *Interpreter) Site() string {
 	}
 	return block + ": " + strings.Join(parts, " ")
 }
+
+// variableByName finds the variable a script names with a string, as
+// variable(name) does (FUN_00426900, FUN_00416570): the caller's locals
+// first, then the globals.
+func (in *Interpreter) variableByName(locals *VariableTable, name string) (*VariableTable, uint16, uint16, error) {
+	pascal := append([]byte{byte(len(name))}, name...)
+	for _, table := range []*VariableTable{locals, in.Global} {
+		if table == nil {
+			continue
+		}
+		id, status, err := table.Lookup(pascal, &Record{})
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		if status == 0 {
+			return table, id, 0, nil
+		}
+	}
+	return nil, 0, 9, nil
+}

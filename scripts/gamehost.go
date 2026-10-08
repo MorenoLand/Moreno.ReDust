@@ -1,6 +1,7 @@
 package scripts
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"strings"
@@ -69,6 +70,8 @@ type GameHostEnv struct {
 	// ThemeVolume is themevol's effect (FUN_0040E9E0): level 0..255 for every
 	// track of the named theme. Nil leaves the volume alone.
 	ThemeVolume func(name string, level int)
+	// SoundVolume is soundvol's effect on a named sound; nil leaves it alone.
+	SoundVolume func(name string, level int)
 	// HaltTheme and PlayTheme are halttheme (FUN_0040E8B0) and playtheme
 	// (FUN_0040E6F0, which starts a named theme that has tracks).
 	HaltTheme func()
@@ -80,6 +83,13 @@ type GameHostEnv struct {
 	// SceneMove starts a player movement (1 left, 2 right, 3 straight,
 	// 4 backwards) as currentscene("strait") and its siblings do.
 	SceneMove func(code int)
+	// Instanced is told when actorinstance adds an actor, so the caller can
+	// give it the source's cast data.
+	Instanced func(source, name string)
+	// Diagnose receives debug notes about script calls that failed.
+	Diagnose func(message string)
+	// SceneCell is the cell centre of a named scene in the open set.
+	SceneCell func(name string) (x, y int16, found bool)
 	// ResolvePath is FUN_0041BA70: the stored path a walk to the star takes
 	// from the actor's current star ("resume" joins any path ending there at
 	// the actor's position), or false when the set has none.
@@ -170,6 +180,9 @@ func (h *GameHost) actorArgs(call *ScriptCall, count int) (*ActorRecord, []Scrip
 	}
 	actor, status := h.Actors.Lookup(args[0].Text)
 	if status != 0 {
+		if h.Env.Diagnose != nil {
+			h.Env.Diagnose(fmt.Sprintf("unknown actor %q (status %#x)", args[0].Text, status))
+		}
 		return nil, nil, 0, status, nil
 	}
 	return actor, args, consumed, 0, nil
@@ -317,6 +330,58 @@ func (h *GameHost) Command(call *ScriptCall) (int, uint16, error) {
 		actor.Position = [3]int16{int16(args[1].Int), int16(args[2].Int), int16(args[3].Int)}
 		actor.Placed = true
 		return consumed, 0, nil
+	case "variable":
+		// FUN_00426900: variable(name, value) assigns the variable the string
+		// names, looked up in the locals and then the globals.
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return 0, status, err
+		}
+		if len(args) != 2 || args[0].Kind != 3 {
+			return 0, ScriptStatusWrongType, nil
+		}
+		table, id, status, err := call.Interpreter.variableByName(call.Locals, args[0].Text)
+		if err != nil || status != 0 {
+			return 0, status, err
+		}
+		record, status, err := call.Interpreter.Record(args[1])
+		if err != nil || status != 0 {
+			return 0, status, err
+		}
+		var encoded ExpressionValue
+		binary.LittleEndian.PutUint16(encoded[:2], record.Kind)
+		binary.LittleEndian.PutUint32(encoded[2:6], record.Data)
+		status, err = table.WriteValue(id, encoded, call.Interpreter.Strings)
+		if err != nil || status != 0 {
+			return 0, status, err
+		}
+		return consumed, 0, nil
+	case "actorinstance":
+		// FUN_0040A860: a new actor that starts as a copy of the source's
+		// record; an existing name is left alone.
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return 0, status, err
+		}
+		if len(args) != 2 || args[0].Kind != 3 || args[1].Kind != 3 {
+			return 0, ScriptStatusWrongType, nil
+		}
+		source, status := h.Actors.Lookup(args[0].Text)
+		if status != 0 {
+			return 0, status, nil
+		}
+		if len(args[1].Text) > 15 {
+			return 0, 0x1a, nil
+		}
+		if _, exists := h.Actors.Lookup(args[1].Text); exists != 0 {
+			copied := *source
+			copied.Name, copied.Job = args[1].Text, nil
+			h.Actors.Add(&copied)
+			if h.Env.Instanced != nil {
+				h.Env.Instanced(source.Name, copied.Name)
+			}
+		}
+		return consumed, 0, nil
 	case "makeloop":
 		args, consumed, status, err := call.Args()
 		if err != nil || status != 0 {
@@ -388,6 +453,28 @@ func (h *GameHost) Command(call *ScriptCall) (int, uint16, error) {
 		}
 		if h.Env.PlayTheme != nil {
 			h.Env.PlayTheme(args[0].Text)
+		}
+		return consumed, 0, nil
+	case "soundvol":
+		// FUN_0040E910: soundvol(name, level) sets one sound's volume, 0..255.
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return 0, status, err
+		}
+		if len(args) != 2 || args[0].Kind != 3 {
+			return 0, ScriptStatusMalformed, nil
+		}
+		if args[1].Kind != 4 {
+			return 0, ScriptStatusWrongType, nil
+		}
+		level := int(args[1].Int)
+		if level < 0 {
+			level = 0
+		} else if level > 0xff {
+			level = 0xff
+		}
+		if h.Env.SoundVolume != nil {
+			h.Env.SoundVolume(args[0].Text, level)
 		}
 		return consumed, 0, nil
 	case "themevol":
@@ -695,6 +782,70 @@ func (h *GameHost) Value(call *ScriptCall) (Record, int, uint16, error) {
 			return Record{}, 0, ScriptStatusWrongType, nil
 		}
 		value, ok := pointComponent(actor.Position, args[1].Int)
+		if !ok {
+			return Record{}, 0, ScriptStatusWrongType, nil
+		}
+		return number(value, consumed)
+	case "variable":
+		// FUN_00416570: the value of the variable the string names.
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		if len(args) != 1 || args[0].Kind != 3 {
+			return Record{}, 0, ScriptStatusWrongType, nil
+		}
+		table, id, status, err := call.Interpreter.variableByName(call.Locals, args[0].Text)
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		record, status, err := table.ReadValue(id, call.Interpreter.Strings)
+		return record, consumed, status, err
+	case "scenerow", "scenecol":
+		// FUN_0041AFD0: the scene's cell row (its scene id) or column (its
+		// direction id).
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		if len(args) != 1 || args[0].Kind != 3 {
+			return Record{}, 0, ScriptStatusWrongType, nil
+		}
+		if h.currentSet() == "" {
+			return Record{}, 0, 0x28, nil
+		}
+		if h.Env.SceneCell == nil {
+			return Record{}, 0, 0, fmt.Errorf("%w: %s", ErrHostOpcodeUnimplemented, name)
+		}
+		x, y, found := h.Env.SceneCell(args[0].Text)
+		if !found {
+			return Record{}, 0, 0x0a, nil
+		}
+		if name == "scenecol" {
+			return number(int32((x-128)/256), consumed)
+		}
+		return number(int32((y-128)/256), consumed)
+	case "scenexyz":
+		// FUN_004150C0: the named scene's cell as a world point, the cell
+		// centre (256 a cell, plus 128), with z 0.
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		if len(args) != 2 || args[0].Kind != 3 || args[1].Kind != 4 {
+			return Record{}, 0, ScriptStatusWrongType, nil
+		}
+		if h.currentSet() == "" {
+			return Record{}, 0, 0x28, nil
+		}
+		if h.Env.SceneCell == nil {
+			return Record{}, 0, 0, fmt.Errorf("%w: scenexyz", ErrHostOpcodeUnimplemented)
+		}
+		x, y, found := h.Env.SceneCell(args[0].Text)
+		if !found {
+			return Record{}, 0, 0x0a, nil
+		}
+		value, ok := pointComponent([3]int16{x, y, 0}, args[1].Int)
 		if !ok {
 			return Record{}, 0, ScriptStatusWrongType, nil
 		}

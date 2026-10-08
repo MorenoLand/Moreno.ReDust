@@ -456,6 +456,10 @@ func run() error {
 			scriptActorCasts[key], scriptActorRecords[key] = cast, actor
 		}
 	}
+	// Every cast actor runs from its shipped scripts.
+	for key := range scriptActorRecords {
+		scriptManaged[key] = true
+	}
 	const townCastWalkRate int16 = 3
 	const townActorHotDistance = 384
 	leroyPhase := int16(0)
@@ -783,6 +787,69 @@ func run() error {
 		},
 	}}
 	scriptInterpreter := scripts.NewInterpreter(scriptHost)
+	scriptHost.Env.SceneMove = func(code int) { pendingMovement = assets.SceneMove(code) }
+	scriptHost.Env.Instanced = func(source, name string) {
+		from, to := strings.ToLower(source), strings.ToLower(name)
+		scriptActorCasts[to] = scriptActorCasts[from]
+		record := scriptActorRecords[from]
+		record.Name = name
+		scriptActorRecords[to] = record
+		if scriptManaged[from] {
+			scriptManaged[to] = true
+		}
+	}
+	scriptHost.Env.Diagnose = func(message string) {
+		if *debug {
+			log.Printf("script-note %s", message)
+		}
+	}
+	scriptHost.Env.SceneCell = func(name string) (int16, int16, bool) {
+		if activeSet == nil {
+			return 0, 0, false
+		}
+		for _, sceneView := range activeSet.Views() {
+			if strings.EqualFold(string(sceneView.Name[1:]), name) {
+				return int16(sceneView.DirectionID)*256 + 128, int16(sceneView.SceneID)*256 + 128, true
+			}
+		}
+		return 0, 0, false
+	}
+	scriptHost.Env.SceneChain = func(name string) ([]scripts.ScriptFrame, bool, error) {
+		if activeSet == nil {
+			return nil, false, nil
+		}
+		for _, sceneView := range activeSet.Views() {
+			if !strings.EqualFold(string(sceneView.Name[1:]), name) {
+				continue
+			}
+			me := strings.ToLower(name)
+			var chain []scripts.ScriptFrame
+			// FUN_0041A1A0 builds the chain from the view's own script (a
+			// walkable cell's resource), the script of its area (the table at
+			// metadata offset 0x1B8C) and the set script.
+			if sceneView.IsCell() {
+				program, err := scriptProgram(activeSet.File(), sceneView.Resource)
+				if err != nil {
+					return nil, false, err
+				}
+				chain = append(chain, scripts.ScriptFrame{Program: program, Me: me, Target: me, Label: "Scene Script: "})
+			}
+			if resource, ok := activeSet.SceneScriptResource(sceneView.ReferenceIndex); ok {
+				program, err := scriptProgram(activeSet.File(), resource)
+				if err != nil {
+					return nil, false, err
+				}
+				chain = append(chain, scripts.ScriptFrame{Program: program, Me: me, Target: me, Label: "Area Script: "})
+			}
+			program, err := scriptProgram(activeSet.File(), activeSet.ScriptResource())
+			if err != nil {
+				return nil, false, err
+			}
+			chain = append(chain, scripts.ScriptFrame{Program: program, Me: me, Target: me, Label: "Set Script: ", Last: true})
+			return chain, true, nil
+		}
+		return nil, false, nil
+	}
 	scriptInterpreter.Builtins = map[string]func(*scripts.ScriptCall) (int, uint16, error){}
 	var scriptBlackFrame render.IndexedFrame
 	// deliverScriptEvent raises an event the native way. A non-zero status is
@@ -957,6 +1024,21 @@ func run() error {
 	}
 	// NEW.FLT initall runs the cast's initactors at the start of every day;
 	// the first run happens here, before the opening scene.
+	// The cast open sends every actor openactor() once, which is where the
+	// extra cast's actors make their instances (actorinstance).
+	for index := 1; index <= scriptActors.Count(); index++ {
+		record, ok := scriptActors.At(index)
+		if !ok {
+			continue
+		}
+		name := record.Name
+		if scriptManaged[strings.ToLower(name)] {
+			if err := runScript("openactor "+name, fmt.Sprintf("sendtoactor(%q,openactor())", name)); err != nil {
+				stage.Close()
+				return err
+			}
+		}
+	}
 	if err := runInitActors(); err != nil {
 		stage.Close()
 		return err
@@ -1854,43 +1936,6 @@ func run() error {
 		themePlayer = player
 	}
 	scriptHost.Env.ActionFrame = func(n int) (bool, bool) { return scriptActionFrameOne, n == 1 }
-	scriptHost.Env.SceneMove = func(code int) { pendingMovement = assets.SceneMove(code) }
-	scriptHost.Env.SceneChain = func(name string) ([]scripts.ScriptFrame, bool, error) {
-		if activeSet == nil {
-			return nil, false, nil
-		}
-		for _, sceneView := range activeSet.Views() {
-			if !strings.EqualFold(string(sceneView.Name[1:]), name) {
-				continue
-			}
-			me := strings.ToLower(name)
-			var chain []scripts.ScriptFrame
-			// FUN_0041A1A0 builds the chain from the view's own script (a
-			// walkable cell's resource), the script of its area (the table at
-			// metadata offset 0x1B8C) and the set script.
-			if sceneView.IsCell() {
-				program, err := scriptProgram(activeSet.File(), sceneView.Resource)
-				if err != nil {
-					return nil, false, err
-				}
-				chain = append(chain, scripts.ScriptFrame{Program: program, Me: me, Target: me, Label: "Scene Script: "})
-			}
-			if resource, ok := activeSet.SceneScriptResource(sceneView.ReferenceIndex); ok {
-				program, err := scriptProgram(activeSet.File(), resource)
-				if err != nil {
-					return nil, false, err
-				}
-				chain = append(chain, scripts.ScriptFrame{Program: program, Me: me, Target: me, Label: "Area Script: "})
-			}
-			program, err := scriptProgram(activeSet.File(), activeSet.ScriptResource())
-			if err != nil {
-				return nil, false, err
-			}
-			chain = append(chain, scripts.ScriptFrame{Program: program, Me: me, Target: me, Label: "Set Script: ", Last: true})
-			return chain, true, nil
-		}
-		return nil, false, nil
-	}
 	scriptHost.Env.Busy = func() bool { return scriptEngineBusy != nil && scriptEngineBusy() }
 	scriptHost.Env.OpenSetFile = func(name string) error {
 		frame, err := switchSpecialSet(name, "", "")
