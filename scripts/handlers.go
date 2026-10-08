@@ -377,14 +377,14 @@ const (
 // The jump table geometry, verified from the image. Each entry is four bytes and
 // holds the address of the block for one opcode.
 var (
-	// commandPrimaryTable is at 0x00425768, indexed by opcode - 0x2EE1.
-	commandPrimaryTable = TableGeometry{Address: 0x00425768, Base: 0x2EE1, Count: 0x58}
-	// commandSecondaryTable is at 0x004258C8, indexed by opcode - 0x3E82.
-	commandSecondaryTable = TableGeometry{Address: 0x004258C8, Base: 0x3E82, Count: 0x34}
-	// valuePrimaryTable is at 0x00414BB8, indexed by opcode - 0x3E81.
-	valuePrimaryTable = TableGeometry{Address: 0x00414BB8, Base: 0x3E81, Count: 0x35}
-	// valueSecondaryTable is at 0x00414C8C, indexed by opcode - 0x4E22.
-	valueSecondaryTable = TableGeometry{Address: 0x00414C8C, Base: 0x4E22, Count: 0x6B}
+	// CommandPrimaryTable is at 0x00425768, indexed by opcode - 0x2EE1.
+	CommandPrimaryTable = TableGeometry{Address: 0x00425768, Base: 0x2EE1, Count: 0x58}
+	// CommandSecondaryTable is at 0x004258C8, indexed by opcode - 0x3E82.
+	CommandSecondaryTable = TableGeometry{Address: 0x004258C8, Base: 0x3E82, Count: 0x34}
+	// ValuePrimaryTable is at 0x00414BB8, indexed by opcode - 0x3E81.
+	ValuePrimaryTable = TableGeometry{Address: 0x00414BB8, Base: 0x3E81, Count: 0x35}
+	// ValueSecondaryTable is at 0x00414C8C, indexed by opcode - 0x4E22.
+	ValueSecondaryTable = TableGeometry{Address: 0x00414C8C, Base: 0x4E22, Count: 0x6B}
 )
 
 // TableGeometry describes one jump table in the reference image.
@@ -409,11 +409,11 @@ func (g TableGeometry) Covers(opcode uint16) bool {
 	return opcode >= g.First() && opcode <= g.Last()
 }
 
-// commandGeometry and valueGeometry describe the two dispatchers in full, so a
+// CommandGeometry and ValueGeometry describe the two dispatchers in full, so a
 // caller can classify an opcode without consulting the handler tables.
 var (
-	commandGeometry = []TableGeometry{commandPrimaryTable, commandSecondaryTable}
-	valueGeometry   = []TableGeometry{valuePrimaryTable, valueSecondaryTable}
+	CommandGeometry = []TableGeometry{CommandPrimaryTable, CommandSecondaryTable}
+	ValueGeometry   = []TableGeometry{ValuePrimaryTable, ValueSecondaryTable}
 )
 
 // DispatchRouteFromGeometry classifies an opcode the way the dispatcher does:
@@ -432,7 +432,7 @@ func DispatchRouteFromGeometry(opcode uint16, special uint16, geometry []TableGe
 	return TableGeometry{}
 }
 
-// verifiedTables describes every transcribed switch so a test can assert the
+// VerifiedTables describes every transcribed switch so a test can assert the
 // exact case count, endpoints and contiguity. A dropped case changes the count
 // and fails the assertion, which is the guard against repeating the earlier
 // extraction error.
@@ -440,17 +440,17 @@ func DispatchRouteFromGeometry(opcode uint16, special uint16, geometry []TableGe
 // The geometry each table was transcribed from is carried alongside it, so a test
 // can confirm the entry counts against the jump tables rather than only against
 // the Go maps.
-var verifiedTables = []struct {
-	name     string
-	table    map[uint16]string
-	first    uint16
-	last     uint16
-	geometry TableGeometry
+var VerifiedTables = []struct {
+	Name     string
+	Table    map[uint16]string
+	First    uint16
+	Last     uint16
+	Geometry TableGeometry
 }{
-	{"FUN_00424890.primary", commandPrimaryHandlers, 12001, 12088, commandPrimaryTable},
-	{"FUN_00424890.secondary", commandSecondaryHandlers, 16002, 16053, commandSecondaryTable},
-	{"FUN_004137B0.primary", valuePrimaryHandlers, 16001, 16053, valuePrimaryTable},
-	{"FUN_004137B0.secondary", valueSecondaryHandlers, 20002, 20108, valueSecondaryTable},
+	{"FUN_00424890.primary", commandPrimaryHandlers, 12001, 12088, CommandPrimaryTable},
+	{"FUN_00424890.secondary", commandSecondaryHandlers, 16002, 16053, CommandSecondaryTable},
+	{"FUN_004137B0.primary", valuePrimaryHandlers, 16001, 16053, ValuePrimaryTable},
+	{"FUN_004137B0.secondary", valueSecondaryHandlers, 20002, 20108, ValueSecondaryTable},
 }
 
 // normalizeHandlerName renders a native function name in the canonical

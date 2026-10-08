@@ -329,3 +329,6 @@ func LookupPascalOpcode(value []byte) uint16 {
 	}
 	return LookupOpcode(string(value[1 : 1+int(value[0])]))
 }
+
+// OpcodeIDs is the opcode name table; callers must not modify it.
+func OpcodeIDs() map[string]uint16 { return opcodeIDs }

@@ -183,11 +183,11 @@ func CaseBodyOffset(records []Record, start int) (int32, uint16, error) {
 	program := Program{Records: records}
 	current := start
 	for {
-		if kindAt(program, current) != 6 {
+		if KindAt(program, current) != 6 {
 			return -1, 0x1b, nil
 		}
 		cursor := current
-		for kindAt(program, cursor) == 6 {
+		for KindAt(program, cursor) == 6 {
 			cursor++
 		}
 		if cursor >= len(records) {

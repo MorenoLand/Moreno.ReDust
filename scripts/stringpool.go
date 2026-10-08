@@ -64,8 +64,8 @@ const PoolPaddingBytes = 4
 // pool's padding.
 const KeywordTableFirst uint32 = 0x0045D738
 
-// engineStringPool is the transcribed pool in address order.
-var engineStringPool = []PoolEntry{
+// EngineStringPool is the transcribed pool in address order.
+var EngineStringPool = []PoolEntry{
 	{0x0045D361, "all"},
 	{0x0045D369, "none"},
 	{0x0045D371, "()"},
@@ -152,7 +152,7 @@ var engineStringPool = []PoolEntry{
 // the first character of the text, which is one byte past the address Ghidra
 // renders for the reference.
 func PoolText(addr uint32) (string, bool) {
-	for _, entry := range engineStringPool {
+	for _, entry := range EngineStringPool {
 		if entry.Addr == addr {
 			return entry.Text, true
 		}

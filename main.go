@@ -20,6 +20,8 @@ import (
 	"redust/render"
 	"redust/save"
 	"redust/scripts"
+	"redust/scripts/native"
+	"redust/scripts/story"
 )
 
 func loadInventoryFrame(archive *assets.PropArchive, propName, viewName string, angle int16) (render.PuppetFrame, error) {
@@ -196,7 +198,7 @@ func run() error {
 	var nativeRandom scripts.NativeRandom
 	nativePumpCount := uint32(0)
 	resetNativeRandom := func() {
-		seed := scripts.NativeRandomSeed(scripts.NativeTickMilliseconds())
+		seed := scripts.NativeRandomSeed(native.NativeTickMilliseconds())
 		if *silentScript != "" && *silentSeed != 0 {
 			seed = uint32(*silentSeed)
 		}
@@ -291,7 +293,7 @@ func run() error {
 		stage.Close()
 		return fmt.Errorf("read startup game position: %w", err)
 	}
-	gameClock, gameDay, phase := scripts.NativeAdvanceClockFields(2, 1, 0)
+	gameClock, gameDay, phase := story.NativeAdvanceClockFields(2, 1, 0)
 	playercash := int32(5)
 	gamePhase, dogVisibleState := int16(phase), gameDay == 1
 	if *debug {
@@ -493,10 +495,10 @@ func run() error {
 	var bloodPhase, docPhase, fightOn int16
 	var fearPhase int16
 	hotelSavedScene, hotelSavedDirection := "Scene C4", "east"
-	var hotelSceneOpenAction *scripts.HotelSceneOpenAction
+	var hotelSceneOpenAction *story.HotelSceneOpenAction
 	hotelSceneOpenStep, hotelEventsLocked := 0, false
 	var pendingHotelActorSetup, pendingHotelActorSelector string
-	var hotelVoiceSteps []scripts.HotelVoiceStep
+	var hotelVoiceSteps []story.HotelVoiceStep
 	var hotelVoiceIndex int
 	var hotelVoice *engine.VoiceOne
 	var hotelVoiceBank *audio.SoundBank
@@ -504,7 +506,7 @@ func run() error {
 	var hotelDoorAfterDelay string
 	var hotelHotplateStage *assets.Stage
 	var hotelHotplateBank *audio.SoundBank
-	var hotelHotplatePending scripts.HotelAction
+	var hotelHotplatePending story.HotelAction
 	var applyFlatTarget func(int, uint16, int, uint32) (render.IndexedFrame, bool, error)
 	defer func() {
 		if hotelVoice != nil {
@@ -521,7 +523,7 @@ func run() error {
 		}
 	}()
 	var finishPlayerDeath func(string) error
-	var deathSequence scripts.DeathSequence
+	var deathSequence story.DeathSequence
 	var deathStage uint8
 	var deathUntil uint32
 	var deathFrame render.IndexedFrame
@@ -1074,7 +1076,7 @@ func run() error {
 			log.Printf("world-actor=%s depth=%d bounds=%d,%d,%d,%d", actor.Name, actor.Depth, actor.Bounds.Min.X, actor.Bounds.Min.Y, actor.Bounds.Max.X, actor.Bounds.Max.Y)
 		}
 	}
-	startAvatarNoFace(scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
+	startAvatarNoFace(scripts.NativeFrameUnits(native.NativeTickMilliseconds()))
 	if *silent && *silentScript == "" && *loadPath == "" {
 		if *debug {
 			themeBank, err = audio.OpenSoundBank(workspace, "DATA/NIGHT.SND")
@@ -1211,7 +1213,7 @@ func run() error {
 		avatarTipActive, avatarIdleActive = true, false
 		avatarTipAfter = after
 		avatarGestureActive = false
-		avatarTipNextFrame = scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) + nativeAvatarFrameInterval
+		avatarTipNextFrame = scripts.NativeFrameUnits(native.NativeTickMilliseconds()) + nativeAvatarFrameInterval
 		return refreshWorldScene()
 	}
 	advanceAvatarAnimation := func(now uint32) (bool, error) {
@@ -1411,7 +1413,7 @@ func run() error {
 				return closeNext(fmt.Errorf("unknown %s direction %q", setName, directionName))
 			}
 		}
-		hotelSceneAction, openHotelScene := scripts.HotelOpenSceneAction(semanticName, nextView.Resource, scripts.HotelStoryState{Day: gameDay, Clock: gameClock, Phase: gamePhase, FearPhase: fearPhase, LaurelPhase: laurelPhase, InventoryOwners: inventoryOwners, SavedScene: hotelSavedScene, SavedDirection: hotelSavedDirection})
+		hotelSceneAction, openHotelScene := story.HotelOpenSceneAction(semanticName, nextView.Resource, story.HotelStoryState{Day: gameDay, Clock: gameClock, Phase: gamePhase, FearPhase: fearPhase, LaurelPhase: laurelPhase, InventoryOwners: inventoryOwners, SavedScene: hotelSavedScene, SavedDirection: hotelSavedDirection})
 		if openHotelScene {
 			direction = hotelSceneAction.Direction
 		}
@@ -1443,8 +1445,8 @@ func run() error {
 		if actor, status := scriptActors.Lookup("trotter"); status == 0 {
 			trotterSet = actor.Set
 		}
-		trotterState := scripts.TrotterStoryState{Day: int16(gameDay), Clock: int16(gameClock), Phase: gamePhase, TrotterPhase: trotterPhase, TrotterActorSet: trotterSet, DocPhase: docPhase}
-		closeTrotter := scripts.NativeTrotterSetTransition(trotterState, previousName, false)
+		trotterState := story.TrotterStoryState{Day: int16(gameDay), Clock: int16(gameClock), Phase: gamePhase, TrotterPhase: trotterPhase, TrotterActorSet: trotterSet, DocPhase: docPhase}
+		closeTrotter := story.NativeTrotterSetTransition(trotterState, previousName, false)
 		if closeTrotter.Hide {
 			if err := deliverScriptEvent(scripts.ActorEvent{Actor: "trotter", Message: "putdownactor()"}); err != nil {
 				return render.IndexedFrame{}, err
@@ -1478,7 +1480,7 @@ func run() error {
 			}
 			pendingHotelActorSetup, pendingHotelActorSelector = "", ""
 		}
-		openTrotter := scripts.NativeTrotterSetTransition(trotterState, semanticName, true)
+		openTrotter := story.NativeTrotterSetTransition(trotterState, semanticName, true)
 		if openTrotter.Setup != "" {
 			if err := deliverScriptEvent(scripts.ActorEvent{Actor: "trotter", Message: fmt.Sprintf("setupactor(%q)", openTrotter.Setup)}); err != nil {
 				return render.IndexedFrame{}, err
@@ -1749,7 +1751,7 @@ func run() error {
 			if err != nil {
 				return false, err
 			}
-			frame, err := dialogue.Start(convBase, scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
+			frame, err := dialogue.Start(convBase, scripts.NativeFrameUnits(native.NativeTickMilliseconds()))
 			if err != nil {
 				return false, err
 			}
@@ -1961,7 +1963,7 @@ func run() error {
 		definition, found := inventoryArchive.Definition(name)
 		return "DATA/INVEN.PRP", definition.ScriptResource, "inven", found
 	}
-	scriptHost.Env.Ticks = func() uint32 { return scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) }
+	scriptHost.Env.Ticks = func() uint32 { return scripts.NativeFrameUnits(native.NativeTickMilliseconds()) }
 	scriptHost.Env.PlayerHeading = func() int16 {
 		degree, _ := render.NativeCurrentDegree(worldPoint[2])
 		return degree
@@ -2023,7 +2025,7 @@ func run() error {
 		}
 		return deliverScriptEvent(event)
 	}
-	schedulerPasses, schedulerWindow := 0, scripts.NativeTickMilliseconds()
+	schedulerPasses, schedulerWindow := 0, native.NativeTickMilliseconds()
 	// The native pump (FUN_00406920) finishes each render by waiting until the
 	// timer FUN_0042B700, which counts 60 units a second, has advanced by the
 	// boot script's framerate(3). Walk jobs, loops and projection therefore run
@@ -2032,7 +2034,7 @@ func run() error {
 	nextNativePump := uint32(0)
 	forceNativePump := false
 	nativePumpDue := func() bool {
-		now := scripts.NativeFrameUnits(scripts.NativeTickMilliseconds())
+		now := scripts.NativeFrameUnits(native.NativeTickMilliseconds())
 		if int32(now-nextNativePump) < 0 {
 			return false
 		}
@@ -2048,7 +2050,7 @@ func run() error {
 		forceNativePump = false
 		if *debug && *debugLoops && pumpDue {
 			schedulerPasses++
-			if now := scripts.NativeTickMilliseconds(); now-schedulerWindow >= 1000 {
+			if now := native.NativeTickMilliseconds(); now-schedulerWindow >= 1000 {
 				log.Printf("scheduler passes=%d window-ms=%d", schedulerPasses, now-schedulerWindow)
 				schedulerPasses, schedulerWindow = 0, now
 			}
@@ -2071,11 +2073,11 @@ func run() error {
 			}
 			switch loop.Callback {
 			case "nightfxs", "dayfxs":
-				cue, found := scripts.NativeSoundCue{}, false
+				cue, found := story.NativeSoundCue{}, false
 				if loop.Callback == "nightfxs" {
-					cue, found = scripts.NightWildlifeCue(currentThemeName, &nativeRandom)
+					cue, found = story.NightWildlifeCue(currentThemeName, &nativeRandom)
 				} else {
-					cue, found = scripts.DayWildlifeCue(currentThemeName, &nativeRandom)
+					cue, found = story.DayWildlifeCue(currentThemeName, &nativeRandom)
 				}
 				if found {
 					played, err := themeBank.PlayAtVolume(audioContext, cue.Name, cue.Volume)
@@ -2104,11 +2106,11 @@ func run() error {
 				for hotelSceneOpenStep < len(hotelSceneOpenAction.TriggerSteps) {
 					step := hotelSceneOpenAction.TriggerSteps[hotelSceneOpenStep]
 					switch step.Kind {
-					case scripts.HotelTriggerSetPhase:
+					case story.HotelTriggerSetPhase:
 						gamePhase, phase = step.Phase, int(step.Phase)
-					case scripts.HotelTriggerSetLockEvents:
+					case story.HotelTriggerSetLockEvents:
 						hotelEventsLocked = step.LockEvents
-					case scripts.HotelTriggerRunPuppet:
+					case story.HotelTriggerRunPuppet:
 						hotelSceneOpenStep++
 						if scriptManaged[strings.ToLower(step.Actor)] {
 							// HOTUPPER's trigger runs the cast's runpuppet, then resumes its
@@ -2131,14 +2133,14 @@ func run() error {
 							log.Printf("hotel-open continuation=%d kind=%d actor=%s puppet=%s pending=true", hotelSceneOpenStep, step.Kind, step.Actor, step.Puppet)
 						}
 						return 0, nil
-					case scripts.HotelTriggerDelay:
+					case story.HotelTriggerDelay:
 						hotelSceneOpenStep++
 						loop.Remaining = int32(step.DelayTicks)
 						if *debug {
 							log.Printf("hotel-open delay=%d next=%d", step.DelayTicks, hotelSceneOpenStep)
 						}
 						return nativeLoops.Register(loop), nil
-					case scripts.HotelTriggerMoveActor:
+					case story.HotelTriggerMoveActor:
 						if !scriptManaged[strings.ToLower(step.Actor)] {
 							return 0, fmt.Errorf("hotel trigger cannot move actor %q", step.Actor)
 						}
@@ -2320,20 +2322,20 @@ func run() error {
 				cursor = "touch"
 			}
 			if activeSetName == "town" {
-				if _, found := scripts.NiteSceneObjectAction(view.Resource, worldPoint[2], point, gameDay, gameClock); found {
+				if _, found := story.NiteSceneObjectAction(view.Resource, worldPoint[2], point, gameDay, gameClock); found {
 					cursor = "touch"
 				}
 			}
 			if activeSetName == "town" {
-				if _, found := scripts.NiteDoorAt(view.Resource, worldPoint[2], point); found {
+				if _, found := story.NiteDoorAt(view.Resource, worldPoint[2], point); found {
 					cursor = "touch"
 				}
 			} else if activeSetName == "sallower" {
-				if _, found := scripts.SallowerDoorAt(view.Resource, worldPoint[2], point); found {
+				if _, found := story.SallowerDoorAt(view.Resource, worldPoint[2], point); found {
 					cursor = "touch"
 				}
 			} else if activeSetName == "hotlower" {
-				if _, found := scripts.HotLowerDoorAt(view.Resource, worldPoint[2], point); found {
+				if _, found := story.HotLowerDoorAt(view.Resource, worldPoint[2], point); found {
 					cursor = "touch"
 				}
 			}
@@ -2356,7 +2358,7 @@ func run() error {
 	}
 	var transitionMode uint8
 	var readingStage *assets.Stage
-	var readingAction scripts.InventoryExamination
+	var readingAction story.InventoryExamination
 	var readingScene int
 	defer func() {
 		if readingStage != nil {
@@ -2397,7 +2399,7 @@ func run() error {
 	}
 	var pendingSetName, pendingSetScene, pendingSetDirection string
 	var transferSetName, transferSetScene, transferSetDirection string
-	var flatMouseSession *scripts.FlatMouseSession
+	var flatMouseSession *story.FlatMouseSession
 	var flatMouseResource uint32
 	// flatMouseReturnFlat is the name of the flat that was current when a
 	// save/open button was pressed. NEW.FLT resource 24 assigns currentflat() to a
@@ -2408,7 +2410,7 @@ func run() error {
 	var scoreVolumeBaseFrame render.IndexedFrame
 	var scoreVolumeTrack image.Rectangle
 	var volumeSliderDragging bool
-	composeScoreVolume := func(base render.IndexedFrame, slider scripts.MenuVolumeSlider) (render.IndexedFrame, image.Rectangle, error) {
+	composeScoreVolume := func(base render.IndexedFrame, slider native.MenuVolumeSlider) (render.IndexedFrame, image.Rectangle, error) {
 		frame, projected, err := render.CompositeFlatProps(base, []render.FlatPropSprite{{Name: "slider", PropName: "slider", ViewName: "BASE", Anchor: image.Pt(slider.X, slider.Y), Archive: propArchive}})
 		if err != nil {
 			return render.IndexedFrame{}, image.Rectangle{}, fmt.Errorf("draw score volume slider: %w", err)
@@ -2418,18 +2420,18 @@ func run() error {
 		}
 		return frame, image.Rect(projected[0].Bounds.Min.X, scoreMenuVolumeTop, projected[0].Bounds.Max.X, scoreMenuVolumeBottom+1), nil
 	}
-	setScoreMenuVolume := func(level int) (scripts.MenuVolumeSlider, bool, error) {
-		slider, status, err := scripts.NativeMenuVolume(level, audio.SetWaveVolume)
+	setScoreMenuVolume := func(level int) (native.MenuVolumeSlider, bool, error) {
+		slider, status, err := native.NativeMenuVolume(level, audio.SetWaveVolume)
 		if err != nil {
-			return scripts.MenuVolumeSlider{}, false, err
+			return native.MenuVolumeSlider{}, false, err
 		}
 		if status != 0 {
-			return scripts.MenuVolumeSlider{}, false, fmt.Errorf("menu volume returned status %#x", status)
+			return native.MenuVolumeSlider{}, false, fmt.Errorf("menu volume returned status %#x", status)
 		}
 		if stage == mainStage && currentScene == 3 && transition == nil && scoreVolumeBaseFrame.Width > 0 {
 			frame, track, err := composeScoreVolume(scoreVolumeBaseFrame, slider)
 			if err != nil {
-				return scripts.MenuVolumeSlider{}, false, err
+				return native.MenuVolumeSlider{}, false, err
 			}
 			currentFrame, stageFrame, scoreVolumeTrack = frame, frame, track
 		}
@@ -2700,8 +2702,8 @@ func run() error {
 			} else {
 				// An older save carries no Trotter state; the initialisation above
 				// cleared the placement the set-open step just made, so redo it.
-				state := scripts.TrotterStoryState{Day: int16(gameDay), Clock: int16(gameClock), Phase: gamePhase, TrotterPhase: trotterPhase, DocPhase: docPhase}
-				if open := scripts.NativeTrotterSetTransition(state, activeSetName, true); open.Setup != "" {
+				state := story.TrotterStoryState{Day: int16(gameDay), Clock: int16(gameClock), Phase: gamePhase, TrotterPhase: trotterPhase, DocPhase: docPhase}
+				if open := story.NativeTrotterSetTransition(state, activeSetName, true); open.Setup != "" {
 					if err := deliverScriptEvent(scripts.ActorEvent{Actor: "trotter", Message: fmt.Sprintf("setupactor(%q)", open.Setup)}); err != nil {
 						return err
 					}
@@ -2767,7 +2769,7 @@ func run() error {
 		delete(actorPoses, "laurel"); delete(actorHeadings, "laurel"); delete(actorPoses, "trotter"); delete(actorHeadings, "trotter"); delete(actorPoses, "isao"); delete(actorHeadings, "isao")
 		currentScene, inventoryMenuActive = 0, false
 		publishBone()
-		startAvatarNoFace(scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
+		startAvatarNoFace(scripts.NativeFrameUnits(native.NativeTickMilliseconds()))
 		if err := refreshWorldScene(); err != nil {
 			return err
 		}
@@ -2791,11 +2793,11 @@ func run() error {
 		return loadGameProgressFile(savePath)
 	}
 	finishPlayerDeath = func(cause string) error {
-		sequence, err := scripts.NewDeathSequence(workspace, cause, &nativeRandom)
+		sequence, err := story.NewDeathSequence(workspace, cause, &nativeRandom)
 		if err != nil {
 			return err
 		}
-		deathSequence, deathStage, deathUntil = sequence, 1, scripts.NativeFrameUnits(scripts.NativeTickMilliseconds())+uint32(sequence.DelayFrames)
+		deathSequence, deathStage, deathUntil = sequence, 1, scripts.NativeFrameUnits(native.NativeTickMilliseconds())+uint32(sequence.DelayFrames)
 		avatarIdleActive, avatarGestureActive, avatarTipActive = false, false, false
 		if *debug {
 			log.Printf("playerdeath=%s movie=%s narration=%v", cause, sequence.Movie, sequence.Narration)
@@ -2867,7 +2869,7 @@ func run() error {
 				return err
 			}
 		}
-		deathUntil, deathStage = scripts.NativeFrameUnits(scripts.NativeTickMilliseconds())+uint32(duration), 5
+		deathUntil, deathStage = scripts.NativeFrameUnits(native.NativeTickMilliseconds())+uint32(duration), 5
 		return nil
 	}
 	startNewGame := func() error {
@@ -2913,12 +2915,12 @@ func run() error {
 		}
 		return refreshWorldScene()
 	}
-	hotelStoryState := func() scripts.HotelStoryState {
-		return scripts.HotelStoryState{Day: gameDay, Clock: gameClock, Phase: gamePhase, FearPhase: fearPhase, LaurelPhase: laurelPhase, InventoryOwners: inventoryOwners, SavedScene: hotelSavedScene, SavedDirection: hotelSavedDirection}
+	hotelStoryState := func() story.HotelStoryState {
+		return story.HotelStoryState{Day: gameDay, Clock: gameClock, Phase: gamePhase, FearPhase: fearPhase, LaurelPhase: laurelPhase, InventoryOwners: inventoryOwners, SavedScene: hotelSavedScene, SavedDirection: hotelSavedDirection}
 	}
 	var advanceDay func() (render.IndexedFrame, bool, error)
 	advanceDay = func() (render.IndexedFrame, bool, error) {
-		route, err := scripts.NativeAdvanceDayRoute(scripts.AdvanceDayState{Day: gameDay, Clock: gameClock, Phase: gamePhase, CurrentSet: activeSetName, InventoryOwners: inventoryOwners})
+		route, err := story.NativeAdvanceDayRoute(story.AdvanceDayState{Day: gameDay, Clock: gameClock, Phase: gamePhase, CurrentSet: activeSetName, InventoryOwners: inventoryOwners})
 		if err != nil {
 			return render.IndexedFrame{}, false, err
 		}
@@ -2946,7 +2948,7 @@ func run() error {
 				themeBank = nil
 			}
 			currentThemeName, nativeLoops = "", scripts.LoopScheduler{}
-			startAvatarNoFace(scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
+			startAvatarNoFace(scripts.NativeFrameUnits(native.NativeTickMilliseconds()))
 			defer func() {
 				if err := runInitActors(); err != nil {
 					log.Printf("initactors after advanceday: %v", err)
@@ -2954,7 +2956,7 @@ func run() error {
 			}()
 			sceneName, direction := route.ViewName, route.Direction
 			if sceneName == "" {
-				name, nativeDirection, err := scripts.NativeSetInitialView(workspace, "DATA/"+strings.ToUpper(route.SetName))
+				name, nativeDirection, err := story.NativeSetInitialView(workspace, "DATA/"+strings.ToUpper(route.SetName))
 				if err != nil {
 					return render.IndexedFrame{}, false, err
 				}
@@ -2995,7 +2997,7 @@ func run() error {
 				doorOwner = step.DoorOwner
 			}
 			if step.DelayFrames > 0 {
-				hotelDelayUntil = scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) + uint32(step.DelayFrames)
+				hotelDelayUntil = scripts.NativeFrameUnits(native.NativeTickMilliseconds()) + uint32(step.DelayFrames)
 				return nil
 			}
 			if step.Cue == "" {
@@ -3009,7 +3011,7 @@ func run() error {
 			if err != nil {
 				return err
 			}
-			if err := voice.Start(scripts.NativeFrameUnits(scripts.NativeTickMilliseconds())); err != nil {
+			if err := voice.Start(scripts.NativeFrameUnits(native.NativeTickMilliseconds())); err != nil {
 				return err
 			}
 			hotelVoice = voice
@@ -3027,7 +3029,7 @@ func run() error {
 		}
 		return nil
 	}
-	openHotelHotplate := func(action scripts.HotelAction) (render.IndexedFrame, error) {
+	openHotelHotplate := func(action story.HotelAction) (render.IndexedFrame, error) {
 		if hotelHotplateStage != nil {
 			return render.IndexedFrame{}, fmt.Errorf("HOTPLATE stage is already active")
 		}
@@ -3101,8 +3103,8 @@ func run() error {
 		}
 		return frame, nil
 	}
-	runHotelAction := func(action scripts.HotelAction) (render.IndexedFrame, bool, error) {
-		if action.Sound != "" && action.Kind != scripts.HotelActionHotplateChoice {
+	runHotelAction := func(action story.HotelAction) (render.IndexedFrame, bool, error) {
+		if action.Sound != "" && action.Kind != story.HotelActionHotplateChoice {
 			bank := soundBank
 			if hotelHotplateStage != nil && stage == hotelHotplateStage && hotelHotplateBank != nil {
 				bank = hotelHotplateBank
@@ -3112,7 +3114,7 @@ func run() error {
 			}
 		}
 		switch action.Kind {
-		case scripts.HotelActionDoor:
+		case story.HotelActionDoor:
 			if action.GiveItem != "" {
 				inventoryOwners[action.GiveItem], inventoryHidden[action.GiveItem] = "stranger", false
 				if err := soundBank.Play(audioContext, "inven", 1); err != nil {
@@ -3120,29 +3122,29 @@ func run() error {
 				}
 			}
 			if action.DelayFrames > 0 {
-				hotelDoorAfterDelay, hotelDelayUntil = action.DoorOwner, scripts.NativeFrameUnits(scripts.NativeTickMilliseconds())+uint32(action.DelayFrames)
+				hotelDoorAfterDelay, hotelDelayUntil = action.DoorOwner, scripts.NativeFrameUnits(native.NativeTickMilliseconds())+uint32(action.DelayFrames)
 			} else {
 				doorOwner = action.DoorOwner
 			}
-		case scripts.HotelActionKnock:
+		case story.HotelActionKnock:
 			doorOwner = ""
-		case scripts.HotelActionPuppet:
+		case story.HotelActionPuppet:
 			if action.SetLaurelPhase { laurelPhase = action.LaurelPhase }
 			if err := startScriptSource("hotel "+action.Puppet, fmt.Sprintf("sendtocast(\"gang\",runpuppet(%q))", strings.ToLower(strings.TrimPrefix(action.Puppet, "PUPPETS/"))), nil); err != nil { return render.IndexedFrame{}, false, err }
 			return currentFrame, true, nil
-		case scripts.HotelActionBreakfast:
+		case story.HotelActionBreakfast:
 			if playback != nil || transition != nil || sceneMovieAfter != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("HOTPLATE transition is already active")
 			}
 			hotelHotplatePending = action
 			fade, err := render.NewFadeEffect(currentFrame, blackFrame, action.FadeOutFrames)
 			if err != nil {
-				hotelHotplatePending = scripts.HotelAction{}
+				hotelHotplatePending = story.HotelAction{}
 				return render.IndexedFrame{}, false, err
 			}
 			transition, transitionMode = fade, 9
 			return fade.CurrentFrame(), true, nil
-		case scripts.HotelActionHotplateChoice:
+		case story.HotelActionHotplateChoice:
 			item := strings.ToLower(action.AddInventory)
 			if item == "" {
 				return render.IndexedFrame{}, false, fmt.Errorf("HOTPLATE choice has no inventory item")
@@ -3168,7 +3170,7 @@ func run() error {
 				log.Printf("hotplate-choice item=%s flat=%d", item, action.FlatTarget)
 			}
 			return frame, changed, nil
-		case scripts.HotelActionHotplatePaper:
+		case story.HotelActionHotplatePaper:
 			returnFrame := currentFrame
 			if err := startActionMovie(action.Movie, action.FadeOutFrames, func(bool) (render.IndexedFrame, bool, error) {
 				return restoreActionFrame(returnFrame, action.FadeInFrames)
@@ -3176,9 +3178,9 @@ func run() error {
 				return render.IndexedFrame{}, false, err
 			}
 			return currentFrame, true, nil
-		case scripts.HotelActionHotplateSound:
+		case story.HotelActionHotplateSound:
 			return currentFrame, action.Sound != "", nil
-		case scripts.HotelActionHotplateExit:
+		case story.HotelActionHotplateExit:
 			if hotelHotplateStage == nil || stage != hotelHotplateStage || playback != nil || transition != nil {
 				return currentFrame, false, nil
 			}
@@ -3188,7 +3190,7 @@ func run() error {
 			}
 			hotelHotplatePending, transition, transitionMode = action, fade, 10
 			return fade.CurrentFrame(), true, nil
-		case scripts.HotelActionFearVoices:
+		case story.HotelActionFearVoices:
 			fearPhase = action.FearPhase
 			if hotelVoice != nil {
 				return currentFrame, false, nil
@@ -3202,10 +3204,10 @@ func run() error {
 			if err := startHotelVoiceStep(); err != nil {
 				return render.IndexedFrame{}, false, err
 			}
-		case scripts.HotelActionSleep, scripts.HotelActionMovie:
+		case story.HotelActionSleep, story.HotelActionMovie:
 			returnFrame := currentFrame
 			if err := startActionMovie(action.Movie, action.FadeOutFrames, func(marker bool) (render.IndexedFrame, bool, error) {
-				if action.Kind == scripts.HotelActionSleep && marker {
+				if action.Kind == story.HotelActionSleep && marker {
 					return advanceDay()
 				}
 				return restoreActionFrame(returnFrame, 30)
@@ -3217,14 +3219,14 @@ func run() error {
 		}
 		return currentFrame, true, nil
 	}
-	queueHotelTransition := func(action scripts.HotelAction) error {
+	queueHotelTransition := func(action story.HotelAction) error {
 		pendingHotelActorSetup, pendingHotelActorSelector = action.ActorSetup, action.ActorSelector
 		if action.SaveRoomReturn {
 			hotelSavedScene, hotelSavedDirection = string(view.Name[1:]), "east"
 		}
 		sceneName, direction := action.ViewName, action.Direction
 		if sceneName == "" {
-			name, nativeDirection, err := scripts.NativeSetInitialView(workspace, "DATA/"+strings.ToUpper(action.SetName))
+			name, nativeDirection, err := story.NativeSetInitialView(workspace, "DATA/"+strings.ToUpper(action.SetName))
 			if err != nil {
 				return err
 			}
@@ -3282,7 +3284,7 @@ func run() error {
 		return restoreActionFrame(currentFrame, fadeFrames)
 	}
 	openInventoryExamination := func() (render.IndexedFrame, bool, error) {
-		action, found, err := scripts.ExamineInventoryItem(workspace, handItem, inventoryDegrees[strings.ToLower(handItem)])
+		action, found, err := story.ExamineInventoryItem(workspace, handItem, inventoryDegrees[strings.ToLower(handItem)])
 		if err != nil || !found {
 			return currentFrame, false, err
 		}
@@ -3347,8 +3349,8 @@ func run() error {
 			}
 			return scripts.ParseProgram(data)
 		}
-		context := scripts.InventoryBookContext{FlatIndex: readingScene + 1, FlatCount: len(readingStage.Scenes), Point: point, BorderProp: readingAction.BorderProp, BorderDegree: readingAction.BorderDegree, PointInBorder: pointInBorder}
-		var action scripts.InventoryBookAction
+		context := story.InventoryBookContext{FlatIndex: readingScene + 1, FlatCount: len(readingStage.Scenes), Point: point, BorderProp: readingAction.BorderProp, BorderDegree: readingAction.BorderDegree, PointInBorder: pointInBorder}
+		var action story.InventoryBookAction
 		found := false
 		if pointInBorder(readingAction.BorderDegree) {
 			resource := map[string]uint32{"histbord": 196, "pagebord": 265, "yunnibord": 556}[strings.ToLower(readingAction.BorderProp)]
@@ -3360,7 +3362,7 @@ func run() error {
 			if err != nil {
 				return render.IndexedFrame{}, false, err
 			}
-			action, found, err = scripts.ParseInventoryBookAction(program, context)
+			action, found, err = story.ParseInventoryBookAction(program, context)
 			if err != nil {
 				return render.IndexedFrame{}, false, err
 			}
@@ -3370,7 +3372,7 @@ func run() error {
 			if err != nil {
 				return render.IndexedFrame{}, false, err
 			}
-			action, found, err = scripts.ParseInventoryBookAction(program, context)
+			action, found, err = story.ParseInventoryBookAction(program, context)
 			if err != nil {
 				return render.IndexedFrame{}, false, err
 			}
@@ -3432,7 +3434,7 @@ func run() error {
 		}
 		currentScene, currentPixels = 0, pixels
 		inventoryMenuActive = false
-		startAvatarNoFace(scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
+		startAvatarNoFace(scripts.NativeFrameUnits(native.NativeTickMilliseconds()))
 		if err := refreshWorldScene(); err != nil {
 			return render.IndexedFrame{}, false, err
 		}
@@ -3505,7 +3507,7 @@ func run() error {
 		}
 		if mainFlat && target == 3 {
 			scoreVolumeBaseFrame = nextFrame
-			slider, status, err := scripts.NativeMenuVolume(audio.WaveVolume(), func(int) error { return nil })
+			slider, status, err := native.NativeMenuVolume(audio.WaveVolume(), func(int) error { return nil })
 			if err != nil || status != 0 {
 				return render.IndexedFrame{}, false, fmt.Errorf("read score volume slider: status=%#x err=%v", status, err)
 			}
@@ -3546,7 +3548,7 @@ func run() error {
 		} else if mainFlat && target == 0 {
 			stageFrame = nextFrame
 			if previousScene == 2 {
-				startAvatarNoFace(scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
+				startAvatarNoFace(scripts.NativeFrameUnits(native.NativeTickMilliseconds()))
 			}
 		} else if !mainFlat {
 			stageFrame = nextFrame
@@ -3685,7 +3687,7 @@ func run() error {
 				return currentFrame, true, nil
 			}
 			if convDialogue != nil && convDialogue.Active() {
-				frame, changed, err := convDialogue.Update(scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
+				frame, changed, err := convDialogue.Update(scripts.NativeFrameUnits(native.NativeTickMilliseconds()))
 				if err != nil {
 					return render.IndexedFrame{}, false, fmt.Errorf("advance script conversation: %w", err)
 				}
@@ -3741,7 +3743,7 @@ func run() error {
 			}
 		}
 		if hotelVoice != nil {
-			done, err := hotelVoice.Update(scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
+			done, err := hotelVoice.Update(scripts.NativeFrameUnits(native.NativeTickMilliseconds()))
 			if err != nil {
 				return render.IndexedFrame{}, false, err
 			}
@@ -3755,7 +3757,7 @@ func run() error {
 				}
 			}
 		}
-		if hotelDelayUntil != 0 && scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) >= hotelDelayUntil {
+		if hotelDelayUntil != 0 && scripts.NativeFrameUnits(native.NativeTickMilliseconds()) >= hotelDelayUntil {
 			hotelDelayUntil = 0
 			if hotelDoorAfterDelay != "" {
 				doorOwner, hotelDoorAfterDelay = hotelDoorAfterDelay, ""
@@ -3765,7 +3767,7 @@ func run() error {
 				}
 			}
 		}
-		if deathStage == 1 && scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) >= deathUntil {
+		if deathStage == 1 && scripts.NativeFrameUnits(native.NativeTickMilliseconds()) >= deathUntil {
 			fade, err := render.NewFadeEffect(currentFrame, blackFrame, deathSequence.FadeOutFrames)
 			if err != nil {
 				return render.IndexedFrame{}, false, err
@@ -3774,7 +3776,7 @@ func run() error {
 			return fade.CurrentFrame(), true, nil
 		}
 		if deathStage == 5 {
-			finished := deathNarration != nil && !deathNarration.IsPlaying() || *silent && scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) >= deathUntil
+			finished := deathNarration != nil && !deathNarration.IsPlaying() || *silent && scripts.NativeFrameUnits(native.NativeTickMilliseconds()) >= deathUntil
 			if finished {
 				if deathNarration != nil {
 					if err := deathNarration.Close(); err != nil {
@@ -3831,7 +3833,7 @@ func run() error {
 			if readingStage != nil {
 				return currentFrame, false, nil
 			}
-			avatarChanged, err := advanceAvatarAnimation(scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()))
+			avatarChanged, err := advanceAvatarAnimation(scripts.NativeFrameUnits(native.NativeTickMilliseconds()))
 			if err != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("advance player portrait: %w", err)
 			}
@@ -3943,7 +3945,7 @@ func run() error {
 				if transitionMode == 9 {
 					currentFrame, transition, transitionMode = transition.TargetFrame(), nil, 0
 					action := hotelHotplatePending
-					hotelHotplatePending = scripts.HotelAction{}
+					hotelHotplatePending = story.HotelAction{}
 					frame, err := openHotelHotplate(action)
 					if err != nil {
 						return render.IndexedFrame{}, false, err
@@ -3961,7 +3963,7 @@ func run() error {
 				if transitionMode == 10 {
 					currentFrame, transition, transitionMode = transition.TargetFrame(), nil, 0
 					action := hotelHotplatePending
-					hotelHotplatePending = scripts.HotelAction{}
+					hotelHotplatePending = story.HotelAction{}
 					if err := hotelHotplateStage.Close(); err != nil {
 						return render.IndexedFrame{}, false, err
 					}
@@ -4260,14 +4262,14 @@ func run() error {
 			if currentScene == 0 {
 				switch key {
 				case ebiten.KeyArrowUp, ebiten.KeyW:
-					if action, found := scripts.HotelForwardAction(activeSetName, view.Resource, worldPoint[2], doorOwner, hotelStoryState()); found {
+					if action, found := story.HotelForwardAction(activeSetName, view.Resource, worldPoint[2], doorOwner, hotelStoryState()); found {
 						if err := queueHotelTransition(action); err != nil {
 							log.Printf("hotel transition: %v", err)
 						}
 						return
 					}
 					if activeSetName == "town" {
-						if target, targetScene, targetDirection, found := scripts.NiteInteriorTargetForState(view.Resource, worldPoint[2], doorOwner, gameClock); found {
+						if target, targetScene, targetDirection, found := story.NiteInteriorTargetForState(view.Resource, worldPoint[2], doorOwner, gameClock); found {
 							pendingSetName, pendingSetScene, pendingSetDirection, doorOwner, pendingPlayerMovement = target, targetScene, targetDirection, "", 0
 							if *debug {
 								log.Printf("interior-enter target=%s view=%s point=%v", target, view.Name[1:], worldPoint)
@@ -4278,11 +4280,11 @@ func run() error {
 						direction := ""
 						switch activeSetName {
 						case "sallower":
-							if scripts.SallowerExitToTown(worldPoint[2], doorOwner) {
+							if story.SallowerExitToTown(worldPoint[2], doorOwner) {
 								direction = "east"
 							}
 						case "hotlower":
-							direction, _ = scripts.HotLowerExitToTown(view.Resource, worldPoint[2], doorOwner)
+							direction, _ = story.HotLowerExitToTown(view.Resource, worldPoint[2], doorOwner)
 						case "store", "livery":
 							if worldPoint[2] == assets.SetDirectionEast && (activeSetName == "store" && doorOwner == "shop" || activeSetName == "livery" && doorOwner == "horse") {
 								direction = "west"
@@ -4306,7 +4308,7 @@ func run() error {
 							break
 						}
 					}
-					if name, blocked := scripts.NiteDogGateMovieInSet(activeSetName, view.Resource, worldPoint[2], gameDay, dogVisible); blocked {
+					if name, blocked := story.NiteDogGateMovieInSet(activeSetName, view.Resource, worldPoint[2], gameDay, dogVisible); blocked {
 						pendingMovement, pendingPlayerMovement = 0, 0
 						pendingSpotMovie = name
 						dogMovieNeedsHelp = true
@@ -4513,7 +4515,7 @@ func run() error {
 				}
 			}
 			if activeSetName == "town" {
-				if action, found := scripts.NiteSceneObjectAction(view.Resource, worldPoint[2], point, gameDay, gameClock); found {
+				if action, found := story.NiteSceneObjectAction(view.Resource, worldPoint[2], point, gameDay, gameClock); found {
 					if *debug {
 						log.Printf("world-object=%s movie=%s", action.Object, action.Movie)
 					}
@@ -4524,13 +4526,13 @@ func run() error {
 				}
 			}
 			if mouseEvent.Button == ebiten.MouseButtonLeft {
-				if action, found := scripts.HotelMouseAction(activeSetName, view.Resource, worldPoint[2], point, hotelStoryState()); found {
+				if action, found := story.HotelMouseAction(activeSetName, view.Resource, worldPoint[2], point, hotelStoryState()); found {
 					return runHotelAction(action)
 				}
 			}
 			if mouseEvent.Button == ebiten.MouseButtonLeft && activeSetName == "town" {
-				if owner, found := scripts.NiteDoorAt(view.Resource, worldPoint[2], point); found {
-					locked, err := scripts.NiteDoorLocked(owner, gameDay, gameClock, gamePhase, false, false, &nativeRandom, inventoryOwners)
+				if owner, found := story.NiteDoorAt(view.Resource, worldPoint[2], point); found {
+					locked, err := story.NiteDoorLocked(owner, gameDay, gameClock, gamePhase, false, false, &nativeRandom, inventoryOwners)
 					if err != nil {
 						return render.IndexedFrame{}, false, err
 					}
@@ -4554,7 +4556,7 @@ func run() error {
 					return currentFrame, false, nil
 				}
 			} else if mouseEvent.Button == ebiten.MouseButtonLeft && activeSetName == "sallower" {
-				if owner, found := scripts.SallowerDoorAt(view.Resource, worldPoint[2], point); found {
+				if owner, found := story.SallowerDoorAt(view.Resource, worldPoint[2], point); found {
 					doorOwner = owner
 					if *debug {
 						log.Printf("door=%s owner=door set=sallower direction=%d", owner, worldPoint[2])
@@ -4562,7 +4564,7 @@ func run() error {
 					return currentFrame, false, nil
 				}
 			} else if mouseEvent.Button == ebiten.MouseButtonLeft && activeSetName == "hotlower" {
-				if owner, found := scripts.HotLowerDoorAt(view.Resource, worldPoint[2], point); found {
+				if owner, found := story.HotLowerDoorAt(view.Resource, worldPoint[2], point); found {
 					doorOwner = owner
 					if *debug {
 						log.Printf("door=%s owner=door set=hotlower direction=%d", owner, worldPoint[2])
@@ -4606,14 +4608,14 @@ func run() error {
 		}
 		if !hit {
 			if hotelHotplateStage != nil && stage == hotelHotplateStage && mouseEvent.Button == ebiten.MouseButtonLeft {
-				if action, found := scripts.HotelHotplateBackgroundAction(string(stage.Scenes[currentScene].Name[1:])); found {
+				if action, found := story.HotelHotplateBackgroundAction(string(stage.Scenes[currentScene].Name[1:])); found {
 					return runHotelAction(action)
 				}
 			}
 			return render.IndexedFrame{}, false, nil
 		}
 		if hotelHotplateStage != nil && stage == hotelHotplateStage && mouseEvent.Button == ebiten.MouseButtonLeft {
-			if action, found := scripts.HotelHotplateMouseAction(handler.ScriptResource, hotelStoryState()); found {
+			if action, found := story.HotelHotplateMouseAction(handler.ScriptResource, hotelStoryState()); found {
 				return runHotelAction(action)
 			}
 		}
@@ -4633,38 +4635,38 @@ func run() error {
 			return render.IndexedFrame{}, false, fmt.Errorf("parse button script resource %d: %w", handler.ScriptResource, err)
 		}
 		if stage == mainStage && currentScene == 4 {
-			action, found, err := scripts.ParseDeathButtonAction(program, string(handler.Name[1:]), *debug)
+			action, found, err := story.ParseDeathButtonAction(program, string(handler.Name[1:]), *debug)
 			if err != nil {
 				return render.IndexedFrame{}, false, err
 			}
-			if found && action.Kind == scripts.DeathButtonNew {
+			if found && action.Kind == story.DeathButtonNew {
 				if err := startNewGame(); err != nil {
 					return render.IndexedFrame{}, false, err
 				}
 				return currentFrame, true, nil
 			}
-			if found && action.Kind == scripts.DeathButtonHelp {
+			if found && action.Kind == story.DeathButtonHelp {
 				if err := startSceneMovie(action.Movie); err != nil {
 					return render.IndexedFrame{}, false, err
 				}
 				return playback.CurrentFrame(), true, nil
 			}
-			if found && action.Kind == scripts.DeathButtonQuit && *debug {
+			if found && action.Kind == story.DeathButtonQuit && *debug {
 				return currentFrame, false, ebiten.Termination
 			}
 		}
-		continuation, trackButton, err := scripts.ParseFlatMouseContinuation(program, string(handler.Name[1:]))
+		continuation, trackButton, err := story.ParseFlatMouseContinuation(program, string(handler.Name[1:]))
 		if err != nil {
 			return render.IndexedFrame{}, false, fmt.Errorf("parse flat button script resource %d: %w", handler.ScriptResource, err)
 		}
 		if trackButton {
 			flatMouseResource = handler.ScriptResource
 			flatMouseReturnFlat = currentFlatName(stage, currentScene)
-			flatMouseSession = new(scripts.FlatMouseSession)
-			*flatMouseSession = scripts.NewFlatMouseSession(string(handler.Name[1:]), point, continuation)
+			flatMouseSession = new(story.FlatMouseSession)
+			*flatMouseSession = story.NewFlatMouseSession(string(handler.Name[1:]), point, continuation)
 			return currentFrame, false, nil
 		}
-		action, found, err := scripts.MouseDownFlatAction(program)
+		action, found, err := native.MouseDownFlatAction(program)
 		if err != nil {
 			return render.IndexedFrame{}, false, fmt.Errorf("run button script resource %d: %w", handler.ScriptResource, err)
 		}
@@ -4718,20 +4720,20 @@ func run() error {
 			}
 			inside := hit && handler.ScriptResource == flatMouseResource
 			status := flatMouseSession.Advance(state.Point, state.LeftDown, state.LeftReleased, inside)
-			if status == scripts.FlatMousePending {
+			if status == story.FlatMousePending {
 				return currentFrame, false, nil
 			}
 			continuation, resumed := flatMouseSession.Resume()
 			returnFlatName := flatMouseReturnFlat
 			resourceSource := flatMouseResource
 			flatMouseSession, flatMouseResource, flatMouseReturnFlat = nil, 0, ""
-			if status == scripts.FlatMouseCancel || !resumed {
+			if status == story.FlatMouseCancel || !resumed {
 				return currentFrame, false, nil
 			}
 			switch continuation.Action {
-			case scripts.FlatMouseActionExamineInventory:
+			case story.FlatMouseActionExamineInventory:
 				return openInventoryExamination()
-			case scripts.FlatMouseActionSaveGame:
+			case story.FlatMouseActionSaveGame:
 				if err := saveGameProgress(continuation.GameName); err != nil {
 					log.Printf("save game: %v", err)
 					return currentFrame, false, nil
@@ -4768,7 +4770,7 @@ func run() error {
 					log.Printf("save=written name=%q no-return-flat", continuation.GameName)
 				}
 				return currentFrame, false, nil
-			case scripts.FlatMouseActionOpenGame:
+			case story.FlatMouseActionOpenGame:
 				if err := loadGameProgress(continuation.GameName); err != nil {
 					log.Printf("open game: %v", err)
 					return currentFrame, false, nil
@@ -4780,7 +4782,7 @@ func run() error {
 					log.Printf("open=loaded name=%q return-to-current-flat=%t", continuation.GameName, continuation.ReturnToCurrentFlat)
 				}
 				return currentFrame, true, nil
-			case scripts.FlatMouseActionGoToFlat:
+			case story.FlatMouseActionGoToFlat:
 				if continuation.FlatTarget == 0 {
 					return returnToMainPanel(continuation.VisualEffect, continuation.Duration)
 				}

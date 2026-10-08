@@ -196,12 +196,12 @@ func PointInSet(hasSet, hasHitData bool, hit bool) ValueResult {
 // EqualValueName compares two builtin-returned names the way the native handlers
 // feed them into the string register pool, which is case-insensitive for
 // ASCII letters and exact for every other byte. That is the same mapping
-// verified for FUN_0042E5B0 and implemented by equalASCIIFold below.
+// verified for FUN_0042E5B0 and implemented by EqualASCIIFold below.
 func EqualValueName(left, right string) bool {
-	return equalASCIIFold(left, right)
+	return EqualASCIIFold(left, right)
 }
 
-func equalASCIIFold(left, right string) bool {
+func EqualASCIIFold(left, right string) bool {
 	if len(left) != len(right) {
 		return false
 	}

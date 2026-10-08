@@ -316,12 +316,12 @@ func StageNameFromHeader(header []byte) (string, error) {
 	if len(header) < StageHeaderNameOffset+1 {
 		return "", fmt.Errorf("stage header is %d bytes, too short for a name at +%#x", len(header), StageHeaderNameOffset)
 	}
-	return pascalTextOf(PascalCopy(header[StageHeaderNameOffset:])), nil
+	return PascalTextOf(PascalCopy(header[StageHeaderNameOffset:])), nil
 }
 
-// pascalTextOf renders a Pascal buffer as text, tolerating a missing length
+// PascalTextOf renders a Pascal buffer as text, tolerating a missing length
 // byte. It is the read side used by the header name extraction.
-func pascalTextOf(value []byte) string {
+func PascalTextOf(value []byte) string {
 	if len(value) == 0 {
 		return ""
 	}

@@ -12,7 +12,7 @@ import "fmt"
 //
 // In both the count is a DWORD immediately *before* the first row, the name is
 // compared at row offset 12 using FUN_0042E5B0, the case-insensitive ASCII
-// Pascal compare already implemented as equalASCIIFold, and a miss returns the
+// Pascal compare already implemented as EqualASCIIFold, and a miss returns the
 // same status 0x0A. The guards differ: the flat resolver needs an open stage and
 // returns -1 for "no stage", while the scene resolver needs an active set and
 // returns 0x28, the same status setscript's guard uses.
@@ -147,7 +147,7 @@ func (t NameTable) RowName(data []byte, index int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return pascalTextOf(row[t.NameOffset:]), nil
+	return PascalTextOf(row[t.NameOffset:]), nil
 }
 
 // Lookup finds the row whose name matches, using the reference's
@@ -165,7 +165,7 @@ func (t NameTable) Lookup(data []byte, name string) (index int, row []byte, stat
 		if rowErr != nil {
 			return 0, nil, 0, rowErr
 		}
-		if equalASCIIFold(pascalTextOf(candidate[t.NameOffset:]), name) {
+		if EqualASCIIFold(PascalTextOf(candidate[t.NameOffset:]), name) {
 			return i, candidate, 0, nil
 		}
 	}
@@ -201,7 +201,7 @@ func LookupCached(table NameTable, records []byte, count StageObjectCount, name 
 		if rowErr != nil {
 			return 0, nil, 0, rowErr
 		}
-		if equalASCIIFold(pascalTextOf(candidate[table.NameOffset:]), name) {
+		if EqualASCIIFold(PascalTextOf(candidate[table.NameOffset:]), name) {
 			return cache.Index, candidate, 0, nil
 		}
 	}
@@ -212,7 +212,7 @@ func LookupCached(table NameTable, records []byte, count StageObjectCount, name 
 		if rowErr != nil {
 			return 0, nil, 0, rowErr
 		}
-		if equalASCIIFold(pascalTextOf(candidate[table.NameOffset:]), name) {
+		if EqualASCIIFold(PascalTextOf(candidate[table.NameOffset:]), name) {
 			if cache != nil {
 				cache.Index = i
 				cache.Valid = true
@@ -277,3 +277,6 @@ const (
 	// NameUnsearchable means the table could not be read at all.
 	NameUnsearchable
 )
+
+// Validate checks the table geometry the native lookups rely on.
+func (t NameTable) Validate() error { return t.validate() }

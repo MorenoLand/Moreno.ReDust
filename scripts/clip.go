@@ -1,6 +1,8 @@
 package scripts
 
-import "fmt"
+import (
+	"fmt"
+)
 
 // The rectangle clipper behind `pointinprop`, `FUN_0042E230`, mapped in full:
 //

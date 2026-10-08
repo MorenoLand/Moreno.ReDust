@@ -87,10 +87,10 @@ func equalPascalText(value []byte, text string) bool {
 
 type ScriptFrameState [39]uint16
 
-const nativeScriptContextCount = 9
+const NativeScriptContextCount = 9
 const nativeScriptContextPageSize = 0x100
 
-type ScriptContextPages [nativeScriptContextCount][nativeScriptContextPageSize]byte
+type ScriptContextPages [NativeScriptContextCount][nativeScriptContextPageSize]byte
 
 func NewScriptContextPages(current []byte) (ScriptContextPages, error) {
 	var pages ScriptContextPages
@@ -125,7 +125,7 @@ func (pages ScriptContextPages) Restore(index int) ([]byte, error) {
 }
 
 func (pages ScriptContextPages) MarshalBinary() ([]byte, error) {
-	data := make([]byte, nativeScriptContextCount*nativeScriptContextPageSize)
+	data := make([]byte, NativeScriptContextCount*nativeScriptContextPageSize)
 	for index := range pages {
 		copy(data[index*nativeScriptContextPageSize:], pages[index][:])
 	}
@@ -136,8 +136,8 @@ func (pages *ScriptContextPages) UnmarshalBinary(data []byte) error {
 	if pages == nil {
 		return fmt.Errorf("script context pages are unavailable")
 	}
-	if len(data) != nativeScriptContextCount*nativeScriptContextPageSize {
-		return fmt.Errorf("native script context block has %d bytes, want %d", len(data), nativeScriptContextCount*nativeScriptContextPageSize)
+	if len(data) != NativeScriptContextCount*nativeScriptContextPageSize {
+		return fmt.Errorf("native script context block has %d bytes, want %d", len(data), NativeScriptContextCount*nativeScriptContextPageSize)
 	}
 	for index := range pages {
 		copy(pages[index][:], data[index*nativeScriptContextPageSize:(index+1)*nativeScriptContextPageSize])

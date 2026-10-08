@@ -31,7 +31,7 @@ func (p *ExpressionValueParser) Parse(program Program, start int) (Record, uint3
 		if p.Services.GetWaveVolume == nil {
 			return Record{}, 0, 0, fmt.Errorf("wave volume getter is unavailable")
 		}
-		if kindAt(program, start+1) != LookupOpcode("(") || kindAt(program, start+2) != LookupOpcode(")") {
+		if KindAt(program, start+1) != LookupOpcode("(") || KindAt(program, start+2) != LookupOpcode(")") {
 			return Record{}, 0, 2, nil
 		}
 		level := p.Services.GetWaveVolume()
@@ -53,7 +53,7 @@ func (p *ExpressionValueParser) Parse(program Program, start int) (Record, uint3
 			return Record{}, 0, status, err
 		}
 		closing := start + 1 + int(consumed)
-		if kindAt(program, closing) != 4019 {
+		if KindAt(program, closing) != 4019 {
 			return Record{}, 0, 2, nil
 		}
 		return value, consumed + 2, 0, nil
@@ -124,7 +124,7 @@ func (p *ExpressionValueParser) Parse(program Program, start int) (Record, uint3
 	if err != nil || status != 0 {
 		return Record{}, 0, uint32(status), err
 	}
-	if kindAt(program, start+1) == 4018 {
+	if KindAt(program, start+1) == 4018 {
 		if p.Services.CallBlock == nil {
 			return Record{}, 0, 0, fmt.Errorf("script call handler is unavailable")
 		}
@@ -145,7 +145,7 @@ func (p *ExpressionValueParser) parsePathValue(program Program, start int) (Reco
 	if p.ContextPages == nil || p.Strings == nil {
 		return Record{}, 0, 0, fmt.Errorf("native script context pages or string registers are unavailable")
 	}
-	if kindAt(program, start+1) != LookupOpcode("(") {
+	if KindAt(program, start+1) != LookupOpcode("(") {
 		return Record{}, 0, 2, nil
 	}
 	index, consumed, status, err := p.Parse(program, start+2)
@@ -156,7 +156,7 @@ func (p *ExpressionValueParser) parsePathValue(program Program, start int) (Reco
 		return Record{}, 0, 14, nil
 	}
 	contextIndex := int(int32(index.Data))
-	if contextIndex <= 0 || contextIndex >= nativeScriptContextCount {
+	if contextIndex <= 0 || contextIndex >= NativeScriptContextCount {
 		return Record{}, 0, 10, nil
 	}
 	pascal, err := p.ContextPages.Restore(contextIndex)
@@ -167,7 +167,7 @@ func (p *ExpressionValueParser) parsePathValue(program Program, start int) (Reco
 	if err != nil || stringStatus != 0 {
 		return value, consumed + 3, uint32(stringStatus), err
 	}
-	if kindAt(program, start+2+int(consumed)) != LookupOpcode(")") {
+	if KindAt(program, start+2+int(consumed)) != LookupOpcode(")") {
 		return Record{}, 0, 2, nil
 	}
 	return value, consumed + 3, uint32(stringStatus), err

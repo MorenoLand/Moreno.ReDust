@@ -36,17 +36,17 @@ func EvaluateCondition(frame ConditionFrame, operations ConditionOperations) (in
 	if equalPascalString(left, right) {
 		return -1, 0, nil
 	}
-	if kindAt(frame.Program, marker+2) != 4018 || kindAt(frame.Arguments, frame.ArgumentStart+1) != 4018 {
+	if KindAt(frame.Program, marker+2) != 4018 || KindAt(frame.Arguments, frame.ArgumentStart+1) != 4018 {
 		return -1, 2, nil
 	}
 	nameIndex := marker + 3
 	valueIndex := frame.ArgumentStart + 2
-	if kindAt(frame.Program, nameIndex) == 4019 {
+	if KindAt(frame.Program, nameIndex) == 4019 {
 		bodyIndex, err := nextNonLineRecord(frame.Program, nameIndex+1)
 		if err != nil {
 			return -1, 0, err
 		}
-		if kindAt(frame.Arguments, valueIndex) != 4019 {
+		if KindAt(frame.Arguments, valueIndex) != 4019 {
 			return -1, 2, nil
 		}
 		return int32(bodyIndex - marker), 0, nil
@@ -91,10 +91,10 @@ func EvaluateCondition(frame ConditionFrame, operations ConditionOperations) (in
 		if uint16(operationStatus) != 0 {
 			return -1, uint16(operationStatus), nil
 		}
-		switch kindAt(frame.Program, variableRecord) {
+		switch KindAt(frame.Program, variableRecord) {
 		case 4020:
 			nameIndex += 2
-			if kindAt(frame.Arguments, valueIndex) != 4020 {
+			if KindAt(frame.Arguments, valueIndex) != 4020 {
 				return -1, 0x1c, nil
 			}
 			valueIndex++
@@ -103,7 +103,7 @@ func EvaluateCondition(frame ConditionFrame, operations ConditionOperations) (in
 			if err != nil {
 				return -1, 0, err
 			}
-			if kindAt(frame.Arguments, valueIndex) != 4019 {
+			if KindAt(frame.Arguments, valueIndex) != 4019 {
 				return -1, 2, nil
 			}
 			return int32(bodyIndex - marker), 0, nil
@@ -145,7 +145,7 @@ func lowerASCII(value byte) byte {
 	return value
 }
 
-func kindAt(program Program, index int) uint16 {
+func KindAt(program Program, index int) uint16 {
 	if index < 0 || index >= len(program.Records) {
 		return 0
 	}
@@ -153,7 +153,7 @@ func kindAt(program Program, index int) uint16 {
 }
 
 func nextNonLineRecord(program Program, index int) (int, error) {
-	for kindAt(program, index) == 6 {
+	for KindAt(program, index) == 6 {
 		index++
 	}
 	if index < 0 || index >= len(program.Records) {

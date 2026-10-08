@@ -69,8 +69,8 @@ type OpenFileSpec struct {
 	TrailingShort bool
 }
 
-// openFileSpecs is the verified family.
-var openFileSpecs = []OpenFileSpec{
+// OpenFileSpecs is the verified family.
+var OpenFileSpecs = []OpenFileSpec{
 	{OpenCastFile, 12013, "opencastfile", "FUN_0040BFA0", "FUN_0040C160", "DAT_004599E4", "DAT_004599E0", 0x1C, 7, false},
 	{OpenTrackFile, 12019, "opentrackfile", "FUN_0040E250", "FUN_0040E340", "DAT_004599FC", "DAT_004599F8", 0x26, 9, true},
 	{OpenShopFile, 12056, "openshopfile", "FUN_00420110", "FUN_004202E0", "DAT_004599F4", "DAT_004599F0", 0x1C, 7, false},
@@ -78,7 +78,7 @@ var openFileSpecs = []OpenFileSpec{
 
 // OpenFileSpecFor returns the verified spec for an opcode.
 func OpenFileSpecFor(opcode uint16) (OpenFileSpec, bool) {
-	for _, spec := range openFileSpecs {
+	for _, spec := range OpenFileSpecs {
 		if spec.Opcode == opcode {
 			return spec, true
 		}

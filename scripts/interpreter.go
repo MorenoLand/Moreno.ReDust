@@ -133,7 +133,7 @@ type ScriptCall struct {
 func (c *ScriptCall) Frame() *ScriptFrame { return &c.Chain[c.FrameIndex] }
 
 // Kind returns the record kind at index.
-func (c *ScriptCall) Kind(index int) uint16 { return kindAt(*c.Program, index) }
+func (c *ScriptCall) Kind(index int) uint16 { return KindAt(*c.Program, index) }
 
 // Eval evaluates the expression at index in the caller's context.
 func (c *ScriptCall) Eval(index int) (Record, int, uint16, error) {
@@ -462,21 +462,21 @@ func (in *Interpreter) matchBlock(script *Program, block int, locals *VariableTa
 	if !equalPascalString(blockName, callName) {
 		return -1, 0, nil
 	}
-	if kindAt(*script, block+2) != opOpen || kindAt(*program, start+1) != opOpen {
+	if KindAt(*script, block+2) != opOpen || KindAt(*program, start+1) != opOpen {
 		return -1, ScriptStatusMalformed, nil
 	}
 	parameter := block + 3
 	argument := start + 2
 	finish := func(afterClose int) (int, uint16, error) {
-		for kindAt(*script, afterClose) == opLine {
+		for KindAt(*script, afterClose) == opLine {
 			afterClose++
 		}
-		if kindAt(*program, argument) != opClose {
+		if KindAt(*program, argument) != opClose {
 			return -1, ScriptStatusMalformed, nil
 		}
 		return afterClose, 0, nil
 	}
-	if kindAt(*script, parameter) == opClose {
+	if KindAt(*script, parameter) == opClose {
 		return finish(parameter + 1)
 	}
 	for {
@@ -500,14 +500,14 @@ func (in *Interpreter) matchBlock(script *Program, block int, locals *VariableTa
 			return -1, status, err
 		}
 		separator := parameter + 1
-		if kindAt(*script, separator) != opComma {
-			if kindAt(*script, separator) != opClose {
+		if KindAt(*script, separator) != opComma {
+			if KindAt(*script, separator) != opClose {
 				return -1, ScriptStatusMalformed, nil
 			}
 			return finish(separator + 1)
 		}
 		parameter += 2
-		if kindAt(*program, argument) != opComma {
+		if KindAt(*program, argument) != opComma {
 			return -1, ScriptStatusMissingComma, nil
 		}
 		argument++
@@ -783,7 +783,7 @@ func (in *Interpreter) execute(chain []ScriptFrame, frame int, locals *VariableT
 			if err != nil || status != 0 {
 				return status, err
 			}
-			if kindAt(*script, pc+1) == opOpen {
+			if KindAt(*script, pc+1) == opOpen {
 				if builtin, ok := in.Builtins[strings.ToLower(string(name[1:]))]; ok {
 					call := &ScriptCall{Interpreter: in, Chain: chain, FrameIndex: frame, Locals: locals, Program: script, Start: pc}
 					consumed, status, err := builtin(call)
@@ -812,7 +812,7 @@ func (in *Interpreter) execute(chain []ScriptFrame, frame int, locals *VariableT
 					return status, err
 				}
 			}
-			if kindAt(*script, pc+1) != opAssign {
+			if KindAt(*script, pc+1) != opAssign {
 				return ScriptStatusMissingEquals, nil
 			}
 			value, consumed, status, err := in.evaluate(chain, frame, locals, script, pc+2)
@@ -828,10 +828,10 @@ func (in *Interpreter) execute(chain []ScriptFrame, frame int, locals *VariableT
 			advance = 2 + consumed
 		}
 		pc += advance
-		if kindAt(*script, pc) != opLine {
+		if KindAt(*script, pc) != opLine {
 			return ScriptStatusLineExpected, nil
 		}
-		for kindAt(*script, pc) == opLine {
+		for KindAt(*script, pc) == opLine {
 			pc++
 		}
 		if in.EscapeInterrupt != nil && in.EscapeInterrupt() {
@@ -871,7 +871,7 @@ func (in *Interpreter) beginFor(chain []ScriptFrame, frame int, locals *Variable
 	if err != nil || status != 0 {
 		return nil, 0, status, err
 	}
-	if kindAt(*script, pc+2) != opAssign {
+	if KindAt(*script, pc+2) != opAssign {
 		return nil, 0, ScriptStatusMissingEquals, nil
 	}
 	position := pc + 3
@@ -889,7 +889,7 @@ func (in *Interpreter) beginFor(chain []ScriptFrame, frame int, locals *Variable
 	if status, err := locals.WriteValue(id, encoded, in.Strings); err != nil || status != 0 {
 		return nil, 0, status, err
 	}
-	if kindAt(*script, position) != opTo {
+	if KindAt(*script, position) != opTo {
 		return nil, 0, ScriptStatusMissingTo, nil
 	}
 	last, consumed, status, err := in.evaluate(chain, frame, locals, script, position+1)
@@ -901,7 +901,7 @@ func (in *Interpreter) beginFor(chain []ScriptFrame, frame int, locals *Variable
 	}
 	position += 1 + consumed
 	step := int32(1)
-	if kindAt(*script, position) == opStep {
+	if KindAt(*script, position) == opStep {
 		value, consumed, status, err := in.evaluate(chain, frame, locals, script, position+1)
 		if err != nil || status != 0 {
 			return nil, 0, status, err
