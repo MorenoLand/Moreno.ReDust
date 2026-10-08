@@ -69,6 +69,14 @@ type GameHostEnv struct {
 	// ThemeVolume is themevol's effect (FUN_0040E9E0): level 0..255 for every
 	// track of the named theme. Nil leaves the volume alone.
 	ThemeVolume func(name string, level int)
+	// HaltTheme and PlayTheme are halttheme (FUN_0040E8B0) and playtheme
+	// (FUN_0040E6F0, which starts a named theme that has tracks).
+	HaltTheme func()
+	PlayTheme func(name string)
+	// ActionFrame is actionframe(n) (FUN_00415840): whether the last movie
+	// latched action marker n (1 or 2). ok is false for an index the port does
+	// not track.
+	ActionFrame func(n int) (latched, ok bool)
 	AdvanceDay func() error
 	Busy       func() bool
 	// View is the player's scene name and facing ("north".."west");
@@ -351,6 +359,27 @@ func (h *GameHost) Command(call *ScriptCall) (int, uint16, error) {
 		}
 		h.stopJobs(args[0].Text)
 		return consumed, 0, nil
+	case "halttheme":
+		_, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return 0, status, err
+		}
+		if h.Env.HaltTheme != nil {
+			h.Env.HaltTheme()
+		}
+		return consumed, 0, nil
+	case "playtheme":
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return 0, status, err
+		}
+		if len(args) != 1 || args[0].Kind != 3 {
+			return 0, ScriptStatusMalformed, nil
+		}
+		if h.Env.PlayTheme != nil {
+			h.Env.PlayTheme(args[0].Text)
+		}
+		return consumed, 0, nil
 	case "themevol":
 		args, consumed, status, err := call.Args()
 		if err != nil || status != 0 {
@@ -605,6 +634,22 @@ func (h *GameHost) Value(call *ScriptCall) (Record, int, uint16, error) {
 			return Record{}, 0, 0x0a, nil
 		}
 		return text(actor.Name, consumed)
+	case "actionframe":
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		if len(args) != 1 || args[0].Kind != 4 || args[0].Int != 1 && args[0].Int != 2 {
+			return Record{}, 0, ScriptStatusWrongType, nil
+		}
+		if h.Env.ActionFrame == nil {
+			return Record{}, 0, 0, fmt.Errorf("%w: actionframe", ErrHostOpcodeUnimplemented)
+		}
+		latched, ok := h.Env.ActionFrame(int(args[0].Int))
+		if !ok {
+			return Record{}, 0, 0, fmt.Errorf("%w: actionframe(%d)", ErrHostOpcodeUnimplemented, args[0].Int)
+		}
+		return boolean(latched, consumed)
 	case "iswalk":
 		// FUN_004162B0 -> FUN_0040F840: true while any walk or turn slot
 		// carries the name; the name is not resolved, so an unknown one is
