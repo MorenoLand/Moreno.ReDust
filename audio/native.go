@@ -87,6 +87,15 @@ func OpenSoundBank(workspace assets.Workspace, name string) (*SoundBank, error) 
 	return &SoundBank{resources: resources, sounds: sounds}, nil
 }
 
+// Has reports whether the bank holds a sound of that name.
+func (b *SoundBank) Has(name string) bool {
+	if b == nil {
+		return false
+	}
+	_, ok := b.sounds[name]
+	return ok
+}
+
 func (b *SoundBank) Names() []string {
 	if b == nil {
 		return nil

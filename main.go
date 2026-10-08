@@ -1981,11 +1981,30 @@ func run() error {
 		return refreshWorldScene()
 	}
 	scriptInterpreter.Builtins["handleselect"] = scriptHost.PickInventoryBuiltin
+	var dayTownBank *audio.SoundBank
 	scriptHost.Env.Sound = func(name string) error {
 		if soundBank == nil || audioContext == nil {
 			return nil
 		}
-		return soundBank.Play(audioContext, name, 1)
+		// Named sounds live in the library the script opened: the universal
+		// bank, or the night/town track file for the ambient animals.
+		for _, bank := range []*audio.SoundBank{soundBank, themeBank} {
+			if bank.Has(name) {
+				return bank.Play(audioContext, name, 1)
+			}
+		}
+		if dayTownBank == nil {
+			if bank, err := audio.OpenSoundBank(workspace, "DATA/TOWN.SND"); err == nil {
+				dayTownBank = bank
+			}
+		}
+		if dayTownBank.Has(name) {
+			return dayTownBank.Play(audioContext, name, 1)
+		}
+		if *debug {
+			log.Printf("script-note sound %q is in no open bank", name)
+		}
+		return nil
 	}
 	scriptHost.Env.PuppetFile = workspace.OpenPuppetFile
 	scriptHost.Env.Program = scriptProgram
