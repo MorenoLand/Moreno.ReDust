@@ -34,6 +34,14 @@ The script runs the game's input callbacks with audio muted. It accepts `key`, `
 
 Use `assert` with an `expect` object to check game state. `wait_until` takes the same object and a `milliseconds` timeout (up to 60000), updating the game until it matches. Dialogue state includes `conversation.open`, `conversation.choosing`, `conversation.choiceEvents`, and `conversation.taskActive`.
 
+## Layout
+
+- `main.go` wires the window, input, audio and the game loop.
+- `scripts/` is the script interpreter and the game host: actors, loops, jobs, puppets, props and the stage commands that the shipped scripts run against. Every cast actor runs from its own scripts.
+- `scripts/story/` holds game-logic tables ported from the engine (hotel, interiors, death, inventory, door and gate rules).
+- `scripts/native/` holds ports of individual native engine routines (file, path, volume and dispatch helpers) kept for verification.
+- `assets/`, `render/`, `audio/`, `engine/` and `save/` decode game files, draw, play sound, drive dialogue and persist saves.
+
 ## Build
 
 ```powershell
