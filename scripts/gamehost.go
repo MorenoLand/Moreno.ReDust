@@ -66,6 +66,9 @@ type GameHostEnv struct {
 	BootScript  func() (*Program, error)
 	// Theme is the playing theme's name, "" when none.
 	Theme      func() string
+	// ThemeVolume is themevol's effect (FUN_0040E9E0): level 0..255 for every
+	// track of the named theme. Nil leaves the volume alone.
+	ThemeVolume func(name string, level int)
 	AdvanceDay func() error
 	Busy       func() bool
 	// View is the player's scene name and facing ("north".."west");
@@ -347,6 +350,27 @@ func (h *GameHost) Command(call *ScriptCall) (int, uint16, error) {
 			return 0, ScriptStatusMalformed, nil
 		}
 		h.stopJobs(args[0].Text)
+		return consumed, 0, nil
+	case "themevol":
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return 0, status, err
+		}
+		if len(args) != 2 || args[0].Kind != 3 {
+			return 0, ScriptStatusMalformed, nil
+		}
+		if args[1].Kind != 4 {
+			return 0, ScriptStatusWrongType, nil
+		}
+		level := int(args[1].Int)
+		if level < 0 {
+			level = 0
+		} else if level > 0xff {
+			level = 0xff
+		}
+		if h.Env.ThemeVolume != nil {
+			h.Env.ThemeVolume(args[0].Text, level)
+		}
 		return consumed, 0, nil
 	case "turntodeg":
 		actor, args, consumed, status, err := h.actorArgs(call, 2)
