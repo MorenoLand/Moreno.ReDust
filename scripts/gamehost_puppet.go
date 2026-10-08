@@ -692,6 +692,23 @@ func (h *GameHost) puppetValue(name string, call *ScriptCall) (Record, int, uint
 		}
 		record, status, err := call.Interpreter.Record(ScriptValue{Kind: 3, Text: h.Env.CurrentFlat()})
 		return record, consumed, status, true, err
+	case "sendtocastfx":
+		// sendtocastfx(cast, message(args)): the cast message's return value.
+		if h.Env.CastScript == nil {
+			return Record{}, 0, 0, true, fmt.Errorf("%w: sendtocastfx has no cast table", ErrHostOpcodeUnimplemented)
+		}
+		var result Record
+		consumed, status, err := h.sendToScript(call, "Cast Script: ", func(name string) (*Program, string, uint16, error) {
+			program, ok, err := h.Env.CastScript(name)
+			if err != nil || !ok {
+				return nil, "", 0x0a, err
+			}
+			return program, strings.ToLower(name), 0, nil
+		}, &result)
+		if err != nil || status != 0 {
+			return Record{}, 0, status, true, err
+		}
+		return result, consumed, 0, true, nil
 	case "sendtostagefx":
 		// sendtostagefx(message(args)): the stage message's return value.
 		if call.Kind(call.Start+1) != opOpen {

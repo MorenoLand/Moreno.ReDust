@@ -436,7 +436,8 @@ func run() error {
 	scriptActors := scripts.NewScriptActors()
 	scriptActorCasts := map[string]assets.Cast{}
 	scriptActorRecords := map[string]assets.CastActor{}
-	scriptManaged := map[string]bool{"mwife": true, "blood": true, "buick": true, "marie": true, "jones": true, "leroy": true, "help": true, "laurel": true, "trotter": true, "isao": true}
+	scriptManaged := map[string]bool{"mwife": true, "blood": true, "buick": true, "marie": true, "jones": true, "leroy": true, "help": true, "laurel": true, "trotter": true, "isao": true, "dog": true}
+	var pendingMovement assets.SceneMove
 	var scriptTask *scripts.ScriptTask
 	var startScriptTask func(event scripts.ActorEvent) error
 	for _, cast := range []assets.Cast{gangCast, extraCast} {
@@ -590,16 +591,6 @@ func run() error {
 		if activeSetName != "town" {
 			return actors, nil
 		}
-		for _, actor := range townActors {
-			if !dogVisibleState || gameDay != 1 || !strings.EqualFold(actor.Name, "dog") {
-				continue
-			}
-			sprite, err := render.LoadCastActorFrame(workspace, extraCast, actor, actorPoses["dog"], 0, 880, render.NativeActorViewAngle(actor.Position, point, actorHeadings["dog"]), 64)
-			if err != nil {
-				return nil, fmt.Errorf("load G15 actor %s: %w", actor.Name, err)
-			}
-			actors = append(actors, sprite)
-		}
 		return actors, nil
 	}
 	if *debug {
@@ -722,6 +713,27 @@ func run() error {
 			position, found, err := source.ResolveLocation(star)
 			return position, err == nil && found
 		},
+		ResolvePath: func(set, star, actorStar string, position [3]int16) (*assets.Path, bool) {
+			source := nightSet
+			if strings.EqualFold(set, activeSetName) {
+				source = activeSet
+			} else if !strings.EqualFold(set, "town") {
+				return nil, false
+			}
+			var path *assets.Path
+			var found bool
+			var err error
+			if strings.EqualFold(actorStar, "resume") {
+				path, found, err = source.FindPathTo(star, position)
+			} else {
+				path, found, err = source.FindPath(star, actorStar)
+			}
+			if err != nil {
+				log.Printf("walk path %s -> %s: %v", actorStar, star, err)
+				return nil, false
+			}
+			return path, found
+		},
 		Player: func() [3]int16 {
 			return [3]int16{worldPoint[0]*256 + 128, worldPoint[1]*256 + 128, 0}
 		},
@@ -802,9 +814,6 @@ func run() error {
 	}
 	publishBone()
 	publishScriptGlobals := func() error {
-		if dog, status := scriptActors.Lookup("dog"); status == 0 {
-			dog.Visible = dogVisibleState
-		}
 		for name, owner := range inventoryOwners {
 			prop := scriptHost.Props.Get(name)
 			prop.Owner = owner
@@ -828,6 +837,14 @@ func run() error {
 		if err := scriptInterpreter.SetGlobalString("handitem", handItem); err != nil {
 			return err
 		}
+		if _, declared, err := scriptInterpreter.GlobalValue("debugging"); err != nil {
+			return err
+		} else if !declared {
+			// BootFile's boot() sets it false; the port does not run boot().
+			if err := scriptInterpreter.SetGlobalBool("debugging", false); err != nil {
+				return err
+			}
+		}
 		if _, declared, err := scriptInterpreter.GlobalValue("playerdeath"); err != nil {
 			return err
 		} else if !declared {
@@ -837,6 +854,9 @@ func run() error {
 		return nil
 	}
 	collectScriptGlobals := func() error {
+		if dog, status := scriptActors.Lookup("dog"); status == 0 {
+			dogVisibleState = dog.Visible
+		}
 		for _, name := range scriptHost.Props.Names() {
 			prop := scriptHost.Props.Get(name)
 			if previous, tracked := inventoryOwners[name]; tracked && previous != prop.Owner || !tracked && prop.Owner != "none" {
@@ -909,7 +929,7 @@ func run() error {
 			return fmt.Errorf("script %s: %w", label, err)
 		}
 		if status != 0 {
-			log.Printf("script-status %s status=%#x record=%d", label, status, scriptInterpreter.ProgramCounter)
+			log.Printf("script-status %s status=%#x record=%d site=%s", label, status, scriptInterpreter.ProgramCounter, scriptInterpreter.Site())
 		} else if *debug && *debugLoops {
 			log.Printf("script-run %s", label)
 		}
@@ -928,7 +948,10 @@ func run() error {
 				record.StopJob()
 			}
 		}
-		return runScript("initactors", `sendtocast("gang",initactors())`)
+		if err := runScript("initactors", `sendtocast("gang",initactors())`); err != nil {
+			return err
+		}
+		return runScript("initactors extra", `sendtocast("extra",initactors())`)
 	}
 	// NEW.FLT initall runs the cast's initactors at the start of every day;
 	// the first run happens here, before the opening scene.
@@ -1510,12 +1533,8 @@ func run() error {
 		}
 		if semanticName == "town" && previousName != "town" {
 			if gameDay == 1 && dogVisibleState {
-				step, found := scripts.DogIdleStep("doright", &nativeRandom)
-				if found {
-					actorPoses["dog"] = step.Pose
-					if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "dog", Callback: step.Callback, Remaining: step.Remaining}); status != 0 {
-						return render.IndexedFrame{}, fmt.Errorf("register Dog idle loop after town return returned status %#x", status)
-					}
+				if err := deliverScriptEvent(scripts.ActorEvent{Actor: "dog", Message: "doright()"}); err != nil {
+					return render.IndexedFrame{}, err
 				}
 			}
 			if currentThemeName == "nightwind3" {
@@ -1833,6 +1852,43 @@ func run() error {
 		themePlayer = player
 	}
 	scriptHost.Env.ActionFrame = func(n int) (bool, bool) { return scriptActionFrameOne, n == 1 }
+	scriptHost.Env.SceneMove = func(code int) { pendingMovement = assets.SceneMove(code) }
+	scriptHost.Env.SceneChain = func(name string) ([]scripts.ScriptFrame, bool, error) {
+		if activeSet == nil {
+			return nil, false, nil
+		}
+		for _, sceneView := range activeSet.Views() {
+			if !strings.EqualFold(string(sceneView.Name[1:]), name) {
+				continue
+			}
+			me := strings.ToLower(name)
+			var chain []scripts.ScriptFrame
+			// FUN_0041A1A0 builds the chain from the view's own script (a
+			// walkable cell's resource), the script of its area (the table at
+			// metadata offset 0x1B8C) and the set script.
+			if sceneView.IsCell() {
+				program, err := scriptProgram(activeSet.File(), sceneView.Resource)
+				if err != nil {
+					return nil, false, err
+				}
+				chain = append(chain, scripts.ScriptFrame{Program: program, Me: me, Target: me, Label: "Scene Script: "})
+			}
+			if resource, ok := activeSet.SceneScriptResource(sceneView.ReferenceIndex); ok {
+				program, err := scriptProgram(activeSet.File(), resource)
+				if err != nil {
+					return nil, false, err
+				}
+				chain = append(chain, scripts.ScriptFrame{Program: program, Me: me, Target: me, Label: "Area Script: "})
+			}
+			program, err := scriptProgram(activeSet.File(), activeSet.ScriptResource())
+			if err != nil {
+				return nil, false, err
+			}
+			chain = append(chain, scripts.ScriptFrame{Program: program, Me: me, Target: me, Label: "Set Script: ", Last: true})
+			return chain, true, nil
+		}
+		return nil, false, nil
+	}
 	scriptHost.Env.Busy = func() bool { return scriptEngineBusy != nil && scriptEngineBusy() }
 	scriptHost.Env.OpenSetFile = func(name string) error {
 		frame, err := switchSpecialSet(name, "", "")
@@ -2031,7 +2087,6 @@ func run() error {
 					}
 				}
 				loop.Remaining = 2
-			case "lookright", "doleft", "lookleft", "doright":
 				step, found := scripts.DogIdleStep(loop.Callback, &nativeRandom)
 				if !found {
 					return 0, fmt.Errorf("unknown dog idle callback %q", loop.Callback)
@@ -2196,19 +2251,9 @@ func run() error {
 		}
 		return nil
 	}
-	var pendingMovement assets.SceneMove
 	var pendingPlayerMovement assets.SceneMove
 	var pendingSceneMovie string
 	var dogMovieNeedsHelp bool
-	const (
-		dog2OfferIdle uint8 = iota
-		dog2OfferMovie
-		dog2OfferDelayBeforeEast
-		dog2OfferWaitEast
-		dog2OfferDelayAfterEast
-	)
-	dog2OfferStage := dog2OfferIdle
-	var dog2OfferUntil uint32
 	nativeCursor := ""
 	setNativeCursor := func(name string) {
 		if *silent || nativeCursor == name {
@@ -2705,6 +2750,20 @@ func run() error {
 				}
 			}
 		}
+		if _, migrated := progress.ScriptActors["dog"]; !migrated {
+			// An older save keeps only whether the dog was out: put him at his
+			// street post as initactors does on Day 1, or take him away.
+			message := "putdownactor()"
+			if progress.DogVisible {
+				message = "setupactor(\"street\")"
+			}
+			if err := deliverScriptEvent(scripts.ActorEvent{Actor: "dog", Message: message}); err != nil {
+				return err
+			}
+		}
+		if dog, status := scriptActors.Lookup("dog"); status == 0 {
+			dogVisibleState = dog.Visible
+		}
 		delete(actorPoses, "laurel"); delete(actorHeadings, "laurel"); delete(actorPoses, "trotter"); delete(actorHeadings, "trotter"); delete(actorPoses, "isao"); delete(actorHeadings, "isao")
 		currentScene, inventoryMenuActive = 0, false
 		publishBone()
@@ -2846,13 +2905,6 @@ func run() error {
 			return err
 		}
 		currentThemeName = currentTheme.FirstVoiceName()
-		step, found := scripts.DogIdleStep("doright", &nativeRandom)
-		if found {
-			actorPoses["dog"] = step.Pose
-			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "dog", Callback: step.Callback, Remaining: step.Remaining}); status != 0 {
-				return fmt.Errorf("register new-game dog idle: %#x", status)
-			}
-		}
 		if currentThemeName == "nightwind3" {
 			nativeLoops.Stop(scripts.LoopKindScene, "scene g14")
 			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindScene, Owner: "scene g14", Callback: "nightfxs", Remaining: 2}); status != 0 {
@@ -3593,18 +3645,22 @@ func run() error {
 			} else {
 				globals["snapshotError"] = err.Error()
 			}
-			return map[string]any{"day": gameDay, "clock": gameClock, "phase": gamePhase, "set": activeSetName, "scene": string(stage.Scenes[currentScene].Name[1:]), "point": worldPoint, "cash": playercash, "inventory": inventoryOwners, "inventoryMenu": inventoryMenuActive, "breakfast": hotelHotplateStage != nil && stage == hotelHotplateStage, "jonesPhase": jonesPhase, "jonesRingStory": jonesRingStory, "laurelPhase": laurelPhase, "helpPhase": helpPhase, "scriptGlobals": globals, "engineBusy": engineBusy, "bone": map[string]any{"visible": boneWorldProp.Visible, "owner": boneOwner, "position": boneWorldProp.Position, "view": boneWorldProp.View.Name}, "movieFrame": movieFrame, "movieWaiting": movieWaiting, "conversation": map[string]any{"open": convPuppet != nil, "choosing": convChoosing, "choiceEvents": choiceEvents, "taskActive": scriptTask != nil}, "scriptActors": scriptActors.Snapshot([]string{"mwife", "blood", "buick", "marie", "jones", "leroy", "help", "laurel", "trotter", "isao"})}
+			return map[string]any{"day": gameDay, "clock": gameClock, "phase": gamePhase, "set": activeSetName, "scene": string(stage.Scenes[currentScene].Name[1:]), "point": worldPoint, "cash": playercash, "inventory": inventoryOwners, "inventoryMenu": inventoryMenuActive, "breakfast": hotelHotplateStage != nil && stage == hotelHotplateStage, "jonesPhase": jonesPhase, "jonesRingStory": jonesRingStory, "laurelPhase": laurelPhase, "helpPhase": helpPhase, "scriptGlobals": globals, "engineBusy": engineBusy, "bone": map[string]any{"visible": boneWorldProp.Visible, "owner": boneOwner, "position": boneWorldProp.Position, "view": boneWorldProp.View.Name}, "movieFrame": movieFrame, "movieWaiting": movieWaiting, "conversation": map[string]any{"open": convPuppet != nil, "choosing": convChoosing, "choiceEvents": choiceEvents, "taskActive": scriptTask != nil}, "scriptActors": scriptActors.Snapshot([]string{"mwife", "blood", "buick", "marie", "jones", "leroy", "help", "laurel", "trotter", "isao", "dog"})}
 		})
 	}
 	scriptBlackFrame = blackFrame
 	scriptEngineBusy = func() bool {
-		busy := currentScene == 2 || playback != nil || transition != nil || sceneMovieAfter != nil || spotMovieActive
+		busy := currentScene == 2 || playback != nil || transition != nil || sceneMovieAfter != nil || spotMovieActive || pendingMovement != 0
 		if busy && *debug && *debugLoops {
-			log.Printf("script-busy scene=%d playback=%t transition=%t sceneMovieAfter=%t spot=%t", currentScene, playback != nil, transition != nil, sceneMovieAfter != nil, spotMovieActive)
+			log.Printf("script-busy scene=%d playback=%t transition=%t sceneMovieAfter=%t spot=%t frame=%d waiting=%t", currentScene, playback != nil, transition != nil, sceneMovieAfter != nil, spotMovieActive, playback.FrameIndex(), playback.WaitingForInput())
 		}
 		return busy
 	}
 	scriptPlayMovie = func(name string) error {
+		// The script's own premovie/postmovie wrap the movie, so the
+		// hand-written DOG spot-movie routing must not intercept it.
+		spotMovieStarting = true
+		defer func() { spotMovieStarting = false }()
 		return startActionMovie(name, 0, func(actionOne bool) (render.IndexedFrame, bool, error) {
 			scriptMovieFinished, scriptActionFrameOne = true, actionOne
 			return blackFrame, true, nil
@@ -3792,37 +3848,6 @@ func run() error {
 			}
 			displayChanged = displayChanged || changed
 		}
-		if playback == nil && transition == nil {
-			now := scripts.NativeFrameUnits(scripts.NativeTickMilliseconds())
-			if dog2OfferStage == dog2OfferDelayBeforeEast && now >= dog2OfferUntil {
-				dog2OfferStage, pendingMovement = dog2OfferWaitEast, assets.SceneMoveRight
-				if *debug {
-					log.Printf("actor=dog offerobject=turn direction=east movement=right")
-				}
-			}
-			if dog2OfferStage == dog2OfferWaitEast && pendingMovement == 0 && worldPoint[2] == assets.SetDirectionEast {
-				dog2OfferStage, dog2OfferUntil = dog2OfferDelayAfterEast, now+60
-				if *debug {
-					log.Printf("actor=dog offerobject=east wait=60")
-				}
-			}
-			if dog2OfferStage == dog2OfferDelayAfterEast && now >= dog2OfferUntil {
-				if err := runScript("help setup", `sendtoactor("help",setupactor("dog"))`); err != nil {
-					return render.IndexedFrame{}, false, fmt.Errorf("setup Help after DOG2.MOV: %w", err)
-				}
-				if err := refreshWorldScene(); err != nil {
-					return render.IndexedFrame{}, false, fmt.Errorf("show Help after DOG2.MOV: %w", err)
-				}
-				if err := startScriptSource("help after dog", `sendtoactor("help",mousedown(0))`, func() { gamePhase, phase = 2, 2 }); err != nil {
-					return render.IndexedFrame{}, false, fmt.Errorf("run Help mousedown after DOG2.MOV: %w", err)
-				}
-				dog2OfferStage = dog2OfferIdle
-				if *debug {
-					log.Printf("actor=dog offerobject=help-mousedown script-task=true")
-				}
-				return currentFrame, true, nil
-			}
-		}
 		if playback == nil && transition == nil && currentScene == 0 && (pendingMovement != 0 || pendingPlayerMovement != 0) {
 			movement := pendingMovement
 			if pendingMovement != 0 {
@@ -3998,13 +4023,6 @@ func run() error {
 						}
 						return currentFrame, true, nil
 					}
-					if dog2OfferStage == dog2OfferMovie {
-						dog2OfferStage = dog2OfferDelayBeforeEast
-						dog2OfferUntil = scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) + 60
-						if *debug {
-							log.Printf("actor=dog offerobject=movie-complete wait=east frames=60")
-						}
-					}
 					return currentFrame, true, nil
 				}
 				if transitionMode == 1 {
@@ -4139,14 +4157,6 @@ func run() error {
 			}
 			return currentFrame, true, nil
 		}
-		if dog2OfferStage == dog2OfferMovie {
-			dog2OfferStage = dog2OfferDelayBeforeEast
-			dog2OfferUntil = scripts.NativeFrameUnits(scripts.NativeTickMilliseconds()) + 60
-			if *debug {
-				log.Printf("actor=dog offerobject=movie-complete wait=east frames=60")
-			}
-			return currentFrame, true, nil
-		}
 		if *debug {
 			log.Printf("startup movies complete; scene=%s", stage.Scenes[currentScene].Name[1:])
 		}
@@ -4166,15 +4176,6 @@ func run() error {
 			}
 			currentThemeName = theme.FirstVoiceName()
 			resetNativeRandom()
-			if gameDay == 1 {
-				step, found := scripts.DogIdleStep("doright", &nativeRandom)
-				if found {
-					actorPoses["dog"] = step.Pose
-					if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindActor, Owner: "dog", Callback: step.Callback, Remaining: step.Remaining}); status != 0 {
-						return render.IndexedFrame{}, false, fmt.Errorf("register dog idle loop returned status %#x", status)
-					}
-				}
-			}
 			if currentThemeName == "nightwind3" {
 				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindScene, Owner: "scene g14", Callback: "nightfxs", Remaining: 2}); status != 0 {
 					return render.IndexedFrame{}, false, fmt.Errorf("register NITE nightfxs loop returned status %#x", status)
@@ -4256,9 +4257,6 @@ func run() error {
 			return
 		}
 		if playback == nil {
-			if dog2OfferStage != dog2OfferIdle {
-				return
-			}
 			if currentScene == 0 {
 				switch key {
 				case ebiten.KeyArrowUp, ebiten.KeyW:
@@ -4604,29 +4602,6 @@ func run() error {
 					}
 					return currentFrame, false, nil
 				}
-				if strings.EqualFold(actorName, "dog") && activeSetName == "town" {
-					camera := render.NativeActorCameraPosition(worldPoint)
-					player := [3]int16{int16(camera[0]), int16(camera[1]), int16(camera[2])}
-					dogDistance := 1 << 30
-					for _, actor := range worldActors {
-						if strings.EqualFold(actor.Name, "dog") {
-							dogDistance = scripts.NativeActorDistance2D(actor.Position, player)
-							break
-						}
-					}
-					sceneName, handlesClick := scripts.CastActorMouseDownScene(actorName, gameDay, dogDistance, townActorHotDistance)
-					if !handlesClick {
-						if *debug {
-							log.Printf("actor=dog mousedown=ignored day=%d distance=%d hotdist=%d", gameDay, dogDistance, townActorHotDistance)
-						}
-						return currentFrame, false, nil
-					}
-					nextFrame, err := setWorldView(sceneName, worldPoint[2])
-					if err != nil {
-						return render.IndexedFrame{}, false, err
-					}
-					return nextFrame, true, nil
-				}
 			}
 		}
 		if !hit {
@@ -4871,25 +4846,6 @@ func run() error {
 					}
 					if err := startScriptTask(scripts.ActorEvent{Actor: actorName, Message: `offerobject("bone")`}); err != nil {
 						return render.IndexedFrame{}, false, err
-					}
-					return currentFrame, true, nil
-				}
-				if hit && strings.EqualFold(actorName, "dog") && boneInInventory && boneOwner == "stranger" && gameDay != 5 {
-					dogVisibleState = false
-					nativeLoops.Stop(scripts.LoopKindActor, "dog")
-					if activeSetName == "town" && view.Resource == 135 && worldPoint[2] == assets.SetDirectionNorth {
-						boneInInventory, boneOwner, boneWorldProp.Visible = false, "none", false
-						publishBone()
-						inventoryOwners["bone"], handItem = "none", ""
-						dog2OfferStage, pendingSpotMovie = dog2OfferMovie, "MOVIES/DOG2.MOV"
-						if *debug {
-							log.Printf("actor=dog offerobject=Bone visible=false point=%v phase=%d movie=DOG2.MOV", worldPoint, gamePhase)
-						}
-					} else if *debug {
-						log.Printf("actor=dog offerobject=Bone putdown-only set=%s view=%s direction=%d", activeSetName, view.Name[1:], worldPoint[2])
-					}
-					if err := refreshWorldScene(); err != nil {
-						return render.IndexedFrame{}, false, fmt.Errorf("refresh after Dog offer: %w", err)
 					}
 					return currentFrame, true, nil
 				}

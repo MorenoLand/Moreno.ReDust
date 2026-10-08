@@ -134,6 +134,16 @@ func (h *GameHost) worldCommand(name string, call *ScriptCall) (consumed int, st
 		if h.currentSet() == "" {
 			return 0, 0x28, true, nil
 		}
+		if name == "currentscene" {
+			// FUN_004199A0: besides a scene, the argument may name a movement.
+			if move, ok := sceneMoveCode(args[0].Text); ok {
+				if h.Env.SceneMove == nil {
+					return 0, 0, true, fmt.Errorf("%w: currentscene(%q) has no movement control", ErrHostOpcodeUnimplemented, args[0].Text)
+				}
+				h.Env.SceneMove(move)
+				return consumed, 0, true, nil
+			}
+		}
 		if h.Env.SetView == nil {
 			return 0, 0, true, fmt.Errorf("%w: %s has no view control", ErrHostOpcodeUnimplemented, name)
 		}
@@ -249,4 +259,65 @@ func (h *GameHost) worldValue(name string, call *ScriptCall) (Record, int, uint1
 		return text(direction, consumed)
 	}
 	return Record{}, 0, 0, false, nil
+}
+
+// sceneMoveCode maps currentscene's movement names to the codes FUN_00405DF0
+// takes: left 1, right 2, "strait" 3, backwards 4.
+func sceneMoveCode(name string) (int, bool) {
+	switch strings.ToLower(name) {
+	case "left":
+		return 1, true
+	case "right":
+		return 2, true
+	case "strait":
+		return 3, true
+	case "backwards":
+		return 4, true
+	}
+	return 0, false
+}
+
+// sendToScene is FUN_0041A180/FUN_0041A1A0: `sendtoscene(name, message(args))`
+// runs the message against the scene's script and then the set script.
+func (h *GameHost) sendToScene(call *ScriptCall) (int, uint16, error) {
+	if h.currentSet() == "" {
+		return 0, 0x28, nil
+	}
+	if call.Kind(call.Start+1) != opOpen {
+		return 0, ScriptStatusMalformed, nil
+	}
+	target, consumed, status, err := call.Eval(call.Start + 2)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	value, status, err := call.Interpreter.Value(target)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	if value.Kind != 3 {
+		return 0, ScriptStatusWrongType, nil
+	}
+	message := call.Start + 2 + consumed
+	if call.Kind(message) != opComma {
+		return 0, ScriptStatusMissingComma, nil
+	}
+	message++
+	if h.Env.SceneChain == nil {
+		return 0, 0, fmt.Errorf("%w: sendtoscene", ErrHostOpcodeUnimplemented)
+	}
+	chain, found, err := h.Env.SceneChain(value.Text)
+	if err != nil {
+		return 0, 0, err
+	}
+	if !found {
+		return 0, 0x0a, nil
+	}
+	used, status, err := call.Interpreter.Call(chain, call.Chain, call.FrameIndex, call.Locals, call.Program, message)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	if call.Kind(message+used) != opClose {
+		return 0, ScriptStatusMalformed, nil
+	}
+	return message + used + 1 - call.Start, 0, nil
 }

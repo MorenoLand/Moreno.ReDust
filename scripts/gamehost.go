@@ -77,6 +77,16 @@ type GameHostEnv struct {
 	// latched action marker n (1 or 2). ok is false for an index the port does
 	// not track.
 	ActionFrame func(n int) (latched, ok bool)
+	// SceneMove starts a player movement (1 left, 2 right, 3 straight,
+	// 4 backwards) as currentscene("strait") and its siblings do.
+	SceneMove func(code int)
+	// ResolvePath is FUN_0041BA70: the stored path a walk to the star takes
+	// from the actor's current star ("resume" joins any path ending there at
+	// the actor's position), or false when the set has none.
+	ResolvePath func(set, star, actorStar string, position [3]int16) (*assets.Path, bool)
+	// SceneChain is sendtoscene's [scene script, set script] chain for the
+	// named scene; found is false when the set has no such scene.
+	SceneChain func(name string) (chain []ScriptFrame, found bool, err error)
 	AdvanceDay func() error
 	Busy       func() bool
 	// View is the player's scene name and facing ("north".."west");
@@ -429,6 +439,8 @@ func (h *GameHost) Command(call *ScriptCall) (int, uint16, error) {
 		return consumed, 0, nil
 	case "sendtoactor":
 		return h.sendToActor(call)
+	case "sendtoscene":
+		return h.sendToScene(call)
 	case "sendtocast":
 		if target, _, skipped, status, err := call.SendParts(); err == nil && status == 0 && h.Env.CastManaged != nil && !h.Env.CastManaged(target.Text) {
 			return skipped, 0, nil
@@ -471,6 +483,15 @@ func (h *GameHost) walkToStar(actor *ActorRecord, star string) (uint16, error) {
 	if h.Env.ResolveStar == nil {
 		return 0, fmt.Errorf("walktostar has no star resolver")
 	}
+	// FUN_0041BA70 looks for a stored path between the actor's star and the
+	// destination first; only without one does the actor walk straight.
+	if _, literal := parseCoordinateStar(star); !literal && h.Env.ResolvePath != nil && h.Env.Heading != nil {
+		if path, found := h.Env.ResolvePath(actor.Set, star, actor.Star, actor.Position); found && len(path.Points) >= 2 {
+			heading := h.Env.Heading(path.Points[0], path.Points[1])
+			actor.Job = &ActorJob{Mode: ActorJobWalk, Target: star, Heading: heading, Path: NewNativePathWalk(path, actor.Speed)}
+			return 0, nil
+		}
+	}
 	// FUN_0041B960 accepts a literal "x,y,z" destination, after which the
 	// job's star is "custom"; otherwise the star is a named location.
 	destination, ok := parseCoordinateStar(star)
@@ -512,10 +533,12 @@ func (h *GameHost) sendToActor(call *ScriptCall) (int, uint16, error) {
 	}
 	message++
 	actor, status := h.Actors.Lookup(value.Text)
-	if status != 0 {
+	if status != 0 && h.managed(value.Text) {
 		return 0, status, nil
 	}
-	if !h.managed(actor.Name) {
+	// An actor the port does not track (the instances actorinstance makes,
+	// such as horse2) is as unmanaged as a hand-written one.
+	if status != 0 || !h.managed(actor.Name) {
 		// Hand-written actors keep their own behavior; skip the message.
 		end, status, err := ParenthesizedBlockScan(call.Program.Records, call.Start+1)
 		if err != nil || status != 0 {
@@ -848,7 +871,14 @@ func (h *GameHost) Pass() (events []ActorEvent, moved bool) {
 				}
 				continue
 			}
-			position, heading, walking := job.Walk.Pass(actor.Position, actor.Heading, actor.TurnRate)
+			var position [3]int16
+			var heading int16
+			var walking bool
+			if job.Path != nil {
+				position, heading, walking = job.Path.Pass(h.Env.Heading)
+			} else {
+				position, heading, walking = job.Walk.Pass(actor.Position, actor.Heading, actor.TurnRate)
+			}
 			if inSet && (position != actor.Position || heading != actor.Heading) {
 				moved = true
 			}

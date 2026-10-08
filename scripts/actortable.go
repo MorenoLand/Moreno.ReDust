@@ -70,6 +70,8 @@ type ActorJob struct {
 	Target  string
 	Heading int16
 	Walk    *NativeActorWalkJob
+	// Path is set instead of Walk for a "walkonpath" job.
+	Path *NativePathWalk
 	Paused  bool
 	// TurnDone marks that a walk's initial turn to the route bearing finished.
 	TurnDone bool
@@ -187,6 +189,7 @@ type ActorRecordState struct {
 	JobTarget   string                `json:"jobTarget,omitempty"`
 	JobHeading  int16                 `json:"jobHeading,omitempty"`
 	JobWalk     *NativeActorWalkState `json:"jobWalk,omitempty"`
+	JobPath     *NativePathWalkState  `json:"jobPath,omitempty"`
 }
 
 // Snapshot returns the persisted state of the named actors.
@@ -203,6 +206,10 @@ func (t *ScriptActors) Snapshot(names []string) map[string]ActorRecordState {
 			if job.Walk != nil {
 				walk := job.Walk.Snapshot()
 				state.JobWalk = &walk
+			}
+			if job.Path != nil {
+				path := job.Path.Snapshot()
+				state.JobPath = &path
 			}
 		}
 		states[strings.ToLower(name)] = state
@@ -229,6 +236,9 @@ func (t *ScriptActors) Restore(states map[string]ActorRecordState) error {
 					return fmt.Errorf("saved script actor %q walk: %w", name, err)
 				}
 				job.Walk, job.TurnDone = walk, true
+			}
+			if state.JobPath != nil {
+				job.Path, job.TurnDone = RestoreNativePathWalk(*state.JobPath), true
 			}
 			actor.Job = job
 		}

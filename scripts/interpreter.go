@@ -956,6 +956,28 @@ func (in *Interpreter) RunSource(chain []ScriptFrame, source string) (uint16, er
 
 // SetGlobalNumber declares a global if needed and stores a number in it, the
 // way an engine-owned value such as day or clock is published to scripts.
+// SetGlobalBool declares a global holding a script boolean (kind 2).
+func (in *Interpreter) SetGlobalBool(name string, value bool) error {
+	pascal := append([]byte{byte(len(name))}, name...)
+	id, status, err := in.Global.ResolveOrCreate(pascal, &Record{})
+	if err != nil {
+		return err
+	}
+	if status != 0 {
+		return fmt.Errorf("global %q cannot be declared: status %#x", name, status)
+	}
+	var encoded ExpressionValue
+	binary.LittleEndian.PutUint16(encoded[:2], 2)
+	binary.LittleEndian.PutUint32(encoded[2:6], boolWord(value))
+	if status, err = in.Global.WriteValue(id, encoded, in.Strings); err != nil {
+		return err
+	}
+	if status != 0 {
+		return fmt.Errorf("global %q cannot be written: status %#x", name, status)
+	}
+	return nil
+}
+
 func (in *Interpreter) SetGlobalNumber(name string, value int32) error {
 	pascal := append([]byte{byte(len(name))}, name...)
 	id, status, err := in.Global.ResolveOrCreate(pascal, &Record{})
