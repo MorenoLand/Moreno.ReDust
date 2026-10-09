@@ -562,8 +562,18 @@ func run() error {
 	var heldItemDragLast image.Point
 	defer func() {
 	}()
+	// scriptWorldProps lists the script-driven props visible in the open set;
+	// it is assigned once the script host exists.
+	var scriptWorldProps func() []render.WorldPropSprite
+	worldPropSprites := func() []render.WorldPropSprite {
+		sprites := []render.WorldPropSprite{boneWorldProp}
+		if scriptWorldProps != nil {
+			sprites = append(sprites, scriptWorldProps()...)
+		}
+		return sprites
+	}
 	compositeWorld := func(background render.IndexedFrame, point [3]int16, actors []render.WorldActorSprite) (render.IndexedFrame, []render.ProjectedWorldActor, error) {
-		return render.CompositeWorldActorsAndProps(background, point, activeSetName, actors, []render.WorldPropSprite{boneWorldProp}, render.WorldOccludersForView(activeSetName, point))
+		return render.CompositeWorldActorsAndProps(background, point, activeSetName, actors, worldPropSprites(), render.WorldOccludersForView(activeSetName, point))
 	}
 	loadWorldActors := func(point [3]int16) ([]render.WorldActorSprite, error) {
 		actors := make([]render.WorldActorSprite, 0, 4)
@@ -786,6 +796,41 @@ func run() error {
 			}, nil
 		},
 	}}
+	propInstances := map[string]string{}
+	// Script props the open set shows are drawn from HOUSE.PRP with the view the
+	// script chose, as the bone is. The bone is drawn separately, and an unknown
+	// view is logged, not fatal.
+	scriptWorldProps = func() []render.WorldPropSprite {
+		var sprites []render.WorldPropSprite
+		for _, name := range scriptHost.Props.Names() {
+			if strings.EqualFold(name, "bone") {
+				continue
+			}
+			prop := scriptHost.Props.Get(name)
+			if !prop.Visible || prop.View == "" || !strings.EqualFold(prop.Set, activeSetName) {
+				continue
+			}
+			key := strings.ToLower(name)
+			if original, aliased := propInstances[key]; aliased {
+				key = original
+			}
+			// Only the set's own props (HOUSE.PRP): an inventory item a script
+			// shows is drawn by the hand overlay, not in the world.
+			if _, found := inventoryArchive.Definition(key); found {
+				continue
+			}
+			archive := propArchive
+			view, err := archive.View(key, prop.View)
+			if err != nil {
+				if *debug {
+					log.Printf("script-note prop %s view %q: %v", name, prop.View, err)
+				}
+				continue
+			}
+			sprites = append(sprites, render.WorldPropSprite{Name: name, Set: prop.Set, Position: [3]int16{int16(prop.X), int16(prop.Y), int16(prop.Z)}, Heading: int16(prop.Degree), Scale: int16(prop.Scale), ZClip: int16(prop.ZClip), Archive: archive, View: view, Visible: true})
+		}
+		return sprites
+	}
 	scriptInterpreter := scripts.NewInterpreter(scriptHost)
 	scriptHost.Env.SceneMove = func(code int) { pendingMovement = assets.SceneMove(code) }
 	scriptHost.Env.Instanced = func(source, name string) {
@@ -2143,7 +2188,6 @@ func run() error {
 		return inventoryDegrees[strings.ToLower(name)], true
 	}
 	// propinstance (FUN_0041E840) adds props that share their source's script.
-	propInstances := map[string]string{}
 	scriptHost.Env.PropInstance = func(source, name string) (uint16, bool) {
 		key, sourceKey := strings.ToLower(name), strings.ToLower(source)
 		if _, exists := propInstances[key]; exists {
@@ -2185,6 +2229,7 @@ func run() error {
 			}
 		}
 	}
+
 	scriptHost.Env.Ticks = func() uint32 { return scripts.NativeFrameUnits(native.NativeTickMilliseconds()) }
 	scriptHost.Env.PlayerHeading = func() int16 {
 		degree, _ := render.NativeCurrentDegree(worldPoint[2])
@@ -2865,6 +2910,11 @@ func run() error {
 		}
 		worldPoint = progress.Point
 		if err := scriptInterpreter.RestoreGlobals(progress.ScriptGlobals); err != nil {
+			return err
+		}
+		// Saves from before the set scripts keep neither global. The town's
+		// openset (NITE.SET) sets them to these values, so supply them here.
+		if err := defaultMissingScriptGlobals(scriptInterpreter); err != nil {
 			return err
 		}
 		if err := scriptActors.Restore(progress.ScriptActors); err != nil {
@@ -5061,4 +5111,25 @@ func (f *mainScriptFallback) Command(call *scripts.ScriptCall) (int, uint16, err
 func (f *mainScriptFallback) Value(call *scripts.ScriptCall) (scripts.Record, int, uint16, error) {
 	kind := call.Program.Records[call.Start].Kind
 	return scripts.Record{}, 0, 0, fmt.Errorf("%w: %s (%d)", scripts.ErrHostOpcodeUnimplemented, scripts.CommandHandlerName(kind), kind)
+}
+
+// defaultMissingScriptGlobals declares the two globals the town's sound loops
+// read when a save predates them: NITE.SET openset sets scenecounter=0 and
+// loopsound="".
+func defaultMissingScriptGlobals(interpreter *scripts.Interpreter) error {
+	if _, declared, err := interpreter.GlobalValue("scenecounter"); err != nil {
+		return err
+	} else if !declared {
+		if err := interpreter.SetGlobalNumber("scenecounter", 0); err != nil {
+			return err
+		}
+	}
+	if _, declared, err := interpreter.GlobalValue("loopsound"); err != nil {
+		return err
+	} else if !declared {
+		if err := interpreter.SetGlobalString("loopsound", ""); err != nil {
+			return err
+		}
+	}
+	return nil
 }
