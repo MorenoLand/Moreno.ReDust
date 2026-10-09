@@ -4003,6 +4003,9 @@ func run() error {
 		playMovie: func(name string, after func() (render.IndexedFrame, bool, error)) error {
 			// NEW.FLT r1 spotmovie: screentoblack("current",10), the movie, then
 			// the screen fades back in over 30 frames.
+			if !strings.Contains(name, "/") {
+				name = "MOVIES/" + strings.ToUpper(name)
+			}
 			return startActionMovie(name, 10, func(bool) (render.IndexedFrame, bool, error) {
 				frame, _, err := after()
 				if err != nil {

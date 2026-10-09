@@ -168,8 +168,8 @@ func (c *creditsScreen) loadFlat() error {
 // frame composes the flat with the "black" and "names" props.
 func (c *creditsScreen) frame() (render.IndexedFrame, error) {
 	sprites := []render.FlatPropSprite{
-		{Name: "black", PropName: "black", ViewName: "UNTITLED", Anchor: image.Pt(256, 192), Archive: c.props},
-		{Name: "names", PropName: "names", ViewName: strconv.Itoa(c.view), Anchor: image.Pt(256, c.y), Archive: c.props},
+		{Name: "black", PropName: "black", ViewName: "UNTITLED", Anchor: image.Pt(256, 192), Archive: c.props, Rotated: true},
+		{Name: "names", PropName: "names", ViewName: strconv.Itoa(c.view), Anchor: image.Pt(256, c.y), Archive: c.props, Rotated: true},
 	}
 	frame, _, err := render.CompositeFlatProps(c.flatFrame, sprites)
 	return frame, err
