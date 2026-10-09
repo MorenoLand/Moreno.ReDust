@@ -3903,7 +3903,7 @@ func run() error {
 			if err != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("advance player portrait: %w", err)
 			}
-			displayChanged = avatarChanged
+			displayChanged = displayChanged || avatarChanged
 			changed, err := runNativeScheduler(false)
 			if err != nil {
 				return render.IndexedFrame{}, false, err
