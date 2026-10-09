@@ -191,5 +191,5 @@ func projectWorldProp(background IndexedFrame, point [3]int16, activeSet string,
 		}
 		scaledPixels, scaledMask = clippedPixels, clippedMask
 	}
-	return ProjectedWorldActor{Name: prop.Name, Depth: depth, Bounds: visible, pixels: scaledPixels, mask: scaledMask, propHitMask: hitMask, propHitSourceWidth: frame.Width, propHitSourceHeight: frame.Height, propHitStride: frame.Width}, true, nil
+	return ProjectedWorldActor{Name: prop.Name, Depth: depth, Bounds: visible, pixels: scaledPixels, mask: scaledMask, propHitMask: hitMask, propHitSourceWidth: frame.Width, propHitSourceHeight: frame.Height, propHitStride: frame.Width, propBounds: bounds}, true, nil
 }

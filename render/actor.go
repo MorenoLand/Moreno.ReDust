@@ -31,6 +31,7 @@ type ProjectedWorldActor struct {
 	propHitSourceWidth  int
 	propHitSourceHeight int
 	propHitStride       int
+	propBounds          image.Rectangle
 }
 
 var nativeActorAtan = func() [512]uint8 {
@@ -289,7 +290,9 @@ func HitTestWorldActors(actors []ProjectedWorldActor, point image.Point) (string
 			continue
 		}
 		if actor.propHitMask != nil {
-			sourceX, sourceY := x*actor.propHitSourceWidth/actor.Bounds.Dx(), y*actor.propHitSourceHeight/actor.Bounds.Dy()
+			// The source is mapped through the whole sprite, not the part on screen.
+			sourceX := (point.X - actor.propBounds.Min.X) * actor.propHitSourceWidth / actor.propBounds.Dx()
+			sourceY := (point.Y - actor.propBounds.Min.Y) * actor.propHitSourceHeight / actor.propBounds.Dy()
 			index := sourceY*actor.propHitStride + sourceX
 			if sourceX >= 0 && sourceX < actor.propHitSourceWidth && sourceY >= 0 && sourceY < actor.propHitSourceHeight && index >= 0 && index < len(actor.propHitMask) && actor.propHitMask[index] {
 				return actor.Name, true
