@@ -194,6 +194,47 @@ func (h *GameHost) worldValue(name string, call *ScriptCall) (Record, int, uint1
 			return number(int32(point[0]), consumed)
 		}
 		return number(int32(point[1]), consumed)
+	case "rowcoltoscene":
+		// FUN_0041B600: the view row whose first two words equal (row, column);
+		// "none" when the set has no such row (FUN_0041BFB0).
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, true, err
+		}
+		if h.currentSet() == "" {
+			return Record{}, 0, 0x28, true, nil
+		}
+		if len(args) != 2 || args[0].Kind != 4 || args[1].Kind != 4 {
+			return Record{}, 0, ScriptStatusWrongType, true, nil
+		}
+		if h.Env.SceneAtCell == nil {
+			return Record{}, 0, 0, true, fmt.Errorf("%w: rowcoltoscene", ErrHostOpcodeUnimplemented)
+		}
+		scene, found := h.Env.SceneAtCell(int16(args[0].Int), int16(args[1].Int))
+		if !found {
+			scene = "none"
+		}
+		return text(scene, consumed)
+	case "scenebuild":
+		// FUN_0041B700: the view row'"'"'s word at +8 as a boolean.
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, true, err
+		}
+		if h.currentSet() == "" {
+			return Record{}, 0, 0x28, true, nil
+		}
+		if len(args) != 1 || args[0].Kind != 3 {
+			return Record{}, 0, ScriptStatusWrongType, true, nil
+		}
+		if h.Env.SceneBuild == nil {
+			return Record{}, 0, 0, true, fmt.Errorf("%w: scenebuild", ErrHostOpcodeUnimplemented)
+		}
+		building, found := h.Env.SceneBuild(args[0].Text)
+		if !found {
+			return Record{}, 0, 0x0a, true, nil
+		}
+		return Record{Kind: 2, Data: boolWord(building)}, consumed, 0, true, nil
 	case "makepoint":
 		args, consumed, status, err := call.Args()
 		if err != nil || status != 0 {

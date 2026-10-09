@@ -189,6 +189,33 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 			prop.Z = args[3].Int
 		}
 		return consumed, 0, true, nil
+	case "propinstance":
+		// FUN_0041E840: propinstance(source, name) appends a copy of the source
+		// prop under a new name of at most 15 characters, unless that name is
+		// already a prop.
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return 0, status, true, err
+		}
+		if len(args) != 2 || args[0].Kind != 3 || args[1].Kind != 3 {
+			return 0, ScriptStatusWrongType, true, nil
+		}
+		if len(args[1].Text) > 15 {
+			return 0, 0x1a, true, nil
+		}
+		if h.Env.PropInstance == nil {
+			return 0, 0, true, fmt.Errorf("%w: propinstance", ErrHostOpcodeUnimplemented)
+		}
+		status, added := h.Env.PropInstance(args[0].Text, args[1].Text)
+		if status != 0 {
+			return 0, status, true, nil
+		}
+		if added && h.Props != nil {
+			copied := *h.Props.Get(args[0].Text)
+			copied.Name = args[1].Text
+			h.Props.props[strings.ToLower(args[1].Text)] = &copied
+		}
+		return consumed, 0, true, nil
 	case "voicesound", "singlesound", "dualsound", "multiplesound":
 		args, consumed, status, err := call.Args()
 		if err != nil || status != 0 {
@@ -196,6 +223,9 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 		}
 		if len(args) == 0 || args[0].Kind != 3 {
 			return 0, ScriptStatusWrongType, true, nil
+		}
+		if name == "voicesound" && h.Env.Voice != nil {
+			return consumed, 0, true, h.Env.Voice(args[0].Text)
 		}
 		if h.Env.Sound == nil {
 			return 0, 0, true, fmt.Errorf("%w: %s has no audio output", ErrHostOpcodeUnimplemented, name)

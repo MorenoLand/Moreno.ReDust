@@ -97,3 +97,55 @@ func (t NativeTheme) Play(context *ebitenaudio.Context) (*Player, error) {
 	player.SetVolume(1)
 	return player, nil
 }
+
+// ThemeName is the internal name FUN_0040E340 copies from resource zero
+// (offset 0x9E) into the open-track record. closetrackfile and playtheme
+// match against it, not against the file name.
+func (b *SoundBank) ThemeName() string {
+	if b == nil || b.resources == nil {
+		return ""
+	}
+	lease, err := b.resources.Acquire(0)
+	if err != nil {
+		return ""
+	}
+	metadata, err := lease.Bytes()
+	if closeErr := lease.Close(); err != nil || closeErr != nil || len(metadata) <= nativeThemeNameOffset {
+		return ""
+	}
+	length := int(metadata[nativeThemeNameOffset])
+	if nativeThemeNameOffset+1+length > len(metadata) {
+		return ""
+	}
+	return string(metadata[nativeThemeNameOffset+1 : nativeThemeNameOffset+1+length])
+}
+
+// PlayLoop starts a sound that repeats until the returned player is closed.
+func (b *SoundBank) PlayLoop(context *ebitenaudio.Context, name string, volume uint8) (*Player, error) {
+	sound, err := b.Load(name)
+	if err != nil {
+		return nil, err
+	}
+	player, err := NewNativePlaylist(context, []NativeSound{sound}, []int{0}, 0)
+	if err != nil || player == nil {
+		return nil, err
+	}
+	player.SetVolume(float64(volume) / 255)
+	return player, nil
+}
+
+// PlayOne starts a sound once and returns its player so the caller can watch
+// whether it is still playing (currentvoice).
+func (b *SoundBank) PlayOne(context *ebitenaudio.Context, name string, volume uint8) (*Player, error) {
+	sound, err := b.Load(name)
+	if err != nil {
+		return nil, err
+	}
+	player, err := NewPlayer(context, sound.Samples, sound.Format)
+	if err != nil {
+		return nil, err
+	}
+	player.SetVolume(float64(volume) / 255)
+	player.Play()
+	return player, nil
+}

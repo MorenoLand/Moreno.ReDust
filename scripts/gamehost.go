@@ -45,6 +45,9 @@ type GameHostEnv struct {
 	// Shop resolves an open shop's script (FUN_00421520).
 	Shop       func(name string) (file string, resource uint32, ok bool)
 	PropScript func(name string) (file string, resource uint32, shop string, ok bool)
+	// PropInstance registers an instance of a prop under a new name and returns
+	// the status propinstance reports.
+	PropInstance func(source, name string) (status uint16, added bool)
 	// PropDegree is a prop's degree (propdeg).
 	PropDegree func(name string) (int16, bool)
 	// Ticks is the native time-unit clock delay and the fades wait on.
@@ -67,6 +70,8 @@ type GameHostEnv struct {
 	BootScript  func() (*Program, error)
 	// Theme is the playing theme's name, "" when none.
 	Theme      func() string
+	// ThemeName is the playing theme's own name (currenttheme(2)).
+	ThemeName func() string
 	// ThemeVolume is themevol's effect (FUN_0040E9E0): level 0..255 for every
 	// track of the named theme. Nil leaves the volume alone.
 	ThemeVolume func(name string, level int)
@@ -88,6 +93,10 @@ type GameHostEnv struct {
 	Instanced func(source, name string)
 	// Diagnose receives debug notes about script calls that failed.
 	Diagnose func(message string)
+	// SceneAtCell and SceneBuild are rowcoltoscene and scenebuild: the view at
+	// a (row, column) and a view's building flag.
+	SceneAtCell func(row, col int16) (name string, found bool)
+	SceneBuild  func(name string) (building, found bool)
 	// SceneCell is the cell centre of a named scene in the open set.
 	SceneCell func(name string) (x, y int16, found bool)
 	// ResolvePath is FUN_0041BA70: the stored path a walk to the star takes
@@ -114,6 +123,10 @@ type GameHostEnv struct {
 	CastManaged func(name string) bool
 	// CurrentFlat is the open flat's name (FUN_004125C0).
 	CurrentFlat func() string
+	// Voice plays voicesound on the voice channel currentvoice reports.
+	Voice func(name string) error
+	// Tracks is the open track files and sound channels.
+	Tracks TrackHost
 	// Fallback handles opcodes this host does not; nil makes them gaps.
 	Fallback ScriptHost
 	// Log receives diagnostics when non-nil.
@@ -555,6 +568,9 @@ func (h *GameHost) command(call *ScriptCall) (int, uint16, error) {
 		}, nil)
 		return consumed, status, err
 	}
+	if consumed, status, handled, err := h.soundCommand(name, call); handled {
+		return consumed, status, err
+	}
 	if consumed, status, handled, err := h.puppetCommand(name, call); handled {
 		return consumed, status, err
 	}
@@ -952,6 +968,9 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 			return Record{}, 0, 0, fmt.Errorf("%s has no source", name)
 		}
 		return number(source(), consumed)
+	}
+	if value, consumed, status, handled, err := h.soundValue(name, call); handled {
+		return value, consumed, status, err
 	}
 	if value, consumed, status, handled, err := h.puppetValue(name, call); handled {
 		return value, consumed, status, err

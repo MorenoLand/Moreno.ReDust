@@ -212,6 +212,7 @@ func run() error {
 	}
 	var currentThemeName string
 	var currentTheme audio.NativeTheme
+	var themeTrack *audio.OpenTrack
 	var pendingSpotMovie, spotMovieName string
 	var spotMovieReturnFrame render.IndexedFrame
 	var spotMovieActionFrameOne, spotMovieActive, spotMovieStarting bool
@@ -227,6 +228,13 @@ func run() error {
 		defer func() { _ = soundBank.Close() }()
 		audioContext = ebitenaudio.NewContext(44100)
 	}
+	tracks := audio.NewTracks(workspace, audioContext)
+	if soundBank != nil {
+		tracks.Adopt("DATA/UNILIB.SND", soundBank)
+	} else if openErr := tracks.OpenTrack("unilib.snd"); openErr != nil && *debug {
+		log.Printf("script tracks: unilib: %v", openErr)
+	}
+	defer tracks.Close()
 	defer func() {
 		if themePlayer != nil {
 			_ = themePlayer.Close()
@@ -814,6 +822,28 @@ func run() error {
 		}
 		return 0, 0, false
 	}
+	scriptHost.Env.SceneAtCell = func(row, col int16) (string, bool) {
+		if activeSet == nil {
+			return "", false
+		}
+		for _, sceneView := range activeSet.Views() {
+			if int16(sceneView.SceneID) == row && int16(sceneView.DirectionID) == col {
+				return string(sceneView.Name[1:]), true
+			}
+		}
+		return "", false
+	}
+	scriptHost.Env.SceneBuild = func(name string) (bool, bool) {
+		if activeSet == nil {
+			return false, false
+		}
+		for _, sceneView := range activeSet.Views() {
+			if strings.EqualFold(string(sceneView.Name[1:]), name) {
+				return sceneView.Flags != 0, true
+			}
+		}
+		return false, false
+	}
 	scriptHost.Env.SceneChain = func(name string) ([]scripts.ScriptFrame, bool, error) {
 		if activeSet == nil {
 			return nil, false, nil
@@ -982,11 +1012,11 @@ func run() error {
 		}
 		return nil
 	}
-	runScript := func(label, source string) error {
+	runScriptIn := func(label string, chain []scripts.ScriptFrame, source string) error {
 		if err := publishScriptGlobals(); err != nil {
 			return err
 		}
-		status, err := scriptHost.Run(scriptInterpreter, source)
+		status, err := scriptInterpreter.RunSource(chain, source)
 		if collectErr := collectScriptGlobals(); err == nil {
 			err = collectErr
 		}
@@ -1004,6 +1034,15 @@ func run() error {
 		}
 		return nil
 	}
+	runScript := func(label, source string) error { return runScriptIn(label, nil, source) }
+	// raiseSetEvent sends the set script (set) or the open scene's chain (scene)
+	// one of openset(), closeset(), openscene() or closescene(), the way
+	// FUN_00419D20, FUN_00419EE0, FUN_00419BC0 and FUN_00419C70 do for the sets
+	// whose scripts the port runs. setEventsOpen is true between the set's open
+	// and close events.
+	scriptedSets := map[string]bool{"town": true}
+	setEventsOpen := false
+	var raiseSetEvent func(set bool, message string) error
 	deliverScriptEvent := func(event scripts.ActorEvent) error {
 		return runScript(event.Actor+" "+event.Message, fmt.Sprintf("sendtoactor(%q,%s)", event.Actor, event.Message))
 	}
@@ -1534,9 +1573,18 @@ func run() error {
 				return render.IndexedFrame{}, err
 			}
 		}
+		if setEventsOpen {
+			// FUN_00419EE0: closeset(), then closefloor(), then closescene().
+			if err := raiseSetEvent(true, "closeset()"); err != nil {
+				return render.IndexedFrame{}, err
+			}
+			if err := raiseSetEvent(false, "closescene()"); err != nil {
+				return render.IndexedFrame{}, err
+			}
+			setEventsOpen = false
+		}
 		if previousName == "town" && semanticName != "town" {
 			townReturnScene = string(view.Name[1:])
-			nativeLoops.Stop(scripts.LoopKindScene, "scene g14")
 			for _, owner := range []string{"dog", "isao"} {
 				nativeLoops.Stop(scripts.LoopKindActor, owner)
 			}
@@ -1552,6 +1600,16 @@ func run() error {
 		view, worldPoint, backgroundFrame = nextView, nextPoint, background
 		scriptHost.OpenSet()
 		doorOwner = ""
+		if scriptedSets[semanticName] {
+			// FUN_00419D20: openset(), then openfloor(), then openscene().
+			setEventsOpen = true
+			if err := raiseSetEvent(true, "openset()"); err != nil {
+				return render.IndexedFrame{}, err
+			}
+			if err := raiseSetEvent(false, "openscene()"); err != nil {
+				return render.IndexedFrame{}, err
+			}
+		}
 		if previousName == "hotupper" && semanticName != "hotupper" {
 			nativeLoops.Stop(scripts.LoopKindScene, "scene c4")
 		}
@@ -1619,11 +1677,6 @@ func run() error {
 			if gameDay == 1 && dogVisibleState {
 				if err := deliverScriptEvent(scripts.ActorEvent{Actor: "dog", Message: "doright()"}); err != nil {
 					return render.IndexedFrame{}, err
-				}
-			}
-			if currentThemeName == "nightwind3" {
-				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindScene, Owner: "scene g14", Callback: "nightfxs", Remaining: 2}); status != 0 {
-					return render.IndexedFrame{}, fmt.Errorf("register NITE nightfxs loop after town return returned status %#x", status)
 				}
 			}
 		}
@@ -1924,17 +1977,48 @@ func run() error {
 			themePlayer = nil
 		}
 	}
-	scriptHost.Env.PlayTheme = func(string) {
-		if themePlayer != nil || currentTheme.Name == "" || audioContext == nil {
+	scriptHost.Env.Tracks = tracks
+	tracks.OnClose = func(track *audio.OpenTrack) {
+		// FUN_0040E650 releases the file's sounds, which stops its theme.
+		if themeTrack == track {
+			scriptHost.Env.HaltTheme()
+			themeTrack, currentThemeName = nil, ""
+		}
+	}
+	scriptHost.Env.PlayTheme = func(name string) {
+		// FUN_0040E6F0 finds the open track file the theme belongs to.
+		if themePlayer != nil || audioContext == nil || strings.EqualFold(name, "None") {
 			return
 		}
-		player, err := currentTheme.Play(audioContext)
+		theme, track := currentTheme, themeTrack
+		if found := tracks.Find(name); found != nil {
+			loaded, err := found.Bank.LoadTheme(found.Name)
+			if err != nil {
+				log.Printf("playtheme %s: %v", name, err)
+				return
+			}
+			theme, track = loaded, found
+		}
+		if theme.Name == "" {
+			return
+		}
+		player, err := theme.Play(audioContext)
 		if err != nil {
 			log.Printf("playtheme: %v", err)
 			return
 		}
-		themePlayer = player
+		themePlayer, currentTheme, themeTrack, currentThemeName = player, theme, track, theme.FirstVoiceName()
+		if *debug {
+			log.Printf("script-theme %s events=%d voices=%d channel-name=%s", theme.Name, len(theme.Events), len(theme.Tracks), currentThemeName)
+		}
 	}
+	scriptHost.Env.Voice = func(name string) error {
+		if found, err := tracks.Play(name, true); err != nil || found {
+			return err
+		}
+		return scriptHost.Env.Sound(name)
+	}
+	scriptHost.Env.SoundVolume = func(name string, level int) { tracks.SetVolume(name, level) }
 	scriptHost.Env.ActionFrame = func(n int) (bool, bool) { return scriptActionFrameOne, n == 1 }
 	scriptHost.Env.Busy = func() bool { return scriptEngineBusy != nil && scriptEngineBusy() }
 	scriptHost.Env.OpenSetFile = func(name string) error {
@@ -1953,6 +2037,12 @@ func run() error {
 			return ""
 		}
 		return currentThemeName
+	}
+	scriptHost.Env.ThemeName = func() string {
+		if themePlayer == nil {
+			return ""
+		}
+		return currentTheme.Name
 	}
 	scriptHost.Env.BootScript = func() (*scripts.Program, error) {
 		return scriptProgram("BootFile", 1)
@@ -1983,6 +2073,9 @@ func run() error {
 	scriptInterpreter.Builtins["handleselect"] = scriptHost.PickInventoryBuiltin
 	var trackBanks [2]*audio.SoundBank
 	scriptHost.Env.Sound = func(name string) error {
+		if found, err := tracks.Play(name, false); err != nil || found {
+			return err
+		}
 		if soundBank == nil || audioContext == nil {
 			return nil
 		}
@@ -2013,21 +2106,67 @@ func run() error {
 	scriptHost.Env.Shop = func(name string) (string, uint32, bool) {
 		// INVEN.PRP is the inventory shop the NEW.FLT boot opens for the
 		// whole game; its shop script is resource 0 +0x924.
-		if !strings.EqualFold(name, "inven") {
+		// BOOTFILE opens house.prp and inven.prp (openshopfile) for the whole game.
+		file := ""
+		switch strings.ToLower(name) {
+		case "inven":
+			file = "DATA/INVEN.PRP"
+		case "house":
+			file = "DATA/HOUSE.PRP"
+		default:
 			return "", 0, false
 		}
-		data, err := scriptResource("DATA/INVEN.PRP", 0)
+		data, err := scriptResource(file, 0)
 		if err != nil || len(data) < 0x928 {
 			return "", 0, false
 		}
-		return "DATA/INVEN.PRP", binary.LittleEndian.Uint32(data[0x924:0x928]), true
+		return file, binary.LittleEndian.Uint32(data[0x924:0x928]), true
 	}
 	scriptHost.Env.PropDegree = func(name string) (int16, bool) {
 		return inventoryDegrees[strings.ToLower(name)], true
 	}
+	// propinstance (FUN_0041E840) adds props that share their source's script.
+	propInstances := map[string]string{}
+	scriptHost.Env.PropInstance = func(source, name string) (uint16, bool) {
+		key, sourceKey := strings.ToLower(name), strings.ToLower(source)
+		if _, exists := propInstances[key]; exists {
+			return 0, false
+		}
+		if original, aliased := propInstances[sourceKey]; aliased {
+			sourceKey = original
+		}
+		if _, found := inventoryArchive.Definition(sourceKey); !found {
+			if _, found := propArchive.Definition(sourceKey); !found {
+				return 0x0a, false
+			}
+		}
+		if _, found := inventoryArchive.Definition(key); found {
+			return 0, false
+		}
+		if _, found := propArchive.Definition(key); found {
+			return 0, false
+		}
+		propInstances[key] = sourceKey
+		return 0, true
+	}
 	scriptHost.Env.PropScript = func(name string) (string, uint32, string, bool) {
-		definition, found := inventoryArchive.Definition(name)
-		return "DATA/INVEN.PRP", definition.ScriptResource, "inven", found
+		if original, aliased := propInstances[strings.ToLower(name)]; aliased {
+			name = original
+		}
+		if definition, found := inventoryArchive.Definition(name); found {
+			return "DATA/INVEN.PRP", definition.ScriptResource, "inven", true
+		}
+		definition, found := propArchive.Definition(name)
+		return "DATA/HOUSE.PRP", definition.ScriptResource, "house", found
+	}
+	// FUN_004204D0: opening a shop file sends each of its props openprop().
+	for _, archive := range []*assets.PropArchive{propArchive, inventoryArchive} {
+		for _, name := range archive.Names() {
+			if err := runScript("openprop "+name, fmt.Sprintf("sendtoprop(%q,openprop())", name)); err != nil {
+				stage.Close()
+				return err
+			}
+		}
 	}
 	scriptHost.Env.Ticks = func() uint32 { return scripts.NativeFrameUnits(native.NativeTickMilliseconds()) }
 	scriptHost.Env.PlayerHeading = func() int16 {
@@ -2052,14 +2191,14 @@ func run() error {
 	}}
 	// startScriptTask runs an event that may block (a conversation) as a
 	// task the update loop resumes.
-	startScriptSource := func(label, source string, done func()) error {
+	startScriptSourceIn := func(label string, chain []scripts.ScriptFrame, source string, done func()) error {
 		if scriptTask != nil {
 			return nil
 		}
 		scriptTaskDone = done
 		task := scripts.StartScriptTask(label, func(task *scripts.ScriptTask) error {
 			scriptHost.SetTask(task)
-			return runScript(label, source)
+			return runScriptIn(label, chain, source)
 		})
 		finished, err := task.Poll()
 		if collectErr := collectScriptGlobals(); err == nil {
@@ -2075,6 +2214,50 @@ func run() error {
 		}
 		scriptTask = task
 		return nil
+	}
+	startScriptSource := func(label, source string, done func()) error {
+		return startScriptSourceIn(label, nil, source, done)
+	}
+	raiseSetEvent = func(set bool, message string) error {
+		if activeSet == nil || !scriptedSets[activeSetName] {
+			return nil
+		}
+		var chain []scripts.ScriptFrame
+		source, label := message, "set "+message
+		if set {
+			// FUN_0041A840 -> FUN_0041A920 runs a set message against the set
+			// script alone.
+			program, err := scriptProgram(activeSet.File(), activeSet.ScriptResource())
+			if err != nil {
+				return err
+			}
+			chain = []scripts.ScriptFrame{{Program: program, Me: "set", Target: "set", Label: "Set Script: ", Last: true}}
+		} else {
+			if view.Name[0] == 0 {
+				return nil
+			}
+			scene := strings.ToLower(string(view.Name[1:]))
+			source, label = fmt.Sprintf("sendtoscene(%q,%s)", scene, message), scene+" "+message
+		}
+		if scriptTask != nil {
+			return runScriptIn(label, chain, source)
+		}
+		return startScriptSourceIn(label, chain, source, nil)
+	}
+	// BOOTFILE keydown and mousedown return at once while lockevents is true.
+	eventsLocked := func() bool {
+		if hotelEventsLocked {
+			return true
+		}
+		value, declared, err := scriptInterpreter.GlobalValue("lockevents")
+		return err == nil && declared && value.Kind == 2 && value.Int != 0
+	}
+	raiseSceneLoop := func(loop scripts.ScriptLoop) error {
+		source, label := fmt.Sprintf("sendtoscene(%q,%s())", loop.Owner, loop.Callback), loop.Owner+" "+loop.Callback+"()"
+		if scriptTask != nil {
+			return runScriptIn(label, nil, source)
+		}
+		return startScriptSourceIn(label, nil, source, nil)
 	}
 	// dispatchScriptEvent raises an engine event (a finished walk, a fired loop).
 	// Scripts reached this way may block, the way the original's message pump lets
@@ -2138,32 +2321,6 @@ func run() error {
 				return 0, dispatchScriptEvent(event)
 			}
 			switch loop.Callback {
-			case "nightfxs", "dayfxs":
-				cue, found := story.NativeSoundCue{}, false
-				if loop.Callback == "nightfxs" {
-					cue, found = story.NightWildlifeCue(currentThemeName, &nativeRandom)
-				} else {
-					cue, found = story.DayWildlifeCue(currentThemeName, &nativeRandom)
-				}
-				if found {
-					played, err := themeBank.PlayAtVolume(audioContext, cue.Name, cue.Volume)
-					if err != nil {
-						return 0, fmt.Errorf("play NITE wildlife cue %s: %w", cue.Name, err)
-					}
-					if *debug && *debugLoops {
-						log.Printf("ambient-cue=%s volume=%d played=%t", cue.Name, cue.Volume, played)
-					}
-				}
-				loop.Remaining = 2
-				step, found := scripts.DogIdleStep(loop.Callback, &nativeRandom)
-				if !found {
-					return 0, fmt.Errorf("unknown dog idle callback %q", loop.Callback)
-				}
-				actorPoses["dog"], loop.Callback, loop.Remaining = step.Pose, step.Callback, step.Remaining
-				displayChanged = displayChanged || currentScene == 0
-				if *debug && *debugLoops {
-					log.Printf("actor=dog pose=%s next=%s ticks=%d", step.Pose, step.Callback, step.Remaining)
-				}
 			case "trigger":
 				if hotelSceneOpenAction == nil || activeSetName != "hotupper" {
 					hotelEventsLocked = false
@@ -2228,14 +2385,19 @@ func run() error {
 				return 0, nil
 			
 			default:
+				if loop.Kind == scripts.LoopKindScene && scriptedSets[activeSetName] {
+					// FUN_0040FB00 builds sendtoscene("<owner>", <callback>()) for a
+					// scene loop and has already cleared its slot, so the callback
+					// makes its own loop again.
+					return 0, raiseSceneLoop(loop)
+				}
 				return 0, fmt.Errorf("unknown native loop callback %q", loop.Callback)
 			}
-			return nativeLoops.Register(loop), nil
 		}, func(loop scripts.ScriptLoop) bool {
 			if !pumpDue || scriptsPaused && loop.Kind == scripts.LoopKindActor && scriptManaged[strings.ToLower(loop.Owner)] {
 				return false
 			}
-			return visualEffectPump || loop.Callback != "nightfxs" && loop.Callback != "dayfxs"
+			return true
 		})
 		if err != nil {
 			return false, err
@@ -2871,6 +3033,15 @@ func run() error {
 		return nil
 	}
 	startDeathMovie := func() error {
+		if setEventsOpen {
+			if err := raiseSetEvent(true, "closeset()"); err != nil {
+				return err
+			}
+			if err := raiseSetEvent(false, "closescene()"); err != nil {
+				return err
+			}
+			setEventsOpen = false
+		}
 		nativeLoops = scripts.LoopScheduler{}
 		if themePlayer != nil {
 			if err := themePlayer.Close(); err != nil {
@@ -2948,37 +3119,7 @@ func run() error {
 			return err
 		}
 
-		if themePlayer != nil {
-			if err := themePlayer.Close(); err != nil {
-				return err
-			}
-			themePlayer = nil
-		}
-		if themeBank != nil {
-			if err := themeBank.Close(); err != nil {
-				return err
-			}
-		}
-		var err error
-		themeBank, err = audio.OpenSoundBank(workspace, "DATA/NIGHT.SND")
-		if err != nil {
-			return err
-		}
-		currentTheme, err = themeBank.LoadTheme("town.snd")
-		if err != nil {
-			return err
-		}
-		themePlayer, err = currentTheme.Play(audioContext)
-		if err != nil {
-			return err
-		}
-		currentThemeName = currentTheme.FirstVoiceName()
-		if currentThemeName == "nightwind3" {
-			nativeLoops.Stop(scripts.LoopKindScene, "scene g14")
-			if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindScene, Owner: "scene g14", Callback: "nightfxs", Remaining: 2}); status != 0 {
-				return fmt.Errorf("register new-game nightfxs: %#x", status)
-			}
-		}
+		// The set's own openset() starts its track file, theme and ambient loop.
 		return refreshWorldScene()
 	}
 	hotelStoryState := func() story.HotelStoryState {
@@ -3976,6 +4117,11 @@ func run() error {
 			if err != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("compose moved game background: %w", err)
 			}
+			// FUN_004199A0 sends closescene() when a movement starts and
+			// FUN_00406570 sends openscene() when it ends (the port moves at once).
+			if err := raiseSetEvent(false, "closescene()"); err != nil {
+				return render.IndexedFrame{}, false, err
+			}
 			if hasEventView {
 				view = nextView
 			} else {
@@ -3983,6 +4129,9 @@ func run() error {
 			}
 			worldPoint, backgroundFrame, stageFrame, currentFrame = nextPoint, nextBackground, nextFrame, nextFrame
 			worldActors, projectedActors = nextActors, nextProjectedActors
+			if err := raiseSetEvent(false, "openscene()"); err != nil {
+				return render.IndexedFrame{}, false, err
+			}
 			if *debug {
 				log.Printf("level-move=%d point=%v transition-resource=%d frame-resource=%d set=%s view=%s day=%d clock=%d", movement, worldPoint, transitionResource, frameResource, activeSetName, view.Name[1:], gameDay, gameClock)
 				for _, actor := range projectedActors {
@@ -4228,29 +4377,14 @@ func run() error {
 		if *debug {
 			log.Printf("startup movies complete; scene=%s", stage.Scenes[currentScene].Name[1:])
 		}
-		if themePlayer == nil && currentScene == 0 && activeSetName == "town" {
-			themeBank, err = audio.OpenSoundBank(workspace, "DATA/NIGHT.SND")
-			if err != nil {
-				return render.IndexedFrame{}, false, fmt.Errorf("open startup theme bank: %w", err)
-			}
-			theme, err := themeBank.LoadTheme("town.snd")
-			if err != nil {
-				return render.IndexedFrame{}, false, fmt.Errorf("load startup town theme: %w", err)
-			}
-			currentTheme = theme
-			themePlayer, err = theme.Play(audioContext)
-			if err != nil {
-				return render.IndexedFrame{}, false, fmt.Errorf("start startup town theme: %w", err)
-			}
-			currentThemeName = theme.FirstVoiceName()
+		if !setEventsOpen && currentScene == 0 && scriptedSets[activeSetName] {
 			resetNativeRandom()
-			if currentThemeName == "nightwind3" {
-				if status := nativeLoops.Register(scripts.ScriptLoop{Kind: scripts.LoopKindScene, Owner: "scene g14", Callback: "nightfxs", Remaining: 2}); status != 0 {
-					return render.IndexedFrame{}, false, fmt.Errorf("register NITE nightfxs loop returned status %#x", status)
-				}
+			setEventsOpen = true
+			if err := raiseSetEvent(true, "openset()"); err != nil {
+				return render.IndexedFrame{}, false, err
 			}
-			if *debug {
-				log.Printf("track-file=DATA/NIGHT.SND theme=%s events=%d voices=%d channel-name=%s playing=%t", theme.Name, len(theme.Events), len(theme.Tracks), currentThemeName, themePlayer.IsPlaying())
+			if err := raiseSetEvent(false, "openscene()"); err != nil {
+				return render.IndexedFrame{}, false, err
 			}
 		}
 		if err := soundBank.Play(audioContext, "pageturn", 4); err != nil {
@@ -4272,7 +4406,7 @@ func run() error {
 			}
 			return
 		}
-		if hotelEventsLocked {
+		if eventsLocked() {
 			return
 		}
 		if readingStage != nil {
@@ -4438,7 +4572,7 @@ func run() error {
 			return currentFrame, false, nil
 		}
 		point := mouseEvent.Point
-		if hotelEventsLocked {
+		if eventsLocked() {
 			return currentFrame, false, nil
 		}
 		if deathStage != 0 {

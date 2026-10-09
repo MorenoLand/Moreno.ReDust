@@ -3,6 +3,7 @@ package assets
 import (
 	"encoding/binary"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -322,4 +323,17 @@ func propName(field []byte) (string, error) {
 		return "", fmt.Errorf("Pascal prop name length exceeds its %d-byte field", len(field))
 	}
 	return strings.TrimSpace(string(field[1 : 1+int(field[0])])), nil
+}
+
+// Names lists the definition names in upper case, sorted.
+func (a *PropArchive) Names() []string {
+	if a == nil {
+		return nil
+	}
+	names := make([]string, 0, len(a.definitions))
+	for _, definition := range a.definitions {
+		names = append(names, definition.Name)
+	}
+	sort.Strings(names)
+	return names
 }

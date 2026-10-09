@@ -733,8 +733,10 @@ func (h *GameHost) puppetValue(name string, call *ScriptCall) (Record, int, uint
 		}
 		return result, message + used + 1 - call.Start, 0, true, nil
 	case "currenttheme":
-		// FUN_0040F130: currenttheme(2) is the playing theme's name, "None"
-		// when nothing plays; other selectors are not implemented.
+		// FUN_0040F130: currenttheme(2) is the playing theme's own name (FUN_0040F3D0)
+		// and currenttheme(1) the name of the sound on the theme channel
+		// (FUN_00434CF0), "None" when nothing plays; other selectors are not
+		// implemented.
 		args, consumed, status, err := call.Args()
 		if err != nil || status != 0 {
 			return Record{}, 0, status, true, err
@@ -742,12 +744,16 @@ func (h *GameHost) puppetValue(name string, call *ScriptCall) (Record, int, uint
 		if len(args) != 1 || args[0].Kind != 4 {
 			return Record{}, 0, ScriptStatusWrongType, true, nil
 		}
-		if args[0].Int != 2 {
+		if args[0].Int != 1 && args[0].Int != 2 {
 			return Record{}, 0, 0, true, fmt.Errorf("%w: currenttheme(%d)", ErrHostOpcodeUnimplemented, args[0].Int)
 		}
 		name := "None"
-		if h.Env.Theme != nil {
-			if playing := h.Env.Theme(); playing != "" {
+		source := h.Env.Theme
+		if args[0].Int == 2 && h.Env.ThemeName != nil {
+			source = h.Env.ThemeName
+		}
+		if source != nil {
+			if playing := source(); playing != "" {
 				name = playing
 			}
 		}
