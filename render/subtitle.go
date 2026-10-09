@@ -7,6 +7,7 @@ import (
 	"image/draw"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/gofont/gobold"
@@ -21,6 +22,7 @@ var nativeSubtitleFont struct {
 }
 
 func DrawNativeSubtitle(frame IndexedFrame, text string) (IndexedFrame, error) {
+	text = nativeText(text)
 	face, err := nativeSubtitleFace()
 	if err != nil {
 		return IndexedFrame{}, err
@@ -47,6 +49,7 @@ func DrawNativeTextAt(frame IndexedFrame, text string, position image.Point) (In
 }
 
 func DrawNativeTextAtColor(frame IndexedFrame, text string, position image.Point, ink color.Color) (IndexedFrame, error) {
+	text = nativeText(text)
 	face, err := nativeSubtitleFace()
 	if err != nil {
 		return IndexedFrame{}, err
@@ -81,7 +84,7 @@ func DrawNativePuppetChoices(frame IndexedFrame, choices []string) (IndexedFrame
 	drawer := font.Drawer{Dst: rgba, Src: textColor, Face: face}
 	for index, choice := range choices {
 		drawer.Dot = fixed.P(8, 280+24*index)
-		drawer.DrawString(choice)
+		drawer.DrawString(nativeText(choice))
 	}
 	frame.rgba = rgba
 	return frame, nil
@@ -139,4 +142,33 @@ func nativeSubtitleLines(text string, face font.Face) []string {
 		}
 	}
 	return []string{text}
+}
+
+// windows1252High is the Windows-1252 mapping of bytes 0x80..0x9F; the game's
+// text is written in that code page (a typographic apostrophe is 0x92), while
+// the face is drawn from UTF-8.
+var windows1252High = [32]rune{
+	0x20AC, 0xFFFD, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0xFFFD, 0x017D, 0xFFFD,
+	0xFFFD, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0xFFFD, 0x017E, 0x0178,
+}
+
+// nativeText turns script text into UTF-8: text that already is stays as it
+// is, otherwise each byte is read as a Windows-1252 character.
+func nativeText(text string) string {
+	if utf8.ValidString(text) {
+		return text
+	}
+	var out strings.Builder
+	for index := 0; index < len(text); index++ {
+		b := text[index]
+		switch {
+		case b < 0x80:
+			out.WriteByte(b)
+		case b < 0xA0:
+			out.WriteRune(windows1252High[b-0x80])
+		default:
+			out.WriteRune(rune(b))
+		}
+	}
+	return out.String()
 }
