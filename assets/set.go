@@ -61,6 +61,7 @@ func (s *Set) CellViews() []SetView {
 type Set struct {
 	cache              *ResourceCache
 	views              []SetView
+	walkable           map[[2]int]bool
 	backgroundResource uint32
 	backgroundCount    int
 	backgroundTable    []byte
@@ -318,4 +319,22 @@ func (s *Set) Close() error {
 	cache := s.cache
 	s.cache = nil
 	return cache.Close()
+}
+
+// Walkable reports whether the set has a walkable cell at cell coordinates x
+// and y: DirectionID is the x cell and SceneID the y cell, the grid a world
+// position divided by 256 lands in.
+func (s *Set) Walkable(x, y int) bool {
+	if s == nil {
+		return false
+	}
+	if s.walkable == nil {
+		s.walkable = make(map[[2]int]bool, len(s.views))
+		for _, view := range s.views {
+			if view.IsCell() {
+				s.walkable[[2]int{int(view.DirectionID), int(view.SceneID)}] = true
+			}
+		}
+	}
+	return s.walkable[[2]int{x, y}]
 }

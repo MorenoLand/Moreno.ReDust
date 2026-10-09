@@ -601,6 +601,18 @@ func run() error {
 		// The reference's own rule has not been read out of the binary yet, and guessing it
 		// cost a regression. See assets.ActorCellVisible, which is kept as the measured
 		// cell arithmetic but is deliberately not wired in.
+		// In the town an NPC behind a building is hidden: the line from the
+		// camera to it must not cross a cell the player cannot stand on. See
+		// render.SightlineBlocked for why the native cull does not do this.
+		if activeSetName == "town" {
+			kept := actors[:0]
+			for _, actor := range actors {
+				if !render.SightlineBlocked(activeSet.Walkable, point, actor.Position) {
+					kept = append(kept, actor)
+				}
+			}
+			actors = kept
+		}
 		if activeSetName == "sallower" {
 			return actors, nil
 		}
