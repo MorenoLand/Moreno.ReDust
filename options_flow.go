@@ -162,7 +162,8 @@ func (f *optionsFlow) Sprites(archive *assets.PropArchive) []render.FlatPropSpri
 }
 
 // keyTextPositions are NEW.FLT r11 update(): drawstring(key, makepoint(x, y),
-// 0, 12) for keynorth, keyeast and keywest.
+// 0, 12) for keynorth, keyeast and keywest. The third argument is palette
+// colour 0 (black) and the fourth the text size; the point is the baseline.
 var keyTextPositions = []struct {
 	name string
 	at   image.Point
