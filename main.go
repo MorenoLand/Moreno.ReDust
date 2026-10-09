@@ -2685,15 +2685,34 @@ func run() error {
 	var scoreVolumeBaseFrame render.IndexedFrame
 	var scoreVolumeTrack image.Rectangle
 	var volumeSliderDragging bool
+	// options runs the options flat's buttons; creditsScr is the credits
+	// screen and quitRequested is quit() (FUN_00426580).
+	var options optionsFlow
+	var creditsScr creditsScreen
+	var quitRequested bool
+	// uiPending is a frame a key press produced for the dialogs; the next
+	// update shows it, since the key callback itself returns no frame.
+	var uiPending render.IndexedFrame
+	var uiHasPending bool
 	composeScoreVolume := func(base render.IndexedFrame, slider native.MenuVolumeSlider) (render.IndexedFrame, image.Rectangle, error) {
-		frame, projected, err := render.CompositeFlatProps(base, []render.FlatPropSprite{{Name: "slider", PropName: "slider", ViewName: "BASE", Anchor: image.Pt(slider.X, slider.Y), Archive: propArchive}})
+		sprites := append([]render.FlatPropSprite{{Name: "slider", PropName: "slider", ViewName: "BASE", Anchor: image.Pt(slider.X, slider.Y), Archive: propArchive}}, options.Sprites(propArchive)...)
+		frame, projected, err := render.CompositeFlatProps(base, sprites)
 		if err != nil {
 			return render.IndexedFrame{}, image.Rectangle{}, fmt.Errorf("draw score volume slider: %w", err)
 		}
-		if len(projected) != 1 {
+		track := image.Rectangle{}
+		for _, prop := range projected {
+			if prop.Name == "slider" {
+				track = image.Rect(prop.Bounds.Min.X, scoreMenuVolumeTop, prop.Bounds.Max.X, scoreMenuVolumeBottom+1)
+			}
+		}
+		if track.Empty() {
 			return render.IndexedFrame{}, image.Rectangle{}, fmt.Errorf("score volume slider is outside the frame")
 		}
-		return frame, image.Rect(projected[0].Bounds.Min.X, scoreMenuVolumeTop, projected[0].Bounds.Max.X, scoreMenuVolumeBottom+1), nil
+		if frame, err = options.DrawKeys(frame); err != nil {
+			return render.IndexedFrame{}, image.Rectangle{}, fmt.Errorf("draw options keys: %w", err)
+		}
+		return frame, track, nil
 	}
 	setScoreMenuVolume := func(level int) (native.MenuVolumeSlider, bool, error) {
 		slider, status, err := native.NativeMenuVolume(level, audio.SetWaveVolume)
@@ -2770,17 +2789,25 @@ func run() error {
 		for name, heading := range actorHeadings {
 			progress.ActorHeadings[name] = heading
 		}
+		params := scriptHost.PuppetParams
+		progress.PuppetParams = &params
 		return progress
 	}
 	initialProgress := captureGameProgress()
 	initialProgress.ScriptLoops = nil
-	saveGameProgress := func(gameName string) error {
-		savePath, err := save.GameProgressPath(workspace.WorkDir, gameName)
+	// saveGameProgress is savegame(gameName) (FUN_00422C80 -> FUN_00422DE0):
+	// it writes the .rtd container named fileName under the saves directory.
+	saveGameProgress := func(gameName, fileName string) error {
+		savePath, err := save.RTDPath(savesDirectory(workspace.WorkDir), fileName)
 		if err != nil {
 			return err
 		}
 		progress := captureGameProgress()
-		if err := save.SaveGameProgress(savePath, progress); err != nil {
+		openFiles := []string{"BOOTFILE", "UNILIB.SND", "GANG.CST", "EXTRA.CST", "HOUSE.PRP", "INVEN.PRP", "NEW.FLT"}
+		if activeSetName != "" {
+			openFiles = append(openFiles, strings.ToUpper(activeSetName)+".SET")
+		}
+		if err := save.SaveRTD(savePath, progress, save.RTDContext{GameName: gameName, PaletteRaw: mainStage.PaletteRaw, OpenFiles: openFiles}); err != nil {
 			return err
 		}
 		if *debug {
@@ -2790,6 +2817,9 @@ func run() error {
 	}
 	applyGameProgress := func(progress save.GameProgress, savePath string) error {
 		gameDay, gameClock, phase, gamePhase, playercash = progress.Day, progress.Clock, int(progress.Phase), progress.GamePhase, progress.PlayerCash
+		if progress.PuppetParams != nil {
+			scriptHost.PuppetParams = *progress.PuppetParams
+		}
 		cloneStringMapTo(inventoryOwners, progress.InventoryOwners)
 		cloneBoolMapTo(inventoryHidden, progress.InventoryHidden)
 		handItem, handFlag = progress.HandItem, progress.HandFlag
@@ -3054,18 +3084,24 @@ func run() error {
 		return nil
 	}
 	loadGameProgressFile := func(savePath string) error {
-		progress, err := save.LoadGameProgress(savePath)
+		progress, err := save.LoadGameFile(savePath, "")
 		if err != nil {
 			return err
 		}
 		return applyGameProgress(progress, savePath)
 	}
-	loadGameProgress := func(gameName string) error {
-		savePath, err := save.GameProgressPath(workspace.WorkDir, gameName)
+	// loadGameProgress is opengame(gameName) (FUN_00422D40 -> FUN_004235C0):
+	// the stored name must match gameName before anything is restored.
+	loadGameProgress := func(gameName, fileName string) error {
+		savePath, err := save.RTDPath(savesDirectory(workspace.WorkDir), fileName)
 		if err != nil {
 			return err
 		}
-		return loadGameProgressFile(savePath)
+		progress, err := save.LoadGameFile(savePath, gameName)
+		if err != nil {
+			return err
+		}
+		return applyGameProgress(progress, savePath)
 	}
 	finishPlayerDeath = func(cause string) error {
 		sequence, err := story.NewDeathSequence(workspace, cause, &nativeRandom)
@@ -3760,6 +3796,9 @@ func run() error {
 			return render.IndexedFrame{}, false, fmt.Errorf("render stage scene %d: %w", target, err)
 		}
 		if mainFlat && target == 3 {
+			if err := options.enter(stage, target); err != nil {
+				return render.IndexedFrame{}, false, err
+			}
 			scoreVolumeBaseFrame = nextFrame
 			slider, status, err := native.NativeMenuVolume(audio.WaveVolume(), func(int) error { return nil })
 			if err != nil || status != 0 {
@@ -3901,7 +3940,7 @@ func run() error {
 			} else {
 				globals["snapshotError"] = err.Error()
 			}
-			return map[string]any{"day": gameDay, "clock": gameClock, "phase": gamePhase, "set": activeSetName, "scene": string(stage.Scenes[currentScene].Name[1:]), "point": worldPoint, "cash": playercash, "inventory": inventoryOwners, "inventoryMenu": inventoryMenuActive, "breakfast": hotelHotplateStage != nil && stage == hotelHotplateStage, "jonesPhase": jonesPhase, "jonesRingStory": jonesRingStory, "laurelPhase": laurelPhase, "helpPhase": helpPhase, "scriptGlobals": globals, "engineBusy": engineBusy, "bone": map[string]any{"visible": boneWorldProp.Visible, "owner": boneOwner, "position": boneWorldProp.Position, "view": boneWorldProp.View.Name}, "movieFrame": movieFrame, "movieWaiting": movieWaiting, "conversation": map[string]any{"open": convPuppet != nil, "choosing": convChoosing, "choiceEvents": choiceEvents, "taskActive": scriptTask != nil}, "scriptActors": scriptActors.Snapshot([]string{"mwife", "blood", "buick", "marie", "jones", "leroy", "help", "laurel", "trotter", "isao", "dog"})}
+			return map[string]any{"day": gameDay, "clock": gameClock, "phase": gamePhase, "set": activeSetName, "scene": string(stage.Scenes[currentScene].Name[1:]), "point": worldPoint, "cash": playercash, "inventory": inventoryOwners, "inventoryMenu": inventoryMenuActive, "breakfast": hotelHotplateStage != nil && stage == hotelHotplateStage, "jonesPhase": jonesPhase, "jonesRingStory": jonesRingStory, "laurelPhase": laurelPhase, "helpPhase": helpPhase, "scriptGlobals": globals, "engineBusy": engineBusy, "bone": map[string]any{"visible": boneWorldProp.Visible, "owner": boneOwner, "position": boneWorldProp.Position, "view": boneWorldProp.View.Name}, "movieFrame": movieFrame, "movieWaiting": movieWaiting, "conversation": map[string]any{"open": convPuppet != nil, "choosing": convChoosing, "choiceEvents": choiceEvents, "taskActive": scriptTask != nil}, "options": map[string]any{"subtitles": scriptHost.PuppetParams[6] != 0, "seldir": options.menu.seldir, "keys": map[string]any{"north": options.key("north"), "east": options.key("east"), "west": options.key("west")}, "dialog": options.modal.Active(), "credits": creditsScr.Active(), "quit": quitRequested, "volume": audio.WaveVolume(), "lastSave": options.lastName}, "scriptActors": scriptActors.Snapshot([]string{"mwife", "blood", "buick", "marie", "jones", "leroy", "help", "laurel", "trotter", "isao", "dog"})}
 		})
 	}
 	scriptBlackFrame = blackFrame
@@ -3928,7 +3967,102 @@ func run() error {
 		}
 		return nil
 	}
+	// The options flow's dialogs and the credits screen own the display and
+	// freeze the game while they are up, as the native task-modal boxes do.
+	options.env = optionsEnv{
+		workDir: workspace.WorkDir,
+		frame:   func() render.IndexedFrame { return currentFrame },
+		recompose: func() (render.IndexedFrame, bool, error) {
+			if stage != mainStage || currentScene != 3 || scoreVolumeBaseFrame.Width == 0 {
+				return currentFrame, false, nil
+			}
+			slider, status, err := native.NativeMenuVolume(audio.WaveVolume(), func(int) error { return nil })
+			if err != nil || status != 0 {
+				return render.IndexedFrame{}, false, fmt.Errorf("read score volume slider: status=%#x err=%v", status, err)
+			}
+			frame, track, err := composeScoreVolume(scoreVolumeBaseFrame, slider)
+			if err != nil {
+				return render.IndexedFrame{}, false, err
+			}
+			currentFrame, stageFrame, scoreVolumeTrack = frame, frame, track
+			return frame, true, nil
+		},
+		flat: applyFlatTarget,
+		returnToFlat: func(name string, source uint32) (render.IndexedFrame, bool, error) {
+			resolved, status, err := scripts.ResolveGotoflatTarget(true, scripts.GotoflatValue{Type: 3, Name: name}, stageFlatLookup(stage))
+			if err != nil || status != 0 {
+				if *debug {
+					log.Printf("gotoflat-return unresolved flat=%q status=%#x err=%v", name, status, err)
+				}
+				return currentFrame, false, nil
+			}
+			return applyFlatTarget(resolved-1, 0, 0, source)
+		},
+		saveGame: saveGameProgress,
+		loadGame: loadGameProgress,
+		playMovie: func(name string, after func() (render.IndexedFrame, bool, error)) error {
+			// NEW.FLT r1 spotmovie: screentoblack("current",10), the movie, then
+			// the screen fades back in over 30 frames.
+			return startActionMovie(name, 10, func(bool) (render.IndexedFrame, bool, error) {
+				frame, _, err := after()
+				if err != nil {
+					return render.IndexedFrame{}, false, err
+				}
+				return restoreActionFrame(frame, 30)
+			})
+		},
+		getGlobal: func(name string) (string, bool) {
+			value, declared, err := scriptInterpreter.GlobalValue(name)
+			if err != nil || !declared || value.Kind != 3 {
+				return "", false
+			}
+			return value.Text, true
+		},
+		setGlobal: scriptInterpreter.SetGlobalString,
+		params:    &scriptHost.PuppetParams,
+		quit:      func() { quitRequested = true },
+		logf: func(format string, args ...any) {
+			if *debug {
+				log.Printf(format, args...)
+			}
+		},
+	}
+	// FUN_004172C0 initialises puppetparam 2..8 to 0x80, 0xFA, 0xFB, 0x378, 0x0C, 0
+	// and 0; slot 7 (subtitles) starts off.
+	scriptHost.PuppetParams = [8]int16{0, 0x80, 0xfa, 0xfb, 0x378, 0x0c, 0, 0}
+	creditsScr.env = creditsEnv{
+		workspace:    workspace,
+		audioContext: audioContext,
+		random:       nativeRandom.Inclusive,
+		pauseTheme: func() {
+			if themePlayer != nil {
+				themePlayer.Pause()
+			}
+		},
+		resumeTheme: func() {
+			if themePlayer != nil {
+				themePlayer.Play()
+			}
+		},
+		restore: options.env.recompose,
+		logf:    options.env.logf,
+	}
+	engine.TextInput = options.modal.HandleText
+	engine.SubtitlesEnabled = func() bool { return scriptHost.PuppetParams[6] != 0 }
 	runErr := runGame(initialFrame, func() (render.IndexedFrame, bool, error) {
+		if quitRequested && !*silent {
+			return render.IndexedFrame{}, false, ebiten.Termination
+		}
+		if uiHasPending {
+			uiHasPending = false
+			return uiPending, true, nil
+		}
+		if creditsScr.Active() {
+			return creditsScr.Update()
+		}
+		if options.modal.Active() {
+			return options.modal.Update()
+		}
 		displayChanged := false
 		drainMovieAudioTails()
 		if scriptTask != nil {
@@ -4355,6 +4489,29 @@ func run() error {
 		}
 		return stageFrame, true, nil
 	}, func(key ebiten.Key) {
+		if options.modal.Active() {
+			frame, changed, err := options.modal.HandleKey(key)
+			if err != nil {
+				log.Printf("dialog key: %v", err)
+			} else if changed {
+				uiPending, uiHasPending = frame, true
+			}
+			return
+		}
+		if creditsScr.Active() {
+			return
+		}
+		if stage == mainStage && currentScene == 3 && transition == nil && playback == nil {
+			// NEW.FLT r11 keydown: the options flat takes the key for the
+			// selected key box.
+			frame, changed, err := options.KeyDown(key)
+			if err != nil {
+				log.Printf("options key: %v", err)
+			} else if changed {
+				uiPending, uiHasPending = frame, true
+			}
+			return
+		}
 		if scriptTask != nil && key == ebiten.KeySpace {
 			// Space skips the line being spoken, like a click.
 			if convDialogue != nil && convDialogue.Active() {
@@ -4423,7 +4580,7 @@ func run() error {
 		}
 		if playback == nil {
 			if currentScene == 0 {
-				switch key {
+				switch options.MovementKey(key) {
 				case ebiten.KeyArrowUp, ebiten.KeyW:
 					if raiseKey("uparrow") {
 						return
@@ -4491,6 +4648,18 @@ func run() error {
 			log.Printf("movie=%s skip-key=%s", movieNames[movieIndex], keyName)
 		}
 	}, func(mouseEvent engine.MouseEvent) (render.IndexedFrame, bool, error) {
+		if creditsScr.Active() {
+			if mouseEvent.Button == ebiten.MouseButtonLeft {
+				return creditsScr.Click()
+			}
+			return currentFrame, false, nil
+		}
+		if options.modal.Active() {
+			if mouseEvent.Button != ebiten.MouseButtonLeft {
+				return currentFrame, false, nil
+			}
+			return options.modal.HandleMouseDown(mouseEvent.Point)
+		}
 		if scriptTask != nil && !scriptEngineBusy() {
 			if mouseEvent.Button != ebiten.MouseButtonLeft {
 				return currentFrame, false, nil
@@ -4774,6 +4943,18 @@ func run() error {
 				return currentFrame, false, ebiten.Termination
 			}
 		}
+		if stage == mainStage && currentScene == 3 && mouseEvent.Button == ebiten.MouseButtonLeft {
+			optionsAction, optionsFound, optionsErr := story.ParseOptionsAction(program, string(handler.Name[1:]))
+			if optionsErr != nil {
+				return render.IndexedFrame{}, false, fmt.Errorf("parse options button script resource %d: %w", handler.ScriptResource, optionsErr)
+			}
+			if optionsFound {
+				if optionsAction.Kind == story.OptionsActionCredits {
+					return creditsScr.Start(currentFrame)
+				}
+				return options.Click(string(handler.Name[1:]))
+			}
+		}
 		continuation, trackButton, err := story.ParseFlatMouseContinuation(program, string(handler.Name[1:]))
 		if err != nil {
 			return render.IndexedFrame{}, false, fmt.Errorf("parse flat button script resource %d: %w", handler.ScriptResource, err)
@@ -4783,6 +4964,10 @@ func run() error {
 			flatMouseReturnFlat = currentFlatName(stage, currentScene)
 			flatMouseSession = new(story.FlatMouseSession)
 			*flatMouseSession = story.NewFlatMouseSession(string(handler.Name[1:]), point, continuation)
+			if stage == mainStage && currentScene == 3 {
+				// NEW.FLT r11 trackbut(): the button's bevel shows while held.
+				return options.SetBevel(string(handler.Name[1:]))
+			}
 			return currentFrame, false, nil
 		}
 		action, found, err := native.MouseDownFlatAction(program)
@@ -4801,6 +4986,12 @@ func run() error {
 		}
 		return applyFlatTarget(action.FlatTarget, action.VisualEffect, action.Duration, handler.ScriptResource)
 	}, func(state engine.MouseState) (render.IndexedFrame, bool, error) {
+		if options.modal.Active() {
+			return options.modal.HandleMouseState(state)
+		}
+		if creditsScr.Active() {
+			return currentFrame, false, nil
+		}
 		if scriptTask != nil && !scriptEngineBusy() {
 			if !convChoosing || convPressIndex < 0 || !state.LeftReleased {
 				return currentFrame, false, nil
@@ -4839,68 +5030,49 @@ func run() error {
 			}
 			inside := hit && handler.ScriptResource == flatMouseResource
 			status := flatMouseSession.Advance(state.Point, state.LeftDown, state.LeftReleased, inside)
+			scoreFlat := stage == mainStage && currentScene == 3
 			if status == story.FlatMousePending {
+				if scoreFlat {
+					name := flatMouseSession.Target
+					if !inside {
+						name = ""
+					}
+					return options.SetBevel(name)
+				}
 				return currentFrame, false, nil
 			}
 			continuation, resumed := flatMouseSession.Resume()
 			returnFlatName := flatMouseReturnFlat
 			resourceSource := flatMouseResource
 			flatMouseSession, flatMouseResource, flatMouseReturnFlat = nil, 0, ""
+			if scoreFlat {
+				// trackbut() hides its bevel before the handler goes on.
+				options.menu.bevel = ""
+				if _, _, err := options.env.recompose(); err != nil {
+					return render.IndexedFrame{}, false, err
+				}
+			}
 			if status == story.FlatMouseCancel || !resumed {
-				return currentFrame, false, nil
+				return currentFrame, scoreFlat, nil
 			}
 			switch continuation.Action {
 			case story.FlatMouseActionExamineInventory:
 				return openInventoryExamination()
 			case story.FlatMouseActionSaveGame:
-				if err := saveGameProgress(continuation.GameName); err != nil {
-					log.Printf("save game: %v", err)
-					return currentFrame, false, nil
+				// NEW.FLT r24: gotoflat(1), savegame(name), gotoflat(<the flat that
+				// currentflat() returned>); the flat name resolves through
+				// FUN_00411AD0's string path.
+				if !continuation.ReturnToCurrentFlat {
+					returnFlatName = ""
 				}
-				// Resource 24 continues with gotoflat(<identifier>), which restores
-				// the flat captured by currentflat() before its gotoflat(1). Go does
-				// not yet perform that intermediate transition or the native file
-				// dialog, so this return normally rebuilds the flat the player is
-				// already on, matching the handler's trailing flat "update" loop.
-				// Resource 24 continues with gotoflat(<identifier>). Verified
-				// FUN_00411AD0: a non-numeric argument is resolved by a flat name
-				// lookup and incremented, so returning to the flat captured by
-				// `arg = currentflat()` routes back to the same flat. Go does not
-				// yet perform the intermediate gotoflat(1) or the native file
-				// dialog, so this normally rebuilds the flat already on screen,
-				// which is what the handler's trailing flat "update" loop achieves.
-				if continuation.ReturnToCurrentFlat && returnFlatName != "" {
-					resolved, status, resolveErr := scripts.ResolveGotoflatTarget(true, scripts.GotoflatValue{
-						Type: 3,
-						Name: returnFlatName,
-					}, stageFlatLookup(stage))
-					if resolveErr != nil || status != 0 {
-						if *debug {
-							log.Printf("save=written name=%q gotoflat-return unresolved flat=%q status=%#x err=%v", continuation.GameName, returnFlatName, status, resolveErr)
-						}
-						return currentFrame, false, nil
-					}
-					if *debug {
-						log.Printf("save=written name=%q gotoflat-return flat=%q native-index=%d return-ident=%q", continuation.GameName, returnFlatName, resolved, continuation.ReturnIdentifier)
-					}
-					return applyFlatTarget(resolved-1, 0, 0, resourceSource)
-				}
-				if *debug {
-					log.Printf("save=written name=%q no-return-flat", continuation.GameName)
-				}
-				return currentFrame, false, nil
+				return options.Save(continuation.GameName, returnFlatName, resourceSource)
 			case story.FlatMouseActionOpenGame:
-				if err := loadGameProgress(continuation.GameName); err != nil {
-					log.Printf("open game: %v", err)
-					return currentFrame, false, nil
-				}
-				// Resource 25 restarts the flat "update" loop only when
-				// currentflat() == "score"; the load itself already rebuilds the
-				// scene, so no second transition is issued.
-				if *debug {
-					log.Printf("open=loaded name=%q return-to-current-flat=%t", continuation.GameName, continuation.ReturnToCurrentFlat)
-				}
-				return currentFrame, true, nil
+				// NEW.FLT r25: opengame(name); the load rebuilds the scene itself.
+				return options.Open(continuation.GameName)
+			case story.FlatMouseActionQuit:
+				return options.Quit(continuation.Prompts, continuation.GameName)
+			case story.FlatMouseActionHelp:
+				return options.Help(continuation.Movie)
 			case story.FlatMouseActionGoToFlat:
 				if continuation.FlatTarget == 0 {
 					return returnToMainPanel(continuation.VisualEffect, continuation.Duration)
