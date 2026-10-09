@@ -1981,7 +1981,7 @@ func run() error {
 		return refreshWorldScene()
 	}
 	scriptInterpreter.Builtins["handleselect"] = scriptHost.PickInventoryBuiltin
-	var dayTownBank *audio.SoundBank
+	var trackBanks [2]*audio.SoundBank
 	scriptHost.Env.Sound = func(name string) error {
 		if soundBank == nil || audioContext == nil {
 			return nil
@@ -1993,13 +1993,15 @@ func run() error {
 				return bank.Play(audioContext, name, 1)
 			}
 		}
-		if dayTownBank == nil {
-			if bank, err := audio.OpenSoundBank(workspace, "DATA/TOWN.SND"); err == nil {
-				dayTownBank = bank
+		for index, file := range []string{"DATA/TOWN.SND", "DATA/NIGHT.SND"} {
+			if trackBanks[index] == nil {
+				if bank, err := audio.OpenSoundBank(workspace, file); err == nil {
+					trackBanks[index] = bank
+				}
 			}
-		}
-		if dayTownBank.Has(name) {
-			return dayTownBank.Play(audioContext, name, 1)
+			if trackBanks[index].Has(name) {
+				return trackBanks[index].Play(audioContext, name, 1)
+			}
 		}
 		if *debug {
 			log.Printf("script-note sound %q is in no open bank", name)

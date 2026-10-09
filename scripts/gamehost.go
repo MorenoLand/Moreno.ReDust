@@ -214,6 +214,14 @@ func (h *GameHost) stopJobs(name string) {
 
 // Command implements ScriptHost.
 func (h *GameHost) Command(call *ScriptCall) (int, uint16, error) {
+	consumed, status, err := h.command(call)
+	if status != 0 && h.Env.Diagnose != nil {
+		h.Env.Diagnose(fmt.Sprintf("%s returned status %#x", opcodeName(call), status))
+	}
+	return consumed, status, err
+}
+
+func (h *GameHost) command(call *ScriptCall) (int, uint16, error) {
 	name := opcodeName(call)
 	switch name {
 	case "actorvisible":
@@ -250,6 +258,9 @@ func (h *GameHost) Command(call *ScriptCall) (int, uint16, error) {
 			actor.Placed = true
 		case "actorpose":
 			if !actor.HasPose(args[1].Text) {
+				if h.Env.Diagnose != nil {
+					h.Env.Diagnose(fmt.Sprintf("actor %q has no pose %q (poses %v)", actor.Name, args[1].Text, actor.Poses))
+				}
 				return 0, 0x0a, nil
 			}
 			actor.Pose, actor.Frame = args[1].Text, 0
@@ -676,6 +687,14 @@ func pointComponent(position [3]int16, selector int32) (int32, bool) {
 
 // Value implements ScriptHost.
 func (h *GameHost) Value(call *ScriptCall) (Record, int, uint16, error) {
+	record, consumed, status, err := h.value(call)
+	if status != 0 && h.Env.Diagnose != nil {
+		h.Env.Diagnose(fmt.Sprintf("value %s returned status %#x", opcodeName(call), status))
+	}
+	return record, consumed, status, err
+}
+
+func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 	name := opcodeName(call)
 	number := func(value int32, consumed int) (Record, int, uint16, error) {
 		return Record{Kind: 4, Data: uint32(value)}, consumed, 0, nil
