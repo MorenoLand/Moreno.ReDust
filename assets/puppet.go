@@ -3,6 +3,7 @@ package assets
 import (
 	"encoding/binary"
 	"fmt"
+	"strings"
 )
 
 const (
@@ -35,8 +36,19 @@ func (s PuppetSpeech) SubtitleText() string {
 	return DecodePuppetText(s.Subtitle)
 }
 
+// HasSubtitle is the line test of FUN_00409610: a non-empty text that does not
+// start with '*', is not all spaces, and whose speech name (+0x118) is none of
+// the four "idle 1".."idle 4" rows (strings at 0x0045D0BC..0x0045D0A4).
 func (s PuppetSpeech) HasSubtitle() bool {
-	return len(s.Subtitle) > 0 && s.Subtitle[0] != '*'
+	if len(s.Subtitle) == 0 || s.Subtitle[0] == '*' {
+		return false
+	}
+	for _, idle := range []string{"idle 1", "idle 2", "idle 3", "idle 4"} {
+		if strings.EqualFold(s.Name, idle) {
+			return false
+		}
+	}
+	return strings.TrimSpace(string(s.Subtitle)) != ""
 }
 
 func DecodePuppetText(data []byte) string {

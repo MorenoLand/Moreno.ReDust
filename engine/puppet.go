@@ -12,6 +12,15 @@ import (
 	"redust/render"
 )
 
+// SubtitlesEnabled reports puppetparam(7), the SUBTITLES option. FUN_00409610
+// returns false for every speech line while DAT_004599A8 is zero, and
+// FUN_004172C0 initialises it to zero, so subtitles are off until the options
+// flat turns them on. A nil hook keeps them off.
+var SubtitlesEnabled func() bool
+
+// SubtitlesOn is the gate both speech paths draw their subtitle through.
+func SubtitlesOn() bool { return SubtitlesEnabled != nil && SubtitlesEnabled() }
+
 type PuppetDialogue struct {
 	puppet     *render.Puppet
 	context    *ebitenaudio.Context
@@ -237,7 +246,7 @@ func (d *PuppetDialogue) frame() (render.IndexedFrame, error) {
 	}
 	frame := d.canvas.Frame()
 	var err error
-	if d.active && d.lineIndex < len(d.lines) && d.lines[d.lineIndex].HasSubtitle() {
+	if d.active && d.lineIndex < len(d.lines) && d.lines[d.lineIndex].HasSubtitle() && SubtitlesOn() {
 		frame, err = render.DrawNativeSubtitle(frame, d.lines[d.lineIndex].SubtitleText())
 	}
 	return frame, err

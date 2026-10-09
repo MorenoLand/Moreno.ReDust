@@ -47,6 +47,10 @@ type GameProgress struct {
 	ScriptActors map[string]scripts.ActorRecordState `json:"scriptActors,omitempty"`
 	// ScriptGlobals holds the interpreter's global variables.
 	ScriptGlobals []scripts.GlobalVariable `json:"scriptGlobals,omitempty"`
+	// PuppetParams are the eight puppetparam slots (DAT_0045999C..AA), which
+	// sit in the 0x21E-byte globals block the native serializer writes. Slot 7
+	// is the SUBTITLES option.
+	PuppetParams *[8]int16 `json:"puppetParams,omitempty"`
 }
 
 func GameProgressPath(directory, gameName string) (string, error) {

@@ -30,6 +30,11 @@ type FlatPropSprite struct {
 	Anchor   image.Point
 	Archive  *assets.PropArchive
 	Frame    int
+	// Rotated marks a prop whose pixels are stored in display order while
+	// its frame info is in the transposed orientation, as CREDITS.PRP's
+	// "black" and "names" are: the stored extents are (height, width) and
+	// the origin is (y, x).
+	Rotated bool
 }
 
 type ProjectedFlatProp struct {
@@ -75,13 +80,22 @@ func CompositeFlatProps(background IndexedFrame, props []FlatPropSprite) (Indexe
 			return IndexedFrame{}, nil, fmt.Errorf("decode flat prop %q frame %d pixels: %w", prop.Name, info.Resource, err)
 		}
 		transposedPixels, transposedMask := make([]byte, width*height), make([]bool, width*height)
-		for y := 0; y < frame.Height; y++ {
-			for x := 0; x < frame.Width; x++ {
-				source, destination := y*frame.Width+x, x*width+y
-				transposedPixels[destination], transposedMask[destination] = pixels[source], mask[source]
+		originX, originY := int(info.OriginX), int(info.OriginY)
+		if prop.Rotated {
+			// Display order already: frame.Width x frame.Height.
+			copy(transposedPixels, pixels)
+			copy(transposedMask, mask)
+			width, height = frame.Width, frame.Height
+			originX, originY = originY, originX
+		} else {
+			for y := 0; y < frame.Height; y++ {
+				for x := 0; x < frame.Width; x++ {
+					source, destination := y*frame.Width+x, x*width+y
+					transposedPixels[destination], transposedMask[destination] = pixels[source], mask[source]
+				}
 			}
 		}
-		bounds := image.Rect(prop.Anchor.X-int(info.OriginX), prop.Anchor.Y-int(info.OriginY), prop.Anchor.X-int(info.OriginX)+width, prop.Anchor.Y-int(info.OriginY)+height)
+		bounds := image.Rect(prop.Anchor.X-originX, prop.Anchor.Y-originY, prop.Anchor.X-originX+width, prop.Anchor.Y-originY+height)
 		visible := bounds.Intersect(composite.Bounds())
 		if visible.Empty() {
 			continue

@@ -34,6 +34,12 @@ The script runs the game's input callbacks with audio muted. It accepts `key`, `
 
 Use `assert` with an `expect` object to check game state. `wait_until` takes the same object and a `milliseconds` timeout (up to 60000), updating the game until it matches. Dialogue state includes `conversation.open`, `conversation.choosing`, `conversation.choiceEvents`, and `conversation.taskActive`.
 
+## Options, save and open
+
+The skull on the main panel opens the options flat: sound level, SAVE, OPEN, QUIT, HELP, OK, SUBTITLES, the three key boxes and CREDITS. Click a key box and press a letter, digit or space to assign it to forward, left or right; subtitles are off until the checkbox is ticked, as in the original.
+
+SAVE and OPEN raise an in-game file chooser (the original used the Windows common dialogs). Saved games are `.rtd` files in the `saves/` directory of the work directory (`bin/saves/` by default), written as an APPL container with the original save tags and layout where known. Real DUST saves cannot be loaded, and ReDust saves cannot be loaded by DUST. Key assignments are not persisted between launches, matching the original; they are stored inside saved games. `--load=` accepts a `.rtd` or an older `.redust.json` file.
+
 ## Layout
 
 - `main.go` wires the window, input, audio and the game loop.

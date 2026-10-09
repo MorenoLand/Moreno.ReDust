@@ -132,7 +132,17 @@ func alignNativeRecordSize(size int32) int32 {
 	return (adjusted >> 6) << 6
 }
 
+// WriteContainer writes entries as an APPL container with the "LPPALPPA" tag
+// pair the game's data files carry.
 func WriteContainer(writer io.Writer, entries map[uint32][]byte) error {
+	return WriteContainerTagged(writer, entries, [2]uint32{0x4150504c, 0x4150504c})
+}
+
+// WriteContainerTagged writes entries as an APPL container whose two header
+// tag dwords (+0x20 and +0x24) are the given tags. FUN_00401AA0 stores the
+// tags its caller passes there; the save serializer FUN_00422DE0 passes
+// 0x5254444F and 0x44465254.
+func WriteContainerTagged(writer io.Writer, entries map[uint32][]byte, tags [2]uint32) error {
 	if writer == nil {
 		return errors.New("APPL writer is nil")
 	}
@@ -170,7 +180,8 @@ func WriteContainer(writer io.Writer, entries map[uint32][]byte) error {
 	binary.LittleEndian.PutUint32(header[4:8], uint32(fileSize))
 	binary.LittleEndian.PutUint32(header[0x10:0x14], uint32(countA))
 	binary.LittleEndian.PutUint32(header[0x14:0x18], uint32(countB))
-	copy(header[0x20:0x28], "LPPALPPA")
+	binary.LittleEndian.PutUint32(header[0x20:0x24], tags[0])
+	binary.LittleEndian.PutUint32(header[0x24:0x28], tags[1])
 	if err := writeAll(writer, header[:]); err != nil {
 		return fmt.Errorf("write APPL header: %w", err)
 	}

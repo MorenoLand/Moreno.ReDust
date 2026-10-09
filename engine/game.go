@@ -49,9 +49,25 @@ func NewGame(frame render.IndexedFrame) (*Game, error) {
 	return &Game{frame: image, width: frame.Width, height: frame.Height}, nil
 }
 
+// TextInput, when set, receives the characters typed since the last frame.
+// The in-game file chooser uses it to read a file name; other screens leave it
+// nil.
+var TextInput func(text string)
+
+// gameKeys are the keys reported to the key callback, in priority order: only
+// the first key pressed in a frame is delivered.
+var gameKeys = []ebiten.Key{ebiten.KeyEscape, ebiten.KeySpace, ebiten.KeyQ, ebiten.KeyPeriod, ebiten.KeyArrowUp, ebiten.KeyArrowDown, ebiten.KeyArrowLeft, ebiten.KeyArrowRight, ebiten.KeyW, ebiten.KeyA, ebiten.KeyS, ebiten.KeyD, ebiten.Key0, ebiten.Key1, ebiten.Key2, ebiten.Key3, ebiten.Key4, ebiten.Key5, ebiten.Key6, ebiten.Key7, ebiten.Key8, ebiten.Key9,
+	ebiten.KeyEnter, ebiten.KeyNumpadEnter, ebiten.KeyBackspace, ebiten.KeyDelete, ebiten.KeyTab, ebiten.KeyPageUp, ebiten.KeyPageDown,
+	ebiten.KeyB, ebiten.KeyC, ebiten.KeyE, ebiten.KeyF, ebiten.KeyG, ebiten.KeyH, ebiten.KeyI, ebiten.KeyJ, ebiten.KeyK, ebiten.KeyL, ebiten.KeyM, ebiten.KeyN, ebiten.KeyO, ebiten.KeyP, ebiten.KeyR, ebiten.KeyT, ebiten.KeyU, ebiten.KeyV, ebiten.KeyX, ebiten.KeyY, ebiten.KeyZ}
+
 func (g *Game) Update() error {
+	if TextInput != nil {
+		if typed := ebiten.AppendInputChars(nil); len(typed) > 0 {
+			TextInput(string(typed))
+		}
+	}
 	if g.keyDown != nil {
-		for _, key := range []ebiten.Key{ebiten.KeyEscape, ebiten.KeySpace, ebiten.KeyQ, ebiten.KeyPeriod, ebiten.KeyArrowUp, ebiten.KeyArrowDown, ebiten.KeyArrowLeft, ebiten.KeyArrowRight, ebiten.KeyW, ebiten.KeyA, ebiten.KeyS, ebiten.KeyD, ebiten.Key0, ebiten.Key1, ebiten.Key2, ebiten.Key3, ebiten.Key4, ebiten.Key5, ebiten.Key6, ebiten.Key7, ebiten.Key8, ebiten.Key9} {
+		for _, key := range gameKeys {
 			if inpututil.IsKeyJustPressed(key) {
 				g.keyDown(key)
 				break
@@ -156,10 +172,11 @@ type silentAction struct {
 	Y            *int           `json:"y,omitempty"`
 	Milliseconds *int           `json:"milliseconds,omitempty"`
 	Path         string         `json:"path,omitempty"`
+	Text         string         `json:"text,omitempty"`
 	Expect       map[string]any `json:"expect,omitempty"`
 }
 
-var silentKeys = map[string]ebiten.Key{"Escape": ebiten.KeyEscape, "Space": ebiten.KeySpace, "Q": ebiten.KeyQ, "Period": ebiten.KeyPeriod, "ArrowUp": ebiten.KeyArrowUp, "ArrowDown": ebiten.KeyArrowDown, "ArrowLeft": ebiten.KeyArrowLeft, "ArrowRight": ebiten.KeyArrowRight, "W": ebiten.KeyW, "A": ebiten.KeyA, "S": ebiten.KeyS, "D": ebiten.KeyD, "0": ebiten.Key0, "1": ebiten.Key1, "2": ebiten.Key2, "3": ebiten.Key3, "4": ebiten.Key4, "5": ebiten.Key5, "6": ebiten.Key6, "7": ebiten.Key7, "8": ebiten.Key8, "9": ebiten.Key9}
+var silentKeys = map[string]ebiten.Key{"Escape": ebiten.KeyEscape, "Space": ebiten.KeySpace, "Q": ebiten.KeyQ, "Period": ebiten.KeyPeriod, "ArrowUp": ebiten.KeyArrowUp, "ArrowDown": ebiten.KeyArrowDown, "ArrowLeft": ebiten.KeyArrowLeft, "ArrowRight": ebiten.KeyArrowRight, "W": ebiten.KeyW, "A": ebiten.KeyA, "S": ebiten.KeyS, "D": ebiten.KeyD, "0": ebiten.Key0, "1": ebiten.Key1, "2": ebiten.Key2, "3": ebiten.Key3, "4": ebiten.Key4, "5": ebiten.Key5, "6": ebiten.Key6, "7": ebiten.Key7, "8": ebiten.Key8, "9": ebiten.Key9, "Enter": ebiten.KeyEnter, "Backspace": ebiten.KeyBackspace, "Delete": ebiten.KeyDelete, "Tab": ebiten.KeyTab, "PageUp": ebiten.KeyPageUp, "PageDown": ebiten.KeyPageDown, "B": ebiten.KeyB, "C": ebiten.KeyC, "E": ebiten.KeyE, "F": ebiten.KeyF, "G": ebiten.KeyG, "H": ebiten.KeyH, "I": ebiten.KeyI, "J": ebiten.KeyJ, "K": ebiten.KeyK, "L": ebiten.KeyL, "M": ebiten.KeyM, "N": ebiten.KeyN, "O": ebiten.KeyO, "P": ebiten.KeyP, "R": ebiten.KeyR, "T": ebiten.KeyT, "U": ebiten.KeyU, "V": ebiten.KeyV, "X": ebiten.KeyX, "Y": ebiten.KeyY, "Z": ebiten.KeyZ}
 
 func SilentRunner(scriptPath string, stateProvider ...func() map[string]any) func(render.IndexedFrame, func() (render.IndexedFrame, bool, error), func(ebiten.Key), func(MouseEvent) (render.IndexedFrame, bool, error), func(MouseState) (render.IndexedFrame, bool, error)) error {
 	return func(frame render.IndexedFrame, onUpdate func() (render.IndexedFrame, bool, error), keyDown func(ebiten.Key), mouseDown func(MouseEvent) (render.IndexedFrame, bool, error), mouseState func(MouseState) (render.IndexedFrame, bool, error)) error {
@@ -242,6 +259,11 @@ func RunSilent(frame render.IndexedFrame, onUpdate func() (render.IndexedFrame, 
 		case "key":
 			key := silentKeys[action.Key]
 			err = step(&key, nil, false)
+		case "type":
+			if TextInput != nil {
+				TextInput(action.Text)
+			}
+			err = step(nil, nil, false)
 		case "mouse_down", "click":
 			if held[button] {
 				return fmt.Errorf("silent action %d: mouse button is already down", index+1)
@@ -323,6 +345,10 @@ func validateSilentAction(action silentAction, outputRoot string) error {
 		}
 		if action.X != nil || action.Y != nil || action.Milliseconds != nil || action.Button != "" || action.Path != "" {
 			return fmt.Errorf("key action has unrelated fields")
+		}
+	case "type":
+		if action.Text == "" || action.X != nil || action.Y != nil || action.Key != "" || action.Button != "" || action.Milliseconds != nil || action.Path != "" {
+			return fmt.Errorf("type action requires only text")
 		}
 	case "mouse_down", "mouse_up", "mouse_move", "click":
 		if action.X == nil || action.Y == nil || *action.X < 0 || *action.X > 65535 || *action.Y < 0 || *action.Y > 65535 {

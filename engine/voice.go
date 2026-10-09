@@ -102,7 +102,7 @@ func (v *VoiceOne) Name() string {
 }
 
 func (v *VoiceOne) Frame(base render.IndexedFrame) (render.IndexedFrame, error) {
-	if subtitle := v.Subtitle(); subtitle != "" {
+	if subtitle := v.Subtitle(); subtitle != "" && SubtitlesOn() {
 		return render.DrawNativeSubtitle(base, subtitle)
 	}
 	return base, nil
