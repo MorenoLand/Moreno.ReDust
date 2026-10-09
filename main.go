@@ -40,20 +40,14 @@ func loadPropFrame(archive *assets.PropArchive, propName, viewName string, frame
 	return render.DecodePuppetFrame(data)
 }
 
-func nativeDogSpotMovie(name string) (string, bool) {
-	name = strings.ToUpper(filepath.Base(strings.ReplaceAll(strings.TrimSpace(name), `\`, `/`)))
-	if name != "DOG1.MOV" && name != "DOG2.MOV" {
-		return "", false
+// nativeMoviePath resolves a movie name a script gives playmovie against the
+// movies directory BOOTFILE sets with path(3, "dust:movies:").
+func nativeMoviePath(name string) string {
+	name = strings.TrimSpace(strings.ReplaceAll(name, "\\", "/"))
+	if strings.Contains(name, "/") {
+		return name
 	}
-	return "MOVIES/" + name, true
-}
-
-func nativeSpotMovieReturnSet(clock int) string {
-	setName := "town.set"
-	if clock == 3 {
-		setName = "nite.set"
-	}
-	return setName
+	return "MOVIES/" + strings.ToUpper(name)
 }
 
 func nativeMovieHasEmbeddedAudio(movie *render.Movie) bool {
@@ -213,9 +207,7 @@ func run() error {
 	var currentThemeName string
 	var currentTheme audio.NativeTheme
 	var themeTrack *audio.OpenTrack
-	var pendingSpotMovie, spotMovieName string
-	var spotMovieReturnFrame render.IndexedFrame
-	var spotMovieActionFrameOne, spotMovieActive, spotMovieStarting bool
+	var movieActionFrameOne bool
 	var sceneMovieAfter func(bool) (render.IndexedFrame, bool, error)
 	if !*silent || *silentScript != "" {
 		if *silent {
@@ -941,6 +933,14 @@ func run() error {
 		} else if !declared {
 			// BootFile's boot() sets it false; the port does not run boot().
 			if err := scriptInterpreter.SetGlobalBool("debugging", false); err != nil {
+				return err
+			}
+		}
+		if _, declared, err := scriptInterpreter.GlobalValue("isrepeat"); err != nil {
+			return err
+		} else if !declared {
+			// BootFile's boot() sets it false; keyrepeat sets it around keydown.
+			if err := scriptInterpreter.SetGlobalBool("isrepeat", false); err != nil {
 				return err
 			}
 		}
@@ -1777,6 +1777,9 @@ func run() error {
 	// Set once the movie, transition and day-advance machinery below exists.
 	var scriptEngineBusy func() bool
 	var scriptPlayMovie func(name string) error
+	// scriptCursorName is the last cursor(name) a script chose, which the hover
+	// code reads after it runs a scene's setcursor.
+	var scriptCursorName string
 	var scriptAdvanceDay func() error
 	scriptMovieFinished, scriptActionFrameOne := false, false
 	var convPuppet *render.Puppet
@@ -1942,7 +1945,7 @@ func run() error {
 			}
 			return refreshWorldScene()
 		},
-		cursor:   func(name string) error { return nil },
+		cursor:   func(name string) error { scriptCursorName = name; return nil },
 		gotoFlat: func(name string) error { return nil },
 		play: func(name string) error {
 			scriptMovieFinished = false
@@ -2065,10 +2068,24 @@ func run() error {
 				heading = value
 			}
 		}
+		// FUN_004199A0 does nothing when the player is already in that cell and
+		// otherwise sends closescene() before the move and openscene() after it.
+		moved := view.Name[0] != 0 && !strings.EqualFold(string(view.Name[1:]), scene)
+		if moved {
+			if err := raiseSetEvent(false, "closescene()"); err != nil {
+				return err
+			}
+		}
 		if _, err := setWorldView(scene, heading); err != nil {
 			return err
 		}
-		return refreshWorldScene()
+		if err := refreshWorldScene(); err != nil {
+			return err
+		}
+		if moved {
+			return raiseSetEvent(false, "openscene()")
+		}
+		return nil
 	}
 	scriptInterpreter.Builtins["handleselect"] = scriptHost.PickInventoryBuiltin
 	var trackBanks [2]*audio.SoundBank
@@ -2259,6 +2276,18 @@ func run() error {
 		}
 		return startScriptSourceIn(label, nil, source, nil)
 	}
+	// raiseKey is BOOTFILE keydown for the world: sendtoscene(currentscene(),
+	// keydown(arg)). It reports whether the scene chain took the key.
+	raiseKey := func(name string) bool {
+		if !scriptedSets[activeSetName] || !setEventsOpen || view.Name[0] == 0 {
+			return false
+		}
+		scene := strings.ToLower(string(view.Name[1:]))
+		if err := startScriptSource(scene+" keydown", fmt.Sprintf("sendtoscene(%q,keydown(%q))", scene, name), nil); err != nil {
+			log.Printf("scene keydown: %v", err)
+		}
+		return true
+	}
 	// dispatchScriptEvent raises an engine event (a finished walk, a fired loop).
 	// Scripts reached this way may block, the way the original's message pump lets
 	// them: an actor that has stared at the player long enough starts a
@@ -2418,18 +2447,8 @@ func run() error {
 		return displayChanged, nil
 	}
 	startSceneMovie := func(name string) error {
-		movieName, dogSpotMovie := nativeDogSpotMovie(name)
-		if !dogSpotMovie {
-			movieName = name
-		}
-		if !spotMovieStarting && dogSpotMovie {
-			pendingSpotMovie = movieName
-			if *debug {
-				log.Printf("movie=%s routed=spotmovie", movieName)
-			}
-			return nil
-		}
-		if currentScene == 0 && !spotMovieStarting {
+		movieName := nativeMoviePath(name)
+		if currentScene == 0 {
 			if err := refreshWorldScene(); err != nil {
 				return fmt.Errorf("refresh scene before movie %s: %w", name, err)
 			}
@@ -2454,7 +2473,7 @@ func run() error {
 		}
 		movieBase := currentFrame
 		moviePaletteBase := movieRestorePalette
-		if dogSpotMovie || deathStage == 3 || sceneMovieAfter != nil {
+		if deathStage == 3 || sceneMovieAfter != nil {
 			movieBase, moviePaletteBase = blackFrame, render.BlackPaletteRaw()
 			if *debug {
 				log.Printf("movie=%s base=blackscreen palette=black", movieName)
@@ -2483,9 +2502,13 @@ func run() error {
 	}
 	var pendingPlayerMovement assets.SceneMove
 	var pendingSceneMovie string
-	var dogMovieNeedsHelp bool
 	nativeCursor := ""
+	debugCursor := ""
 	setNativeCursor := func(name string) {
+		if *debug && debugCursor != name {
+			debugCursor = name
+			log.Printf("cursor=%s", name)
+		}
 		if *silent || nativeCursor == name {
 			return
 		}
@@ -2533,6 +2556,35 @@ func run() error {
 		}
 		return nil
 	}
+	// sceneCursor is BOOTFILE idle() for the world: while events are locked the
+	// cursor is "watch", otherwise the scene chain's setcursor(point) picks it.
+	// The result is reused while the point and view stay put.
+	var cursorKey string
+	var cursorName string
+	cursorAge := 0
+	sceneCursor := func(point uint32, fallback string) string {
+		if eventsLocked() {
+			return "watch"
+		}
+		if view.Name[0] == 0 {
+			return fallback
+		}
+		scene := strings.ToLower(string(view.Name[1:]))
+		key := fmt.Sprintf("%s %d %d %d %d", scene, worldPoint[2], point, gameDay, gameClock)
+		cursorAge++
+		if key == cursorKey && cursorAge < 20 {
+			return cursorName
+		}
+		cursorKey, cursorAge, scriptCursorName = key, 0, ""
+		if err := runScriptIn(scene+" setcursor", nil, fmt.Sprintf("sendtoscene(%q,setcursor(%d))", scene, int32(point))); err != nil {
+			log.Printf("scene setcursor: %v", err)
+		}
+		cursorName = fallback
+		if scriptCursorName != "" {
+			cursorName = scriptCursorName
+		}
+		return cursorName
+	}
 	updateNativeCursor := func(point uint32) {
 		cursor := "arrow"
 		if playback != nil {
@@ -2549,14 +2601,9 @@ func run() error {
 			if _, found := render.HitTestWorldActors(projectedActors, image.Pt(int(int16(point>>16)), int(int16(point)))); found {
 				cursor = "touch"
 			}
-			if activeSetName == "town" {
-				if _, found := story.NiteSceneObjectAction(view.Resource, worldPoint[2], point, gameDay, gameClock); found {
-					cursor = "touch"
-				}
-			}
-			if activeSetName == "town" {
-				if _, found := story.NiteDoorAt(view.Resource, worldPoint[2], point); found {
-					cursor = "touch"
+			if scriptedSets[activeSetName] && setEventsOpen {
+				if cursor != "touch" {
+					cursor = sceneCursor(point, cursor)
 				}
 			} else if activeSetName == "sallower" {
 				if _, found := story.SallowerDoorAt(view.Resource, worldPoint[2], point); found {
@@ -3859,17 +3906,13 @@ func run() error {
 	}
 	scriptBlackFrame = blackFrame
 	scriptEngineBusy = func() bool {
-		busy := currentScene == 2 || playback != nil || transition != nil || sceneMovieAfter != nil || spotMovieActive || pendingMovement != 0
+		busy := currentScene == 2 || playback != nil || transition != nil || sceneMovieAfter != nil || pendingMovement != 0
 		if busy && *debug && *debugLoops {
-			log.Printf("script-busy scene=%d playback=%t transition=%t sceneMovieAfter=%t spot=%t frame=%d waiting=%t", currentScene, playback != nil, transition != nil, sceneMovieAfter != nil, spotMovieActive, playback.FrameIndex(), playback.WaitingForInput())
+			log.Printf("script-busy scene=%d playback=%t transition=%t sceneMovieAfter=%t frame=%d waiting=%t", currentScene, playback != nil, transition != nil, sceneMovieAfter != nil, playback.FrameIndex(), playback.WaitingForInput())
 		}
 		return busy
 	}
 	scriptPlayMovie = func(name string) error {
-		// The script's own premovie/postmovie wrap the movie, so the
-		// hand-written DOG spot-movie routing must not intercept it.
-		spotMovieStarting = true
-		defer func() { spotMovieStarting = false }()
 		return startActionMovie(name, 0, func(actionOne bool) (render.IndexedFrame, bool, error) {
 			scriptMovieFinished, scriptActionFrameOne = true, actionOne
 			return blackFrame, true, nil
@@ -4011,20 +4054,6 @@ func run() error {
 			transition, transitionMode = fade, 1
 			if *debug {
 				log.Printf("set-transfer=fade-out target=%s scene=%q direction=%q duration=30", transferSetName, transferSetScene, transferSetDirection)
-			}
-			return fade.CurrentFrame(), true, nil
-		}
-		if playback == nil && transition == nil && pendingSpotMovie != "" {
-			spotMovieName, pendingSpotMovie = pendingSpotMovie, ""
-			spotMovieReturnFrame, spotMovieActionFrameOne, spotMovieActive = currentFrame, false, true
-			fade, err := render.NewFadeEffect(currentFrame, blackFrame, 10)
-			if err != nil {
-				spotMovieName, spotMovieActive = "", false
-				return render.IndexedFrame{}, false, fmt.Errorf("premovie screentoblack: %w", err)
-			}
-			transition, transitionMode = fade, 4
-			if *debug {
-				log.Printf("spotmovie=%s premovie=screentoblack duration=10", spotMovieName)
 			}
 			return fade.CurrentFrame(), true, nil
 		}
@@ -4213,35 +4242,6 @@ func run() error {
 					}
 					return currentFrame, true, nil
 				}
-				if transitionMode == 4 {
-					currentFrame, stageFrame, transition, transitionMode = transition.TargetFrame(), transition.TargetFrame(), nil, 0
-					spotMovieStarting = true
-					err := startSceneMovie(spotMovieName)
-					spotMovieStarting = false
-					if err != nil {
-						return render.IndexedFrame{}, false, fmt.Errorf("start spotmovie %s: %w", spotMovieName, err)
-					}
-					return playback.CurrentFrame(), true, nil
-				}
-				if transitionMode == 3 {
-					completedSpotMovie := spotMovieName
-					currentFrame, stageFrame, transition, transitionMode = transition.TargetFrame(), transition.TargetFrame(), nil, 0
-					spotMovieActive, spotMovieName = false, ""
-					if *debug {
-						log.Printf("spotmovie=%s postmovie=restored clock=%d", completedSpotMovie, gameClock)
-					}
-					if dogMovieNeedsHelp {
-						dogMovieNeedsHelp = false
-						if err := runScript("help setup", `sendtoactor("help",setupactor("dog"))`); err != nil {
-							return render.IndexedFrame{}, false, fmt.Errorf("setup Help after DOG1.MOV: %w", err)
-						}
-						if err := refreshWorldScene(); err != nil {
-							return render.IndexedFrame{}, false, fmt.Errorf("show Help after DOG1.MOV: %w", err)
-						}
-						return currentFrame, true, nil
-					}
-					return currentFrame, true, nil
-				}
 				if transitionMode == 1 {
 					blackFrame := transition.TargetFrame()
 					nextFrame, err := switchSpecialSet(transferSetName, transferSetScene, transferSetDirection)
@@ -4280,10 +4280,10 @@ func run() error {
 		if !done {
 			return movieFrame, changed, nil
 		}
-		if spotMovieActive || sceneMovieAfter != nil {
-			spotMovieActionFrameOne, err = playback.ActionFrame(1)
+		if sceneMovieAfter != nil {
+			movieActionFrameOne, err = playback.ActionFrame(1)
 			if err != nil {
-				return render.IndexedFrame{}, false, fmt.Errorf("read spotmovie actionframe(1): %w", err)
+				return render.IndexedFrame{}, false, fmt.Errorf("read movie actionframe(1): %w", err)
 			}
 		}
 		if *debug && movieWarningCount[movieIndex] > 0 {
@@ -4324,7 +4324,7 @@ func run() error {
 		if sceneMovieAfter != nil {
 			after := sceneMovieAfter
 			sceneMovieAfter = nil
-			return after(spotMovieActionFrameOne)
+			return after(movieActionFrameOne)
 		}
 		if deathStage == 3 {
 			fade, err := render.NewFadeEffect(blackFrame, deathFrame, deathSequence.FadeInFrames)
@@ -4333,46 +4333,6 @@ func run() error {
 			}
 			transition, transitionMode, deathStage = fade, 6, 4
 			return fade.CurrentFrame(), true, nil
-		}
-		if spotMovieActive {
-			blackScreen := currentFrame
-			returnSet := nativeSpotMovieReturnSet(gameClock)
-			if activeSetName == "town" && currentScene == 0 {
-				direction := "north"
-				switch worldPoint[2] {
-				case assets.SetDirectionEast:
-					direction = "east"
-				case assets.SetDirectionSouth:
-					direction = "south"
-				case assets.SetDirectionWest:
-					direction = "west"
-				}
-				returnFrame, err := switchSpecialSet(returnSet, string(view.Name[1:]), direction)
-				if err != nil {
-					return render.IndexedFrame{}, false, fmt.Errorf("restore town after spotmovie: %w", err)
-				}
-				spotMovieReturnFrame = returnFrame
-			}
-			currentFrame, stageFrame = blackScreen, blackScreen
-			fade, err := render.NewFadeEffect(blackScreen, spotMovieReturnFrame, 30)
-			if err != nil {
-				return render.IndexedFrame{}, false, fmt.Errorf("postmovie fade to saved scene: %w", err)
-			}
-			transition, transitionMode = fade, 3
-			if *debug {
-				log.Printf("spotmovie=%s postmovie=blacktoscreen clock=%d actionframe1=%t duration=30", spotMovieName, gameClock, spotMovieActionFrameOne)
-			}
-			return fade.CurrentFrame(), true, nil
-		}
-		if dogMovieNeedsHelp {
-			dogMovieNeedsHelp = false
-			if err := runScript("help setup", `sendtoactor("help",setupactor("dog"))`); err != nil {
-				return render.IndexedFrame{}, false, fmt.Errorf("setup Help after DOG1.MOV: %w", err)
-			}
-			if err := refreshWorldScene(); err != nil {
-				return render.IndexedFrame{}, false, fmt.Errorf("show Help after DOG1.MOV: %w", err)
-			}
-			return currentFrame, true, nil
 		}
 		if *debug {
 			log.Printf("startup movies complete; scene=%s", stage.Scenes[currentScene].Name[1:])
@@ -4403,8 +4363,11 @@ func run() error {
 				} else {
 					convSkipped, currentFrame, stageFrame, convDirty = true, frame, frame, true
 				}
+				return
 			}
-			return
+			if playback == nil {
+				return
+			}
 		}
 		if eventsLocked() {
 			return
@@ -4462,58 +4425,35 @@ func run() error {
 			if currentScene == 0 {
 				switch key {
 				case ebiten.KeyArrowUp, ebiten.KeyW:
+					if raiseKey("uparrow") {
+						return
+					}
 					if action, found := story.HotelForwardAction(activeSetName, view.Resource, worldPoint[2], doorOwner, hotelStoryState()); found {
 						if err := queueHotelTransition(action); err != nil {
 							log.Printf("hotel transition: %v", err)
 						}
 						return
 					}
-					if activeSetName == "town" {
-						if target, targetScene, targetDirection, found := story.NiteInteriorTargetForState(view.Resource, worldPoint[2], doorOwner, gameClock); found {
-							pendingSetName, pendingSetScene, pendingSetDirection, doorOwner, pendingPlayerMovement = target, targetScene, targetDirection, "", 0
-							if *debug {
-								log.Printf("interior-enter target=%s view=%s point=%v", target, view.Name[1:], worldPoint)
-							}
-							return
+					direction := ""
+					switch activeSetName {
+					case "sallower":
+						if story.SallowerExitToTown(worldPoint[2], doorOwner) {
+							direction = "east"
 						}
-					} else {
-						direction := ""
-						switch activeSetName {
-						case "sallower":
-							if story.SallowerExitToTown(worldPoint[2], doorOwner) {
-								direction = "east"
-							}
-						case "hotlower":
-							direction, _ = story.HotLowerExitToTown(view.Resource, worldPoint[2], doorOwner)
-						case "store", "livery":
-							if worldPoint[2] == assets.SetDirectionEast && (activeSetName == "store" && doorOwner == "shop" || activeSetName == "livery" && doorOwner == "horse") {
-								direction = "west"
-							}
-						}
-						if direction != "" {
-							pendingSetName, pendingSetScene, pendingSetDirection, doorOwner = "nite.set", townReturnScene, direction, ""
-							if gameClock != 3 {
-								pendingSetName = "town.set"
-							}
-							if *debug {
-								log.Printf("interior-exit set=%s scene=%q direction=%s", activeSetName, townReturnScene, direction)
-							}
-							return
+					case "hotlower":
+						direction, _ = story.HotLowerExitToTown(view.Resource, worldPoint[2], doorOwner)
+					case "store", "livery":
+						if worldPoint[2] == assets.SetDirectionEast && (activeSetName == "store" && doorOwner == "shop" || activeSetName == "livery" && doorOwner == "horse") {
+							direction = "west"
 						}
 					}
-					dogVisible := false
-					for _, actor := range worldActors {
-						if strings.EqualFold(actor.Name, "dog") && actor.Visible {
-							dogVisible = true
-							break
+					if direction != "" {
+						pendingSetName, pendingSetScene, pendingSetDirection, doorOwner = "nite.set", townReturnScene, direction, ""
+						if gameClock != 3 {
+							pendingSetName = "town.set"
 						}
-					}
-					if name, blocked := story.NiteDogGateMovieInSet(activeSetName, view.Resource, worldPoint[2], gameDay, dogVisible); blocked {
-						pendingMovement, pendingPlayerMovement = 0, 0
-						pendingSpotMovie = name
-						dogMovieNeedsHelp = true
 						if *debug {
-							log.Printf("event=NITE.SET/key-down dog-gate point=%v movie=%s", worldPoint, name)
+							log.Printf("interior-exit set=%s scene=%q direction=%s", activeSetName, townReturnScene, direction)
 						}
 						return
 					}
@@ -4521,8 +4461,14 @@ func run() error {
 				case ebiten.KeyArrowDown, ebiten.KeyS:
 					pendingPlayerMovement = assets.SceneMoveBackwards
 				case ebiten.KeyArrowLeft, ebiten.KeyA:
+					if raiseKey("leftarrow") {
+						return
+					}
 					pendingPlayerMovement = assets.SceneMoveLeft
 				case ebiten.KeyArrowRight, ebiten.KeyD:
+					if raiseKey("rightarrow") {
+						return
+					}
 					pendingPlayerMovement = assets.SceneMoveRight
 				}
 			}
@@ -4714,48 +4660,12 @@ func run() error {
 					return currentFrame, true, nil
 				}
 			}
-			if activeSetName == "town" {
-				if action, found := story.NiteSceneObjectAction(view.Resource, worldPoint[2], point, gameDay, gameClock); found {
-					if *debug {
-						log.Printf("world-object=%s movie=%s", action.Object, action.Movie)
-					}
-					if err := startSceneMovie(action.Movie); err != nil {
-						return render.IndexedFrame{}, false, err
-					}
-					return currentFrame, true, nil
-				}
-			}
 			if mouseEvent.Button == ebiten.MouseButtonLeft {
 				if action, found := story.HotelMouseAction(activeSetName, view.Resource, worldPoint[2], point, hotelStoryState()); found {
 					return runHotelAction(action)
 				}
 			}
-			if mouseEvent.Button == ebiten.MouseButtonLeft && activeSetName == "town" {
-				if owner, found := story.NiteDoorAt(view.Resource, worldPoint[2], point); found {
-					locked, err := story.NiteDoorLocked(owner, gameDay, gameClock, gamePhase, false, false, &nativeRandom, inventoryOwners)
-					if err != nil {
-						return render.IndexedFrame{}, false, err
-					}
-					if owner == "back" && inventoryOwners["hhkey"] != "stranger" {
-						locked = true
-					}
-					doorOwner = ""
-					if locked {
-						if err := soundBank.Play(audioContext, "knock1", 1); err != nil {
-							return render.IndexedFrame{}, false, fmt.Errorf("play locked-door knock: %w", err)
-						}
-						if *debug {
-							log.Printf("door=%s locked=true view=%s day=%d clock=%d phase=%d", owner, view.Name[1:], gameDay, gameClock, gamePhase)
-						}
-					} else {
-						doorOwner = owner
-						if *debug {
-							log.Printf("door=%s owner=door view=%s direction=%d", owner, view.Name[1:], worldPoint[2])
-						}
-					}
-					return currentFrame, false, nil
-				}
-			} else if mouseEvent.Button == ebiten.MouseButtonLeft && activeSetName == "sallower" {
+			if mouseEvent.Button == ebiten.MouseButtonLeft && activeSetName == "sallower" {
 				if owner, found := story.SallowerDoorAt(view.Resource, worldPoint[2], point); found {
 					doorOwner = owner
 					if *debug {
@@ -4804,6 +4714,15 @@ func run() error {
 					}
 					return currentFrame, false, nil
 				}
+			}
+			if mouseEvent.Button == ebiten.MouseButtonLeft && scriptedSets[activeSetName] && setEventsOpen && view.Name[0] != 0 {
+				// BOOTFILE mousedown: hittest found no actor or button, so the
+				// click goes to the scene as sendtoscene(<scene>, mousedown(<point>)).
+				scene := strings.ToLower(string(view.Name[1:]))
+				if err := startScriptSource(scene+" mousedown", fmt.Sprintf("sendtoscene(%q,mousedown(%d))", scene, int32(point)), nil); err != nil {
+					return render.IndexedFrame{}, false, err
+				}
+				return currentFrame, true, nil
 			}
 		}
 		if !hit {
