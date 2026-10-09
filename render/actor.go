@@ -290,7 +290,7 @@ func HitTestWorldActors(actors []ProjectedWorldActor, point image.Point) (string
 		}
 		if actor.propHitMask != nil {
 			sourceX, sourceY := x*actor.propHitSourceWidth/actor.Bounds.Dx(), y*actor.propHitSourceHeight/actor.Bounds.Dy()
-			index := sourceX*actor.propHitStride + sourceY
+			index := sourceY*actor.propHitStride + sourceX
 			if sourceX >= 0 && sourceX < actor.propHitSourceWidth && sourceY >= 0 && sourceY < actor.propHitSourceHeight && index >= 0 && index < len(actor.propHitMask) && actor.propHitMask[index] {
 				return actor.Name, true
 			}

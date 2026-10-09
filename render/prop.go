@@ -10,6 +10,10 @@ import (
 	"redust/assets"
 )
 
+// Props are drawn as their frame stores them. The frame's own width and height
+// are the display size: the frame extents and origin are in (height, width)
+// order, so Bottom-Top is the width, Right-Left is the height and the origin
+// is (y, x). HOUSE.PRP, INVEN.PRP and CREDITS.PRP props all follow this.
 type WorldPropSprite struct {
 	Name     string
 	Set      string
@@ -30,11 +34,6 @@ type FlatPropSprite struct {
 	Anchor   image.Point
 	Archive  *assets.PropArchive
 	Frame    int
-	// Rotated marks a prop whose pixels are stored in display order while
-	// its frame info is in the transposed orientation, as CREDITS.PRP's
-	// "black" and "names" are: the stored extents are (height, width) and
-	// the origin is (y, x).
-	Rotated bool
 }
 
 type ProjectedFlatProp struct {
@@ -71,30 +70,15 @@ func CompositeFlatProps(background IndexedFrame, props []FlatPropSprite) (Indexe
 		if err != nil {
 			return IndexedFrame{}, nil, fmt.Errorf("decode flat prop %q frame %d: %w", prop.Name, info.Resource, err)
 		}
-		width, height := int(info.Right-info.Left), int(info.Bottom-info.Top)
-		if width < 1 || height < 1 || frame.Width != height || frame.Height != width {
-			return IndexedFrame{}, nil, fmt.Errorf("flat prop %q frame %d has encoded %dx%d pixels for native %dx%d extents", prop.Name, info.Resource, frame.Width, frame.Height, width, height)
+		width, height := frame.Width, frame.Height
+		if int(info.Bottom-info.Top) != width || int(info.Right-info.Left) != height {
+			return IndexedFrame{}, nil, fmt.Errorf("flat prop %q frame %d has encoded %dx%d pixels for native %dx%d extents", prop.Name, info.Resource, frame.Width, frame.Height, int(info.Right-info.Left), int(info.Bottom-info.Top))
 		}
 		pixels, mask, err := decodeWorldActorFrame(frame)
 		if err != nil {
 			return IndexedFrame{}, nil, fmt.Errorf("decode flat prop %q frame %d pixels: %w", prop.Name, info.Resource, err)
 		}
-		transposedPixels, transposedMask := make([]byte, width*height), make([]bool, width*height)
-		originX, originY := int(info.OriginX), int(info.OriginY)
-		if prop.Rotated {
-			// Display order already: frame.Width x frame.Height.
-			copy(transposedPixels, pixels)
-			copy(transposedMask, mask)
-			width, height = frame.Width, frame.Height
-			originX, originY = originY, originX
-		} else {
-			for y := 0; y < frame.Height; y++ {
-				for x := 0; x < frame.Width; x++ {
-					source, destination := y*frame.Width+x, x*width+y
-					transposedPixels[destination], transposedMask[destination] = pixels[source], mask[source]
-				}
-			}
-		}
+		originX, originY := int(info.OriginY), int(info.OriginX)
 		bounds := image.Rect(prop.Anchor.X-originX, prop.Anchor.Y-originY, prop.Anchor.X-originX+width, prop.Anchor.Y-originY+height)
 		visible := bounds.Intersect(composite.Bounds())
 		if visible.Empty() {
@@ -105,7 +89,7 @@ func CompositeFlatProps(background IndexedFrame, props []FlatPropSprite) (Indexe
 			for x := 0; x < visible.Dx(); x++ {
 				source := (visible.Min.Y-bounds.Min.Y+y)*width + visible.Min.X - bounds.Min.X + x
 				destination := y*visible.Dx() + x
-				clippedPixels[destination], clippedMask[destination] = transposedPixels[source], transposedMask[source]
+				clippedPixels[destination], clippedMask[destination] = pixels[source], mask[source]
 				if clippedMask[destination] {
 					value := color.RGBAModel.Convert(background.Palette[clippedPixels[destination]]).(color.RGBA)
 					composite.SetRGBA(visible.Min.X+x, visible.Min.Y+y, value)
@@ -153,22 +137,15 @@ func projectWorldProp(background IndexedFrame, point [3]int16, activeSet string,
 	if err != nil {
 		return ProjectedWorldActor{}, false, fmt.Errorf("decode world prop %q frame %d: %w", prop.Name, info.Resource, err)
 	}
-	sourceWidth, sourceHeight := int(info.Right-info.Left), int(info.Bottom-info.Top)
-	if sourceWidth < 1 || sourceHeight < 1 || frame.Width != sourceHeight || frame.Height != sourceWidth {
-		return ProjectedWorldActor{}, false, fmt.Errorf("world prop %q frame %d has encoded %dx%d pixels for native %dx%d extents", prop.Name, info.Resource, frame.Width, frame.Height, sourceWidth, sourceHeight)
+	displayWidth, displayHeight := frame.Width, frame.Height
+	if int(info.Bottom-info.Top) != displayWidth || int(info.Right-info.Left) != displayHeight {
+		return ProjectedWorldActor{}, false, fmt.Errorf("world prop %q frame %d has encoded %dx%d pixels for native %dx%d extents", prop.Name, info.Resource, frame.Width, frame.Height, int(info.Right-info.Left), int(info.Bottom-info.Top))
 	}
 	pixels, mask, err := decodeWorldActorFrame(frame)
 	if err != nil {
 		return ProjectedWorldActor{}, false, fmt.Errorf("decode world prop %q frame %d pixels: %w", prop.Name, info.Resource, err)
 	}
 	hitMask := mask
-	transposedPixels, transposedMask := make([]byte, len(pixels)), make([]bool, len(mask))
-	for sourceY := range frame.Height {
-		for sourceX := range frame.Width {
-			source, destination := sourceY*frame.Width+sourceX, sourceX*sourceWidth+sourceY
-			transposedPixels[destination], transposedMask[destination] = pixels[source], mask[source]
-		}
-	}
 	forwardX, forwardY := 0, -1
 	switch point[2] {
 	case assets.SetDirectionSouth:
@@ -190,19 +167,19 @@ func projectWorldProp(background IndexedFrame, point [3]int16, activeSet string,
 	}
 	lateral := deltaX*(-forwardY) + deltaY*forwardX
 	metricScale := int(prop.Scale) * int(info.Metric) / 1000
-	width, height := metricScale*sourceWidth/depth, metricScale*sourceHeight/depth
+	width, height := metricScale*displayWidth/depth, metricScale*displayHeight/depth
 	if width < 1 || height < 1 {
 		return ProjectedWorldActor{}, false, nil
 	}
 	anchorX, anchorY := background.Width/2+310*lateral/depth, background.Height/2-310*(int(prop.Position[2])-camera[2])/depth
-	left := anchorX - int(info.OriginX)*width/sourceWidth
-	top := anchorY - int(info.OriginY)*height/sourceHeight
+	left := anchorX - int(info.OriginY)*width/displayWidth
+	top := anchorY - int(info.OriginX)*height/displayHeight
 	bounds := image.Rect(left, top, left+width, top+height)
 	visible := bounds.Intersect(image.Rect(0, 0, background.Width, background.Height))
 	if visible.Empty() {
 		return ProjectedWorldActor{}, false, nil
 	}
-	scaledPixels, scaledMask := scaleWorldActorFrame(PuppetFrame{Width: sourceWidth, Height: sourceHeight}, transposedPixels, transposedMask, width, height)
+	scaledPixels, scaledMask := scaleWorldActorFrame(PuppetFrame{Width: displayWidth, Height: displayHeight}, pixels, mask, width, height)
 	if visible != bounds {
 		clippedPixels, clippedMask := make([]byte, visible.Dx()*visible.Dy()), make([]bool, visible.Dx()*visible.Dy())
 		for y := range visible.Dy() {
@@ -214,5 +191,5 @@ func projectWorldProp(background IndexedFrame, point [3]int16, activeSet string,
 		}
 		scaledPixels, scaledMask = clippedPixels, clippedMask
 	}
-	return ProjectedWorldActor{Name: prop.Name, Depth: depth, Bounds: visible, pixels: scaledPixels, mask: scaledMask, propHitMask: hitMask, propHitSourceWidth: frame.Height, propHitSourceHeight: frame.Width, propHitStride: frame.Width}, true, nil
+	return ProjectedWorldActor{Name: prop.Name, Depth: depth, Bounds: visible, pixels: scaledPixels, mask: scaledMask, propHitMask: hitMask, propHitSourceWidth: frame.Width, propHitSourceHeight: frame.Height, propHitStride: frame.Width}, true, nil
 }
