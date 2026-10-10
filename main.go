@@ -2292,6 +2292,25 @@ func run() error {
 		}
 		return string(stage.Scenes[index].Name[1:]), true
 	}
+	scriptHost.Env.FlatIndex = func(name string) (int, bool) {
+		for index := range stage.Scenes {
+			if strings.EqualFold(string(stage.Scenes[index].Name[1:]), name) {
+				return index, true
+			}
+		}
+		return 0, false
+	}
+	scriptHost.Env.FlatButtonCount = func(flat int) (int, error) {
+		handlers, err := stage.SceneHandlers(flat)
+		return len(handlers), err
+	}
+	scriptHost.Env.FlatButtonName = func(flat, index int) (string, error) {
+		handlers, err := stage.SceneHandlers(flat)
+		if err != nil {
+			return "", err
+		}
+		return string(handlers[index].Name[1:]), nil
+	}
 	scriptHost.Env.Fallback = &mainScriptFallback{tiphat: func() error {
 		return startAvatarTiphat(nil)
 	}, death: func() error {

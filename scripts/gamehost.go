@@ -140,6 +140,13 @@ type GameHostEnv struct {
 	// FlatName is the open stage's 0-based flat name (record +0x0C, FUN_00412010).
 	// The bool is false when the index is outside the table.
 	FlatName func(index int) (string, bool)
+	// FlatIndex resolves a flat name to its 0-based index in the open stage (FUN_00413590,
+	// via FUN_00413530). The bool is false when no flat has the name.
+	FlatIndex func(name string) (int, bool)
+	// FlatButtonCount is a flat's button count, dword 0 of its button resource
+	// (FUN_00412110). FlatButtonName is a button's name, row +0x10 (FUN_00412210).
+	FlatButtonCount func(flat int) (int, error)
+	FlatButtonName  func(flat, index int) (string, error)
 	// Voice plays voicesound on the voice channel currentvoice reports.
 	Voice func(name string) error
 	// Tracks is the open track files and sound channels.
@@ -861,6 +868,63 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 		name, ok := h.Env.FlatName(index - 1)
 		if !ok {
 			return Record{}, 0, 0x0a, nil
+		}
+		return text(name, consumed)
+	case "countbuttons":
+		if _, open := h.openFlats(); !open {
+			return Record{}, 0, StatusNoActiveStage, nil
+		}
+		if h.Env.FlatIndex == nil || h.Env.FlatButtonCount == nil {
+			return Record{}, 0, 0, h.gap(call)
+		}
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		if len(args) != 1 || args[0].Kind != 3 {
+			return Record{}, 0, ScriptStatusWrongType, nil
+		}
+		flat, found := h.Env.FlatIndex(args[0].Text)
+		if !found {
+			return Record{}, 0, 0x0a, nil
+		}
+		count, err := h.Env.FlatButtonCount(flat)
+		if err != nil {
+			return Record{}, 0, 0, err
+		}
+		return number(int32(count), consumed)
+	case "indextobutton":
+		if _, open := h.openFlats(); !open {
+			return Record{}, 0, StatusNoActiveStage, nil
+		}
+		if h.Env.FlatIndex == nil || h.Env.FlatButtonCount == nil || h.Env.FlatButtonName == nil {
+			return Record{}, 0, 0, h.gap(call)
+		}
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		if len(args) != 2 || args[0].Kind != 3 {
+			return Record{}, 0, ScriptStatusWrongType, nil
+		}
+		flat, found := h.Env.FlatIndex(args[0].Text)
+		if !found {
+			return Record{}, 0, 0x0a, nil
+		}
+		if args[1].Kind != 4 {
+			return Record{}, 0, ScriptStatusWrongType, nil
+		}
+		count, err := h.Env.FlatButtonCount(flat)
+		if err != nil {
+			return Record{}, 0, 0, err
+		}
+		index := int(args[1].Int)
+		if index < 1 || index > count {
+			return Record{}, 0, 0x0a, nil
+		}
+		name, err := h.Env.FlatButtonName(flat, index-1)
+		if err != nil {
+			return Record{}, 0, 0, err
 		}
 		return text(name, consumed)
 	case "countshops":
