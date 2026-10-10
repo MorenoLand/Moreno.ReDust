@@ -843,6 +843,14 @@ func run() error {
 		}
 		return sprites
 	}
+	// The prop table starts with the house props and then the inventory props,
+	// the order BOOTFILE opens house.prp and inven.prp in.
+	for _, name := range propArchive.ListNames() {
+		scriptHost.Props.AddToTable(name)
+	}
+	for _, name := range inventoryArchive.ListNames() {
+		scriptHost.Props.AddToTable(name)
+	}
 	scriptInterpreter := scripts.NewInterpreter(scriptHost)
 	scriptHost.Env.SceneMove = func(code int) { pendingMovement = assets.SceneMove(code) }
 	scriptHost.Env.Instanced = func(source, name string) {

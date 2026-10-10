@@ -779,6 +779,31 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 			return Record{}, 0, 0x0a, nil
 		}
 		return text(actor.Name, consumed)
+	case "countprops":
+		_, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		if h.Props == nil {
+			return Record{}, 0, 0, fmt.Errorf("props are unavailable")
+		}
+		return number(int32(h.Props.TableCount()), consumed)
+	case "indextoprop":
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		if len(args) != 1 || args[0].Kind != 4 {
+			return Record{}, 0, ScriptStatusWrongType, nil
+		}
+		if h.Props == nil {
+			return Record{}, 0, 0, fmt.Errorf("props are unavailable")
+		}
+		name, ok := h.Props.TableName(int(args[0].Int))
+		if !ok {
+			return Record{}, 0, 0x0a, nil
+		}
+		return text(name, consumed)
 	case "actionframe":
 		args, consumed, status, err := call.Args()
 		if err != nil || status != 0 {

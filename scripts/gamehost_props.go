@@ -30,8 +30,26 @@ type PropRecord struct {
 // ScriptProps holds the props scripts have touched, keyed case-insensitively.
 type ScriptProps struct {
 	props map[string]*PropRecord
+	// table is the game's prop table in native order: each open shop's props in
+	// list order, then the props propinstance adds.
+	table []string
 	Balls [16]PropBallJob
 }
+
+// AddToTable appends a prop name to the prop table.
+func (t *ScriptProps) AddToTable(name string) { t.table = append(t.table, name) }
+
+// TableCount is countprops: the number of props in the table.
+func (t *ScriptProps) TableCount() int { return len(t.table) }
+
+// TableName is indextoprop: the 1-based entry, false when it is out of range.
+func (t *ScriptProps) TableName(index int) (string, bool) {
+	if index < 1 || index > len(t.table) {
+		return "", false
+	}
+	return t.table[index-1], true
+}
+
 type PropBallJob struct {
 	Name   string
 	Active bool
@@ -214,6 +232,7 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 			copied := *h.Props.Get(args[0].Text)
 			copied.Name = args[1].Text
 			h.Props.props[strings.ToLower(args[1].Text)] = &copied
+			h.Props.AddToTable(args[1].Text)
 		}
 		return consumed, 0, true, nil
 	case "voicesound", "singlesound", "dualsound", "multiplesound":

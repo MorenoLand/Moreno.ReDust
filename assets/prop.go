@@ -26,6 +26,7 @@ type PropArchive struct {
 	cache         *ResourceCache
 	resourceCount uint32
 	definitions   map[string]PropDefinition
+	order         []string
 }
 
 type PropDefinition struct {
@@ -107,6 +108,7 @@ func (w Workspace) OpenPropArchive(name string) (*PropArchive, error) {
 			return nil, fmt.Errorf("prop list contains duplicate definition %q", definition.Name)
 		}
 		archive.definitions[key] = definition
+		archive.order = append(archive.order, definition.Name)
 	}
 	failed = false
 	return archive, nil
@@ -323,6 +325,15 @@ func propName(field []byte) (string, error) {
 		return "", fmt.Errorf("Pascal prop name length exceeds its %d-byte field", len(field))
 	}
 	return strings.TrimSpace(string(field[1 : 1+int(field[0])])), nil
+}
+
+// ListNames lists the definition names in the order the shop's list rows give
+// them, which is the order its props enter the game's prop table.
+func (a *PropArchive) ListNames() []string {
+	if a == nil {
+		return nil
+	}
+	return append([]string(nil), a.order...)
 }
 
 // Names lists the definition names in upper case, sorted.
