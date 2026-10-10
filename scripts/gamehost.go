@@ -26,6 +26,9 @@ type GameHostEnv struct {
 	// ProjectedDepth is FUN_0040DB70 for one actor: its depth and whether it
 	// survives the cull.
 	ProjectedDepth func(actor *ActorRecord) (int16, bool)
+	// PropDepth is the projected depth of a prop the world draws, for propdist
+	// (FUN_0041F400 projects the prop with FUN_00421820); false when it is not drawn.
+	PropDepth func(name string) (int16, bool)
 	// Frame is the frame() counter and FrameRate the boot framerate.
 	Frame     func() int32
 	FrameRate func() int32
@@ -779,6 +782,28 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 			return Record{}, 0, 0x0a, nil
 		}
 		return text(actor.Name, consumed)
+	case "propdist":
+		prop, _, consumed, status, err := h.propArgs(call, 1)
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		// A prop that is not drawn reports 32000, as FUN_0041F400 does.
+		distance := int32(32000)
+		if h.Env.PropDepth != nil {
+			if depth, ok := h.Env.PropDepth(prop.Name); ok {
+				distance = int32(depth)
+			}
+		}
+		return number(distance, consumed)
+	case "sqrt":
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		if len(args) != 1 || args[0].Kind != 4 {
+			return Record{}, 0, ScriptStatusWrongType, nil
+		}
+		return number(int32(integerSquareRoot(uint32(args[0].Int))), consumed)
 	case "countprops":
 		_, consumed, status, err := call.Args()
 		if err != nil || status != 0 {

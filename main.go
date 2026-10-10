@@ -777,6 +777,14 @@ func run() error {
 			}
 			return 0, false
 		},
+		PropDepth: func(name string) (int16, bool) {
+			for _, projected := range projectedActors {
+				if strings.EqualFold(projected.Name, name) {
+					return int16(projected.Depth), true
+				}
+			}
+			return 0, false
+		},
 		Heading: render.NativeActorHeadingToPoint,
 		// frame() is DAT_00459998, which FUN_004059D0 advances once per pump (20 a
 		// second), not the 60 Hz tick counter.
@@ -826,12 +834,15 @@ func run() error {
 			if original, aliased := propInstances[key]; aliased {
 				key = original
 			}
-			// Only the set's own props (HOUSE.PRP): an inventory item a script
-			// shows is drawn by the hand overlay, not in the world.
-			if _, found := inventoryArchive.Definition(key); found {
+			// An item that is owned is held or given away, so it is not in the world;
+			// an unowned inventory item a script placed is drawn from INVEN.PRP.
+			if prop.Owner != "none" {
 				continue
 			}
 			archive := propArchive
+			if _, found := inventoryArchive.Definition(key); found {
+				archive = inventoryArchive
+			}
 			view, err := archive.View(key, prop.View)
 			if err != nil {
 				if *debug {
@@ -2271,6 +2282,17 @@ func run() error {
 		}
 		return finishPlayerDeath(cause.Text)
 	}}
+	// initall (NEW.FLT) sends the inventory shop's initprops() at the start of
+	// every day, after the cast's initactors. Only the new game runs it so far:
+	// the later days call makeball (the tumbleweed's ball), which is not ported,
+	// and a loaded game has no saved props to restore.
+	runInitProps := func() error {
+		return runScript("initprops inven", `sendtoshop("inven",initprops())`)
+	}
+	if err := runInitProps(); err != nil {
+		stage.Close()
+		return err
+	}
 	// startScriptTask runs an event that may block (a conversation) as a
 	// task the update loop resumes.
 	startScriptSourceIn := func(label string, chain []scripts.ScriptFrame, source string, done func()) error {
@@ -2336,6 +2358,15 @@ func run() error {
 	}
 	raiseSceneLoop := func(loop scripts.ScriptLoop) error {
 		source, label := fmt.Sprintf("sendtoscene(%q,%s())", loop.Owner, loop.Callback), loop.Owner+" "+loop.Callback+"()"
+		if scriptTask != nil {
+			return runScriptIn(label, nil, source)
+		}
+		return startScriptSourceIn(label, nil, source, nil)
+	}
+	// FUN_0040FB00 sends a prop loop's callback as sendtoprop("<owner>", <callback>()),
+	// the same way it sends scene loops as sendtoscene.
+	raisePropLoop := func(loop scripts.ScriptLoop) error {
+		source, label := fmt.Sprintf("sendtoprop(%q,%s())", loop.Owner, loop.Callback), loop.Owner+" "+loop.Callback+"()"
 		if scriptTask != nil {
 			return runScriptIn(label, nil, source)
 		}
@@ -2484,6 +2515,9 @@ func run() error {
 					// scene loop and has already cleared its slot, so the callback
 					// makes its own loop again.
 					return 0, raiseSceneLoop(loop)
+				}
+				if loop.Kind == scripts.LoopKindProp {
+					return 0, raisePropLoop(loop)
 				}
 				return 0, fmt.Errorf("unknown native loop callback %q", loop.Callback)
 			}
@@ -5291,6 +5325,10 @@ func (f *mainScriptFallback) Command(call *scripts.ScriptCall) (int, uint16, err
 		target, message, consumed, status, err := call.SendParts()
 		if err != nil || status != 0 {
 			return 0, status, err
+		}
+		if strings.EqualFold(target.Text, "mainpanel") && strings.EqualFold(message, "openflat") {
+			// The port builds the main panel itself; openflat has no port-side work yet.
+			return consumed, 0, nil
 		}
 		if strings.EqualFold(target.Text, "mainpanel") && strings.EqualFold(message, "tiphat") {
 			return consumed, 0, f.tiphat()
