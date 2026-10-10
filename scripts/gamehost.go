@@ -134,6 +134,12 @@ type GameHostEnv struct {
 	CastManaged func(name string) bool
 	// CurrentFlat is the open flat's name (FUN_004125C0).
 	CurrentFlat func() string
+	// FlatCount is the open stage's flat count (the dword at +0x834 of its block,
+	// FUN_00411FC0). The bool is false when no stage is open.
+	FlatCount func() (int, bool)
+	// FlatName is the open stage's 0-based flat name (record +0x0C, FUN_00412010).
+	// The bool is false when the index is outside the table.
+	FlatName func(index int) (string, bool)
 	// Voice plays voicesound on the voice channel currentvoice reports.
 	Voice func(name string) error
 	// Tracks is the open track files and sound channels.
@@ -186,6 +192,15 @@ func (h *GameHost) currentSet() string {
 
 func opcodeName(call *ScriptCall) string {
 	return CommandHandlerName(call.Program.Records[call.Start].Kind)
+}
+
+// openFlats is the open stage's flat count. The bool is false when no stage is
+// open, which FUN_00411FC0 and FUN_00412010 test before anything else.
+func (h *GameHost) openFlats() (int, bool) {
+	if h.Env.FlatCount == nil || h.Env.FlatName == nil {
+		return 0, false
+	}
+	return h.Env.FlatCount()
 }
 
 func (h *GameHost) gap(call *ScriptCall) error {
@@ -817,6 +832,37 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 			return Record{}, 0, ScriptStatusWrongType, nil
 		}
 		return number(int32(integerSquareRoot(uint32(args[0].Int))), consumed)
+	case "countflats":
+		count, open := h.openFlats()
+		if !open {
+			return Record{}, 0, StatusNoActiveStage, nil
+		}
+		_, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		return number(int32(count), consumed)
+	case "indextoflat":
+		count, open := h.openFlats()
+		if !open {
+			return Record{}, 0, StatusNoActiveStage, nil
+		}
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		if len(args) != 1 || args[0].Kind != 4 {
+			return Record{}, 0, ScriptStatusWrongType, nil
+		}
+		index := int(args[0].Int)
+		if index < 1 || index > count {
+			return Record{}, 0, 0x0a, nil
+		}
+		name, ok := h.Env.FlatName(index - 1)
+		if !ok {
+			return Record{}, 0, 0x0a, nil
+		}
+		return text(name, consumed)
 	case "countshops":
 		_, consumed, status, err := call.Args()
 		if err != nil || status != 0 {

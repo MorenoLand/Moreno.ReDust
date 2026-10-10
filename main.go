@@ -2283,6 +2283,15 @@ func run() error {
 	scriptHost.Env.CurrentFlat = func() string {
 		return strings.ToLower(string(stage.Scenes[currentScene].Name[1:]))
 	}
+	// The open stage is NEW.FLT, which BOOTFILE opens with openstagefile("new.flt").
+	// Stages that other sets open are not modelled yet.
+	scriptHost.Env.FlatCount = func() (int, bool) { return len(stage.Scenes), true }
+	scriptHost.Env.FlatName = func(index int) (string, bool) {
+		if index < 0 || index >= len(stage.Scenes) {
+			return "", false
+		}
+		return string(stage.Scenes[index].Name[1:]), true
+	}
 	scriptHost.Env.Fallback = &mainScriptFallback{tiphat: func() error {
 		return startAvatarTiphat(nil)
 	}, death: func() error {
