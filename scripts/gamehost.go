@@ -29,6 +29,14 @@ type GameHostEnv struct {
 	// PropDepth is the projected depth of a prop the world draws, for propdist
 	// (FUN_0041F400 projects the prop with FUN_00421820); false when it is not drawn.
 	PropDepth func(name string) (int16, bool)
+	// BallBlocked reports whether a ball at cell (x, y) meets a backdrop: the set's
+	// view there has Flags set (FUN_00406B70 reads SetView.Flags at +8).
+	BallBlocked func(x, y int) bool
+	// PlayerCenter is the player's box centre: the cell centres and the camera
+	// height (DAT_00459A6C, DAT_00459A6E, DAT_00459A70).
+	PlayerCenter func() (x, y, z int32)
+	// EndBall sends a prop endball(message) the way a loop callback is sent.
+	EndBall func(name, message string) error
 	// Frame is the frame() counter and FrameRate the boot framerate.
 	Frame     func() int32
 	FrameRate func() int32
@@ -333,8 +341,10 @@ func (h *GameHost) command(call *ScriptCall) (int, uint16, error) {
 			return 0, ScriptStatusWrongType, nil
 		}
 		if strings.EqualFold(args[0].Text, "player") {
-			// The player's box lives in DAT_00459A28/2A; the port does not
-			// consume it yet.
+			// The player's box is DAT_00459A28 (z) and DAT_00459A2A (x and y).
+			if h.Props != nil {
+				h.Props.PlayerBox = [2]int16{int16(args[1].Int), int16(args[2].Int)}
+			}
 			return consumed, 0, nil
 		}
 		actor, status := h.Actors.Lookup(args[0].Text)

@@ -777,6 +777,16 @@ func run() error {
 			}
 			return 0, false
 		},
+		BallBlocked: func(x, y int) bool {
+			return activeSet != nil && activeSet.ViewBlocked(x, y)
+		},
+		PlayerCenter: func() (int32, int32, int32) {
+			z := int32(0)
+			if activeSet != nil {
+				z = int32(activeSet.CameraHeight())
+			}
+			return int32(worldPoint[0])*256 + 128, int32(worldPoint[1])*256 + 128, z
+		},
 		PropDepth: func(name string) (int16, bool) {
 			for _, projected := range projectedActors {
 				if strings.EqualFold(projected.Name, name) {
@@ -2372,6 +2382,13 @@ func run() error {
 		}
 		return startScriptSourceIn(label, nil, source, nil)
 	}
+	scriptHost.Env.EndBall = func(name, message string) error {
+		source, label := fmt.Sprintf("sendtoprop(%q,endball(%q))", name, message), name+" endball("+message+")"
+		if scriptTask != nil {
+			return runScriptIn(label, nil, source)
+		}
+		return startScriptSourceIn(label, nil, source, nil)
+	}
 	// raiseKey is BOOTFILE keydown for the world: sendtoscene(currentscene(),
 	// keydown(arg)). It reports whether the scene chain took the key.
 	raiseKey := func(name string) bool {
@@ -2438,6 +2455,10 @@ func run() error {
 				if err := dispatchScriptEvent(event); err != nil {
 					return false, err
 				}
+			}
+			// FUN_0040F4E0's second table: the balls, FUN_00410980.
+			if err := scriptHost.StepBalls(); err != nil {
+				return false, err
 			}
 		}
 		status, err := nativeLoops.PassWhere(func(loop scripts.ScriptLoop) (uint16, error) {
@@ -3016,6 +3037,9 @@ func run() error {
 			if err := runInitActors(); err != nil {
 				return err
 			}
+			if err := runInitProps(); err != nil {
+				return err
+			}
 			for index, shared := range sharedPhases {
 				shared.set(savedPhases[index])
 			}
@@ -3346,6 +3370,9 @@ func run() error {
 			defer func() {
 				if err := runInitActors(); err != nil {
 					log.Printf("initactors after advanceday: %v", err)
+				}
+				if err := runInitProps(); err != nil {
+					log.Printf("initprops after advanceday: %v", err)
 				}
 			}()
 			sceneName, direction := route.ViewName, route.Direction

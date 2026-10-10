@@ -44,6 +44,20 @@ func (v SetView) IsCell() bool {
 	return v.Flags&1 == 0
 }
 
+// ViewBlocked reports whether the view at DirectionID x and SceneID y has Flags
+// set, which stops a ball (FUN_00406B70). A missing view is not blocked.
+func (s *Set) ViewBlocked(x, y int) bool {
+	if s == nil {
+		return false
+	}
+	for _, view := range s.views {
+		if int(view.DirectionID) == x && int(view.SceneID) == y {
+			return view.Flags != 0
+		}
+	}
+	return false
+}
+
 // CellViews returns the set's walkable cells in table order.
 func (s *Set) CellViews() []SetView {
 	if s == nil {

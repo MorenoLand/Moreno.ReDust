@@ -30,6 +30,9 @@ type PropRecord struct {
 // ScriptProps holds the props scripts have touched, keyed case-insensitively.
 type ScriptProps struct {
 	props map[string]*PropRecord
+	// PlayerBox is the player's hit box: [0] the z half-size, [1] the x and y
+	// half-size (actorhitbox("player", z, xy)).
+	PlayerBox [2]int16
 	// table is the game's prop table in native order: each open shop's props in
 	// list order, then the props propinstance adds.
 	table []string
@@ -50,9 +53,21 @@ func (t *ScriptProps) TableName(index int) (string, bool) {
 	return t.table[index-1], true
 }
 
+// PropBallJob is one ball slot, the 48-byte job FUN_00410760 builds: speeds
+// (+0x04..+0x08), the gravity and bounce flags (+0x0A, +0x0C), the lifetime in
+// passes (+0x0E) and the fine position (+0x12..+0x16) that is the prop's world
+// position, with the cells at +0x18 and +0x1A.
 type PropBallJob struct {
-	Name   string
-	Active bool
+	Name     string
+	Active   bool
+	VX, VY   int16
+	VZ       int16
+	Gravity  bool
+	Bounce   bool
+	Lifetime int16
+	X, Y, Z  int16
+	CellX    int16
+	CellY    int16
 }
 
 func NewScriptProps() *ScriptProps { return &ScriptProps{props: map[string]*PropRecord{}} }
@@ -138,6 +153,9 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 			}
 		}
 		return consumed, 0, true, nil
+	case "makeball":
+		consumed, status, err := h.makeBall(call)
+		return consumed, status, true, err
 	case "sendtoprop":
 		consumed, status, err := h.sendToProp(call)
 		return consumed, status, true, err
