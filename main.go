@@ -2263,7 +2263,7 @@ func run() error {
 	}
 	// FUN_004204D0: opening a shop file sends each of its props openprop().
 	for _, archive := range []*assets.PropArchive{propArchive, inventoryArchive} {
-		for _, name := range archive.Names() {
+		for _, name := range archive.ListNames() {
 			if err := runScript("openprop "+name, fmt.Sprintf("sendtoprop(%q,openprop())", name)); err != nil {
 				stage.Close()
 				return err
