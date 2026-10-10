@@ -73,6 +73,45 @@ func (t *ScriptProps) freeBall() *PropBallJob {
 	return nil
 }
 
+// ActiveBallCount is countballs: the slots in use (FUN_004110B0).
+func (t *ScriptProps) ActiveBallCount() int {
+	count := 0
+	for index := range t.Balls {
+		if t.Balls[index].Active {
+			count++
+		}
+	}
+	return count
+}
+
+// ActiveBallName is indextoball: the name of the 1-based active ball, false when
+// the index is outside 1 to the count (FUN_004110D0).
+func (t *ScriptProps) ActiveBallName(index int) (string, bool) {
+	if index < 1 || index > t.ActiveBallCount() {
+		return "", false
+	}
+	for slot := range t.Balls {
+		if !t.Balls[slot].Active {
+			continue
+		}
+		index--
+		if index == 0 {
+			return t.Balls[slot].Name, true
+		}
+	}
+	return "", false
+}
+
+// BallActive is isball: an active ball is on the named prop (FUN_0040F8F0).
+func (t *ScriptProps) BallActive(name string) bool {
+	for index := range t.Balls {
+		if t.Balls[index].Active && strings.EqualFold(t.Balls[index].Name, name) {
+			return true
+		}
+	}
+	return false
+}
+
 // StepBalls runs one pass of every active ball, in slot order: FUN_00410980 is the
 // second loop table FUN_0040F4E0 runs at the pump rate.
 func (h *GameHost) StepBalls() error {

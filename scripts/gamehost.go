@@ -814,6 +814,43 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 			return Record{}, 0, ScriptStatusWrongType, nil
 		}
 		return number(int32(integerSquareRoot(uint32(args[0].Int))), consumed)
+	case "countballs":
+		_, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		if h.Props == nil {
+			return Record{}, 0, 0, fmt.Errorf("props are unavailable")
+		}
+		return number(int32(h.Props.ActiveBallCount()), consumed)
+	case "indextoball":
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		if len(args) != 1 || args[0].Kind != 4 {
+			return Record{}, 0, ScriptStatusWrongType, nil
+		}
+		if h.Props == nil {
+			return Record{}, 0, 0, fmt.Errorf("props are unavailable")
+		}
+		name, ok := h.Props.ActiveBallName(int(args[0].Int))
+		if !ok {
+			return Record{}, 0, 0x0a, nil
+		}
+		return text(name, consumed)
+	case "isball":
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		if len(args) != 1 || args[0].Kind != 3 {
+			return Record{}, 0, ScriptStatusWrongType, nil
+		}
+		if h.Props == nil {
+			return Record{}, 0, 0, fmt.Errorf("props are unavailable")
+		}
+		return boolean(h.Props.BallActive(args[0].Text), consumed)
 	case "countprops":
 		_, consumed, status, err := call.Args()
 		if err != nil || status != 0 {
