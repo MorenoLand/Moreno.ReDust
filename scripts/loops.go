@@ -80,6 +80,52 @@ type LoopScheduler struct {
 
 type LoopDispatch func(ScriptLoop) (uint16, error)
 
+// LoopCount is countloops(kind): the running loops of that kind (FUN_0040FC20).
+func (s *LoopScheduler) LoopCount(kind uint16) int {
+	if s == nil {
+		return 0
+	}
+	count := 0
+	for _, slot := range s.slots {
+		if slot != nil && slot.Kind == kind {
+			count++
+		}
+	}
+	return count
+}
+
+// LoopOwner is indextoloop(kind, index): the owner of the 1-based loop of that kind,
+// false when the index is outside the count (FUN_0040FC60).
+func (s *LoopScheduler) LoopOwner(kind uint16, index int) (string, bool) {
+	if s == nil || index < 1 {
+		return "", false
+	}
+	for _, slot := range s.slots {
+		if slot == nil || slot.Kind != kind {
+			continue
+		}
+		index--
+		if index == 0 {
+			return slot.Owner, true
+		}
+	}
+	return "", false
+}
+
+// LoopExists is isloop(kind, owner): a loop of that kind is running for the owner
+// (FUN_0040F890).
+func (s *LoopScheduler) LoopExists(kind uint16, owner string) bool {
+	if s == nil {
+		return false
+	}
+	for _, slot := range s.slots {
+		if slot != nil && slot.Kind == kind && strings.EqualFold(slot.Owner, owner) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *LoopScheduler) Register(loop ScriptLoop) uint16 {
 	if s == nil {
 		return 0x23

@@ -814,6 +814,46 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 			return Record{}, 0, ScriptStatusWrongType, nil
 		}
 		return number(int32(integerSquareRoot(uint32(args[0].Int))), consumed)
+	case "countloops":
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		if len(args) != 1 || args[0].Kind != 3 {
+			return Record{}, 0, ScriptStatusWrongType, nil
+		}
+		kind, ok := LoopKindByName(args[0].Text)
+		if !ok {
+			return number(0, consumed)
+		}
+		return number(int32(h.Loops.LoopCount(kind)), consumed)
+	case "indextoloop":
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		if len(args) != 2 || args[0].Kind != 3 || args[1].Kind != 4 {
+			return Record{}, 0, ScriptStatusWrongType, nil
+		}
+		kind, ok := LoopKindByName(args[0].Text)
+		if !ok {
+			return Record{}, 0, 0x0a, nil
+		}
+		owner, found := h.Loops.LoopOwner(kind, int(args[1].Int))
+		if !found {
+			return Record{}, 0, 0x0a, nil
+		}
+		return text(owner, consumed)
+	case "isloop":
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		if len(args) != 2 || args[0].Kind != 3 || args[1].Kind != 3 {
+			return Record{}, 0, ScriptStatusWrongType, nil
+		}
+		kind, ok := LoopKindByName(args[0].Text)
+		return boolean(ok && h.Loops.LoopExists(kind, args[1].Text), consumed)
 	case "countballs":
 		_, consumed, status, err := call.Args()
 		if err != nil || status != 0 {
