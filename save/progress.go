@@ -45,6 +45,9 @@ type GameProgress struct {
 
 	// ScriptActors holds the interpreter-managed actors' records.
 	ScriptActors map[string]scripts.ActorRecordState `json:"scriptActors,omitempty"`
+	// ScriptProps holds the prop table, the prop records and the balls the scripts
+	// have set up. Saves from before it carry none.
+	ScriptProps *scripts.ScriptPropsState `json:"scriptProps,omitempty"`
 	// ScriptGlobals holds the interpreter's global variables.
 	ScriptGlobals []scripts.GlobalVariable `json:"scriptGlobals,omitempty"`
 	// PuppetParams are the eight puppetparam slots (DAT_0045999C..AA), which

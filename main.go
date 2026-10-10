@@ -2900,6 +2900,8 @@ func run() error {
 			managed = append(managed, name)
 		}
 		progress.ScriptActors = scriptActors.Snapshot(managed)
+		propsState := scriptHost.Props.Snapshot()
+		progress.ScriptProps = &propsState
 		if globals, err := scriptInterpreter.SnapshotGlobals(); err != nil {
 			log.Printf("save: script globals unavailable: %v", err)
 		} else {
@@ -3024,6 +3026,9 @@ func run() error {
 		}
 		if err := scriptActors.Restore(progress.ScriptActors); err != nil {
 			return err
+		}
+		if progress.ScriptProps != nil {
+			scriptHost.Props.Restore(*progress.ScriptProps)
 		}
 		if progress.ScriptActors == nil {
 			// A save from before script-managed actors (or a new game):
