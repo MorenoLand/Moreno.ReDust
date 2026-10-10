@@ -707,7 +707,7 @@ func run() error {
 		scriptPrograms[key] = &program
 		return &program, nil
 	}
-	scriptHost := &scripts.GameHost{Actors: scriptActors, Props: scripts.NewScriptProps(), Loops: &nativeLoops, Random: &nativeRandom, Env: scripts.GameHostEnv{
+	scriptHost := &scripts.GameHost{Actors: scriptActors, Props: scripts.NewScriptProps(), Loops: &nativeLoops, Random: &nativeRandom, Shops: []string{"house", "inven"}, Env: scripts.GameHostEnv{
 		CurrentSet: func() string { return activeSetName },
 		Managed:    func(name string) bool { return scriptManaged[strings.ToLower(name)] },
 		CastManaged: func(name string) bool {

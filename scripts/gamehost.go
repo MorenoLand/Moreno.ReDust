@@ -151,6 +151,9 @@ type GameHost struct {
 	Actors *ScriptActors
 	Loops  *LoopScheduler
 	Random *NativeRandom
+	// Shops are the shop files open for the whole game, in openshopfile order
+	// (FUN_00420110 appends each record). BOOTFILE opens house.prp, then inven.prp.
+	Shops []string
 	// PuppetGrab and PuppetBase are DAT_004599AC and the puppetbase name.
 	PuppetGrab bool
 	// PuppetParams are puppetparam's eight 16-bit slots (DAT_0045999C..AA).
@@ -814,6 +817,25 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 			return Record{}, 0, ScriptStatusWrongType, nil
 		}
 		return number(int32(integerSquareRoot(uint32(args[0].Int))), consumed)
+	case "countshops":
+		_, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		return number(int32(len(h.Shops)), consumed)
+	case "indextoshop":
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		if len(args) != 1 || args[0].Kind != 4 {
+			return Record{}, 0, ScriptStatusWrongType, nil
+		}
+		index := int(args[0].Int)
+		if index < 1 || index > len(h.Shops) {
+			return Record{}, 0, 0x0a, nil
+		}
+		return text(h.Shops[index-1], consumed)
 	case "countwalks":
 		_, consumed, status, err := call.Args()
 		if err != nil || status != 0 {
