@@ -814,6 +814,25 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 			return Record{}, 0, ScriptStatusWrongType, nil
 		}
 		return number(int32(integerSquareRoot(uint32(args[0].Int))), consumed)
+	case "countwalks":
+		_, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		return number(int32(h.Actors.ActiveWalkCount()), consumed)
+	case "indextowalk":
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		if len(args) != 1 || args[0].Kind != 4 {
+			return Record{}, 0, ScriptStatusWrongType, nil
+		}
+		name, ok := h.Actors.ActiveWalkName(int(args[0].Int))
+		if !ok {
+			return Record{}, 0, 0x0a, nil
+		}
+		return text(name, consumed)
 	case "countloops":
 		args, consumed, status, err := call.Args()
 		if err != nil || status != 0 {
