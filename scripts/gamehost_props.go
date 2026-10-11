@@ -351,7 +351,24 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 			return consumed, ScriptStatusMalformed, true, nil
 		}
 		return consumed, 0, true, nil
-	case "propvalue", "propscale", "propzclip", "propspeed":
+	case "propvalue":
+		// FUN_0041EC00. The readers run first, then the name (0x0E, and 0x0A with no record
+		// created), then the value must be a number (0x0E). The 32-bit number is stored in the
+		// record (MOV dword at record +0x48), then FUN_004214A0 stores the record. Extra
+		// arguments run all of that and then return 2.
+		args, consumed, extra, status, err := h.propStatementArgs(call)
+		if err != nil || status != 0 {
+			return 0, status, true, err
+		}
+		if args[1].Kind != 4 {
+			return 0, ScriptStatusWrongType, true, nil
+		}
+		h.Props.Get(args[0].Text).Value = args[1].Int
+		if extra {
+			return consumed, ScriptStatusMalformed, true, nil
+		}
+		return consumed, 0, true, nil
+	case "propscale", "propzclip", "propspeed":
 		prop, args, consumed, status, err := h.propArgs(call, 2)
 		if err != nil || status != 0 {
 			return 0, status, true, err
@@ -360,8 +377,6 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 			return 0, ScriptStatusWrongType, true, nil
 		}
 		switch name {
-		case "propvalue":
-			prop.Value = args[1].Int
 		case "propscale":
 			prop.Scale = args[1].Int
 		case "propzclip":
