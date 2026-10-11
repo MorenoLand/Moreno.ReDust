@@ -715,6 +715,23 @@ func run() error {
 	scriptHost := &scripts.GameHost{Actors: scriptActors, Props: scripts.NewScriptProps(), Loops: &nativeLoops, Random: &nativeRandom, Shops: []string{"house", "inven"}, Env: scripts.GameHostEnv{
 		CurrentSet: func() string { return activeSetName },
 		Managed:    func(name string) bool { return scriptManaged[strings.ToLower(name)] },
+		SetSize: func() (int16, int16, bool) {
+			if activeSet == nil {
+				return 0, 0, false
+			}
+			width, height := activeSet.SetSize()
+			return width, height, true
+		},
+		CursorVisible: func(visible bool) {
+			if *silent {
+				return
+			}
+			mode := ebiten.CursorModeHidden
+			if visible {
+				mode = ebiten.CursorModeVisible
+			}
+			ebiten.SetCursorMode(mode)
+		},
 		CastManaged: func(name string) bool {
 			for _, cast := range []assets.Cast{gangCast, extraCast} {
 				if strings.EqualFold(cast.ScriptName, name) {

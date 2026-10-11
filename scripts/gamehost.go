@@ -137,6 +137,13 @@ type GameHostEnv struct {
 	// Sync publishes the engine's globals to the interpreter, for blocking
 	// commands that resume after the player changed engine state.
 	Sync func() error
+	// SetSize is the open set's metadata words that setwidth (offset 0x26,
+	// FUN_0041B450) and setheight (offset 0x28, FUN_0041B4A0) read. open is
+	// false when no set is loaded.
+	SetSize func() (width, height int16, open bool)
+	// CursorVisible receives the cursor's visibility after showcursor or
+	// hidecursor changes the display count. Nil leaves the cursor alone.
+	CursorVisible func(visible bool)
 	// Sound plays a UNILIB sound by name (voicesound, singlesound, ...).
 	Sound func(name string) error
 	// CastManaged reports whether any of a cast's actors run from their
@@ -204,6 +211,9 @@ type GameHost struct {
 	// on. FUN_004195F0 sets it to 1 when a set opens, which OpenSet mirrors. The
 	// zero value matches the native zero held before any set has opened.
 	setVisible bool
+	// cursorCount is the Win32 display count that showcursor and hidecursor
+	// move; the cursor shows at zero or more.
+	cursorCount int
 }
 
 // setRect reads the set gate and the pointer rectangle through the host hook.
@@ -647,6 +657,9 @@ func (h *GameHost) command(call *ScriptCall) (int, uint16, error) {
 			}
 			return program, strings.ToLower(name), 0, nil
 		}, nil)
+		return consumed, status, err
+	}
+	if consumed, status, handled, err := h.hostCommand(name, call); handled {
 		return consumed, status, err
 	}
 	if consumed, status, handled, err := h.soundCommand(name, call); handled {
@@ -1413,6 +1426,9 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 			return Record{}, 0, 0, fmt.Errorf("%s has no source", name)
 		}
 		return number(source(), consumed)
+	}
+	if value, consumed, status, handled, err := h.hostValue(name, call); handled {
+		return value, consumed, status, err
 	}
 	if value, consumed, status, handled, err := h.soundValue(name, call); handled {
 		return value, consumed, status, err
