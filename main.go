@@ -446,7 +446,9 @@ func run() error {
 	scriptActors := scripts.NewScriptActors()
 	scriptActorCasts := map[string]assets.Cast{}
 	scriptActorRecords := map[string]assets.CastActor{}
-	scriptManaged := map[string]bool{"mwife": true, "blood": true, "buick": true, "marie": true, "jones": true, "leroy": true, "help": true, "laurel": true, "trotter": true, "isao": true, "dog": true}
+	// scriptActorOrder lists the actor keys in table order, which castwarm walks.
+	var scriptActorOrder []string
+	scriptManaged :=map[string]bool{"mwife": true, "blood": true, "buick": true, "marie": true, "jones": true, "leroy": true, "help": true, "laurel": true, "trotter": true, "isao": true, "dog": true}
 	var pendingMovement assets.SceneMove
 	var scriptTask *scripts.ScriptTask
 	var startScriptTask func(event scripts.ActorEvent) error
@@ -462,6 +464,7 @@ func run() error {
 			}
 			scriptActors.Add(scripts.NewCastActorRecord(cast.Name, actor.Name, actor.Selector, actor.Location, actor.Script, poses))
 			scriptActorCasts[key], scriptActorRecords[key] = cast, actor
+			scriptActorOrder = append(scriptActorOrder, key)
 		}
 	}
 	// Every cast actor runs from its shipped scripts.
@@ -2507,6 +2510,78 @@ func run() error {
 		}
 		definition, found := propArchive.Definition(name)
 		return "DATA/HOUSE.PRP", definition.ScriptResource, "house", found
+	}
+	// propWarmRecord is a prop's definition block for propwarm and shopwarm, read
+	// through the cache of the archive PropScript names. An instance walks its
+	// source's definition, as it shares the source's block.
+	propWarmRecord := func(name string) (assets.WarmRecord, bool) {
+		definitionName := name
+		if original, aliased := propInstances[strings.ToLower(name)]; aliased {
+			definitionName = original
+		}
+		if _, found := inventoryArchive.Definition(definitionName); found {
+			return inventoryArchive.WarmRecord(definitionName)
+		}
+		return propArchive.WarmRecord(definitionName)
+	}
+	// actorwarm, castwarm, propwarm and shopwarm walk the resource blocks of the
+	// records they name (FUN_0040E120 and FUN_00421DD0), in the native table order.
+	// Each record is read through the cache of its own file.
+	scriptHost.Env.WarmRecords = func(statement, name string) ([]assets.WarmRecord, error) {
+		switch statement {
+		case "actorwarm":
+			key := strings.ToLower(name)
+			cast, found := scriptActorCasts[key]
+			if !found {
+				return nil, nil
+			}
+			cache, err := scriptCache(cast.Name)
+			if err != nil {
+				return nil, err
+			}
+			return []assets.WarmRecord{{Cache: cache, Blocks: scriptActorRecords[key].WarmBlocks()}}, nil
+		case "castwarm":
+			castFile := ""
+			for _, cast := range []assets.Cast{gangCast, extraCast} {
+				if strings.EqualFold(cast.ScriptName, name) {
+					castFile = cast.Name
+					break
+				}
+			}
+			if castFile == "" {
+				return nil, nil
+			}
+			cache, err := scriptCache(castFile)
+			if err != nil {
+				return nil, err
+			}
+			var records []assets.WarmRecord
+			for _, key := range scriptActorOrder {
+				if scriptActorCasts[key].Name == castFile {
+					records = append(records, assets.WarmRecord{Cache: cache, Blocks: scriptActorRecords[key].WarmBlocks()})
+				}
+			}
+			return records, nil
+		case "propwarm":
+			record, found := propWarmRecord(name)
+			if !found {
+				return nil, nil
+			}
+			return []assets.WarmRecord{record}, nil
+		case "shopwarm":
+			var records []assets.WarmRecord
+			for index := 1; index <= scriptHost.Props.TableCount(); index++ {
+				prop, _ := scriptHost.Props.TableName(index)
+				if _, _, shop, ok := scriptHost.Env.PropScript(prop); !ok || !strings.EqualFold(shop, name) {
+					continue
+				}
+				if record, found := propWarmRecord(prop); found {
+					records = append(records, record)
+				}
+			}
+			return records, nil
+		}
+		return nil, nil
 	}
 	// propview (FUN_0041F130) checks the view against the view list of the
 	// record's definition block. An instance shares its source's block, so the

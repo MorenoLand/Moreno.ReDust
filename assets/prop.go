@@ -44,6 +44,9 @@ type PropDefinition struct {
 	Name           string
 	views          map[string]uint32
 	viewNames      []string
+	// viewResources is each view's descriptor key in table order, the blocks the
+	// warm-up walk (FUN_00421DD0) acquires for this definition.
+	viewResources []uint32
 }
 
 type PropView struct {
@@ -181,8 +184,23 @@ func parsePropDefinition(resource uint32, data []byte, resourceCount uint32) (Pr
 		}
 		definition.views[key] = descriptor
 		definition.viewNames = append(definition.viewNames, exactName)
+		definition.viewResources = append(definition.viewResources, descriptor)
 	}
 	return definition, nil
+}
+
+// WarmRecord is the record propwarm and shopwarm walk for a prop: its definition's
+// view descriptors in table order, read through this archive's cache. found is false
+// when the archive has no definition with that name.
+func (a *PropArchive) WarmRecord(name string) (WarmRecord, bool) {
+	if a == nil || a.cache == nil {
+		return WarmRecord{}, false
+	}
+	definition, found := a.definitions[asciiUpper(name)]
+	if !found {
+		return WarmRecord{}, false
+	}
+	return WarmRecord{Cache: a.cache, Blocks: append([]uint32(nil), definition.viewResources...)}, true
 }
 
 func (a *PropArchive) Definition(name string) (PropDefinition, bool) {

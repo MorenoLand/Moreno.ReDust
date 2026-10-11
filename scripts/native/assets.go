@@ -89,14 +89,13 @@ func IsDirectory(attributes uint32) bool {
 // is initialised to 1 and only cleared on success, so it distinguishes "allocated"
 // from "succeeded without a handle".
 //
-// **What this function does NOT do is pretend to know what the arithmetic means.**
-// `FUN_0042C420` is not decompiled, so its return value has no established
-// meaning here. The early return fires when `request - other + 300000` is
-// negative, which by inspection means the request is at least 300000 *smaller*
-// than whatever `other` is, so `other` is plainly not a free-space count: a
-// request that fits easily would otherwise be refused. The expression is
-// transcribed faithfully with neutral parameter names rather than given an
-// interpretation the evidence does not support.
+// `FUN_0042C420` is the freemem reading: the minimum of the available virtual, the
+// available page-file and the total physical bytes, from `GlobalMemoryStatus`
+// (verified from the cached decompile and assembly, 2026-10-11). So `other` is a
+// byte count of memory the host can give, and the early return fires when that
+// count exceeds the request by more than 300000 bytes. The flag this function
+// sets is read by FUN_004014F0, which returns 0x66 when the flag is still 0 after
+// the eviction walk; that part is not modelled by AllocatorArithmetic.
 const (
 	// AllocatorShortfall is the 300000-byte constant in the refusal test.
 	AllocatorShortfall = 300000
@@ -106,7 +105,7 @@ const (
 
 // AllocatorArithmetic reproduces `FUN_00401120`'s two expressions verbatim.
 //
-//	other := FUN_0042C420()                          // meaning not established
+//	other := FUN_0042C420()                          // free bytes, the minimum of three readings
 //	if (request - other + 300000 < 0) return early
 //	size := request - other + 500000
 //
@@ -243,10 +242,13 @@ func TakeFileNode(nodes []FileNode, head int, name string) (index int, node File
 //	    GlobalUnlock; return 0;
 //	}
 //
-// Verified miss path: load, allocate `size + 20000`, and on a null allocation
-// return **`0x66`**. Then parse, bump the count at `file[0x34E]`, and if the count
-// has passed the capacity at `file[0x34F]`, raise the capacity by **20** and
-// reallocate `capacity * 0x10` bytes as a moveable block.
+// Verified miss path (2026-10-11): the directory check FUN_00401D80 gives the size,
+// then FUN_00401120 runs with the request `size + 20000`, and if its flag is still
+// 0 the miss returns **`0x66`** (the eviction walk could not free enough). Otherwise
+// it loads with FUN_00401DE0, bumps the count at `file[0x34E]`, and if the count has
+// passed the capacity at `file[0x34F]`, raises the capacity by **20** and reallocates
+// `capacity * 0x10` bytes as a moveable block. The earlier reading of 0x66 as a null
+// allocation was wrong: FUN_00401DE0 does not check its GlobalAlloc result.
 const (
 	// SubResourceEntrySize is the 0x10 byte per-entry stride.
 	SubResourceEntrySize = 0x10
@@ -266,8 +268,9 @@ const (
 	// 0x34E, and SubResourceCapacitySlot the capacity, at 0x34F.
 	SubResourceCountSlot    = 0x34E
 	SubResourceCapacitySlot = 0x34F
-	// StatusNullAllocation is native status 0x66, returned when the headroom
-	// allocation for a sub-resource yields nothing.
+	// StatusNullAllocation is native status 0x66, returned by a sub-resource miss
+	// when the FUN_00401120 flag is 0 (free memory short after eviction). The port's
+	// acquire has no such gate, so this status is not produced.
 	StatusNullAllocation uint16 = 0x66
 )
 

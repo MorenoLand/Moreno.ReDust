@@ -3,6 +3,8 @@ package scripts
 import (
 	"fmt"
 	"strings"
+
+	"redust/assets"
 )
 
 // The script-attach statements actorscript, castscript, propscript, shopscript
@@ -23,14 +25,14 @@ import (
 //
 // The warm-ups actorwarm (12085, FUN_0040B450), castwarm (12088, FUN_0040B4D0),
 // propwarm (12086, FUN_0041F7E0) and shopwarm (12087, FUN_0041F860) read one
-// name and look it up the same way. They then preload the record's resource
-// blocks through FUN_0040E120 or FUN_00421DD0. Those call FUN_004014F0 and
-// FUN_00401670, which only move the resource cache: a load leaves the entry at
-// zero uses. The cache's last-found globals (DAT_00442004 and DAT_00442014) are a
-// lookup hint that returns the same index either way. The port loads resources on
-// demand, so it carries the warm-ups' checks and statuses and not the preload.
-// The resource-missing diagnostics that FUN_0042C470 raises (0x100F, 0x1010,
-// 0x1203 and 0x1204) are not reproduced.
+// name and look it up the same way. They then walk the record's resource blocks
+// through FUN_0040E120 or FUN_00421DD0, which call FUN_004014F0 and FUN_00401670
+// and leave each entry cached with zero uses. The port walks the same blocks
+// through the record's cache (assets/warm.go). A block that cannot be acquired
+// raises 0x100F (actorwarm, castwarm) or 0x1203 (propwarm, shopwarm) for the
+// three directory failures, which the port returns as the run's error. The
+// release-side codes 0x1010 and 0x1204 cannot follow a successful acquire, so
+// they are not raised.
 
 // attachNameArgument reads the single name argument of an attach statement in
 // the native order: the argument is evaluated, an empty one is 0x0E, and a
@@ -170,6 +172,28 @@ func (h *GameHost) floorScriptCommand(call *ScriptCall) (int, uint16, error) {
 	return consumed, 0, nil
 }
 
+// warmDiagnosticCode reports the diagnostic a warm-up raises, and whether the
+// statement is a warm-up at all. FUN_0040E120 (actorwarm and castwarm) raises
+// 0x100F and FUN_00421DD0 (propwarm and shopwarm) raises 0x1203.
+func warmDiagnosticCode(statement string) (uint16, bool) {
+	switch statement {
+	case "actorwarm", "castwarm":
+		return assets.ResourceDiagnosticActor, true
+	case "propwarm", "shopwarm":
+		return assets.ResourceDiagnosticProp, true
+	}
+	return 0, false
+}
+
+// warmRecords returns the records a warm-up walks for its target, through the
+// host's hook. A missing hook is a gap, the same as the other unwired host reads.
+func (h *GameHost) warmRecords(statement, name string) ([]assets.WarmRecord, error) {
+	if h.Env.WarmRecords == nil {
+		return nil, fmt.Errorf("%w: %s has no resource records", ErrHostOpcodeUnimplemented, statement)
+	}
+	return h.Env.WarmRecords(statement, name)
+}
+
 // scriptAttachCommand handles the script-attach statements. handled is false
 // for opcodes it does not own.
 func (h *GameHost) scriptAttachCommand(name string, call *ScriptCall) (consumed int, status uint16, handled bool, err error) {
@@ -207,6 +231,15 @@ func (h *GameHost) scriptAttachCommand(name string, call *ScriptCall) (consumed 
 	}
 	if !found {
 		return 0, StatusNameNotFound, true, nil
+	}
+	if code, warm := warmDiagnosticCode(name); warm {
+		records, err := h.warmRecords(name, target)
+		if err != nil {
+			return 0, 0, true, err
+		}
+		if err := assets.WalkWarmRecords(code, records); err != nil {
+			return 0, 0, true, err
+		}
 	}
 	// The handler has run by now. Extra arguments are reported after it, the
 	// same way the native dispatcher reports them.

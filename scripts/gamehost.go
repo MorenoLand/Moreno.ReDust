@@ -101,6 +101,12 @@ type GameHostEnv struct {
 	// CastName is the Pascal name field of the table record at a zero-based
 	// index, which indextocast returns; false when the index is out of range.
 	CastName func(index int) (string, bool)
+	// WarmRecords lists the records a warm-up statement walks for its target, in
+	// the order the native walk visits them: actorwarm and propwarm give the
+	// target's record, castwarm the actors of the cast, and shopwarm the props of
+	// the shop. Each record names its cache and its block keys. Nil makes the
+	// warm-ups unavailable.
+	WarmRecords func(statement, name string) ([]assets.WarmRecord, error)
 	// OpenSetFile opens a set by file name ("hotlower.set", "nite.set") at its
 	// start view; StageScript returns the script a stage message runs against;
 	// AdvanceDay runs the day advance and Busy reports engine work (movies,
