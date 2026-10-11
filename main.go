@@ -2963,7 +2963,17 @@ func run() error {
 	// raiseKey is BOOTFILE keydown for the world: sendtoscene(currentscene(),
 	// keydown(arg)). It reports whether the scene chain took the key.
 	raiseKey := func(name string) bool {
-		if !scriptedSets[activeSetName] || !setEventsOpen || view.Name[0] == 0 {
+		if view.Name[0] == 0 {
+			return false
+		}
+		// The Sallowers' set entry stays hand-coded (its openset stops at the
+		// two-argument propxyz read, and the ambient loop reaches starxyz), so
+		// only its movement keys go to the chain.
+		if activeSetName == "sallower" {
+			if !story.SallowerKeyScripted(view.Resource, worldPoint[2], name, doorOwner) {
+				return false
+			}
+		} else if !scriptedSets[activeSetName] || !setEventsOpen {
 			return false
 		}
 		scene := strings.ToLower(string(view.Name[1:]))
@@ -3310,13 +3320,9 @@ func run() error {
 			if _, found := render.HitTestWorldActors(projectedActors, image.Pt(int(int16(point>>16)), int(int16(point)))); found {
 				cursor = "touch"
 			}
-			if scriptedSets[activeSetName] && setEventsOpen {
+			if scriptedSets[activeSetName] && setEventsOpen || activeSetName == "sallower" && story.SallowerCursorScripted(view.Resource) {
 				if cursor != "touch" {
 					cursor = sceneCursor(point, cursor)
-				}
-			} else if activeSetName == "sallower" {
-				if _, found := story.SallowerDoorAt(view.Resource, worldPoint[2], point); found {
-					cursor = "touch"
 				}
 			} else if activeSetName == "hotlower" {
 				if _, found := story.HotLowerDoorAt(view.Resource, worldPoint[2], point); found {
@@ -5666,7 +5672,7 @@ func run() error {
 					return currentFrame, false, nil
 				}
 			}
-			if mouseEvent.Button == ebiten.MouseButtonLeft && scriptedSets[activeSetName] && setEventsOpen && view.Name[0] != 0 {
+			if mouseEvent.Button == ebiten.MouseButtonLeft && (scriptedSets[activeSetName] && setEventsOpen || activeSetName == "sallower" && story.SallowerMouseScripted(view.Resource)) && view.Name[0] != 0 {
 				// BOOTFILE mousedown: hittest found no actor or button, so the
 				// click goes to the scene as sendtoscene(<scene>, mousedown(<point>)).
 				scene := strings.ToLower(string(view.Name[1:]))
