@@ -149,6 +149,9 @@ func (h *GameHost) hostValue(name string, call *ScriptCall) (Record, int, uint16
 	case "calcturn":
 		record, consumed, status, err := h.calcTurn(call)
 		return record, consumed, status, true, err
+	case "type":
+		record, consumed, status, err := h.typeName(call)
+		return record, consumed, status, true, err
 	}
 	return Record{}, 0, 0, false, nil
 }

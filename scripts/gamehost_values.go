@@ -99,3 +99,46 @@ func (h *GameHost) calcTurn(call *ScriptCall) (Record, int, uint16, error) {
 	}
 	return Record{Kind: 4, Data: uint32(int32(turn))}, end + 1 - call.Start, 0, nil
 }
+
+// typeName is type, FUN_00415AC0, value 20050. FUN_004220A0 evaluates one
+// expression, and the name of its record kind is returned as a new string: 2 is
+// "logic" (DAT_0045D4EC), 3 is "text" (DAT_0045D4FC), 4 is "number" (DAT_0045D4F4),
+// and any other kind is "unknown" (DAT_0045D37C). FUN_00427FC0 writes each Pascal
+// length byte, and FUN_00421F60 stores the string in a register, which reports
+// 0x36 when all twenty are in use. The texts are the engine string pool entries at
+// 0x0045D4ED, 0x0045D4FD, 0x0045D4F5 and 0x0045D37D (scripts/stringpool.go), and
+// the native copies them from those addresses. A kind-2, -3 or -4 argument is
+// released the way the port's other argument readers release it; whether the
+// native frees a discarded argument's register was not traced.
+func (h *GameHost) typeName(call *ScriptCall) (Record, int, uint16, error) {
+	if !hostOpen(call) {
+		return Record{}, 0, ScriptStatusMalformed, nil
+	}
+	record, consumed, status, err := call.Eval(call.Start + 2)
+	if err != nil || status != 0 {
+		return Record{}, 0, status, err
+	}
+	name := "unknown"
+	switch record.Kind {
+	case 2:
+		name = "logic"
+	case 3:
+		name = "text"
+	case 4:
+		name = "number"
+	}
+	if record.Kind >= 2 && record.Kind <= 4 {
+		if _, status, err := call.Interpreter.Value(record); err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+	}
+	result, status, err := call.Interpreter.Record(ScriptValue{Kind: 3, Text: name})
+	if err != nil || status != 0 {
+		return Record{}, 0, status, err
+	}
+	end := call.Start + 2 + consumed
+	if call.Kind(end) != opClose {
+		return Record{}, 0, ScriptStatusMalformed, nil
+	}
+	return result, end + 1 - call.Start, 0, nil
+}
