@@ -2943,6 +2943,16 @@ func run() error {
 		}
 		return startScriptSourceIn(label, nil, source, nil)
 	}
+	// FUN_0040FB00 hands a kind 4 (flat) loop to FUN_00412DE0, which runs its
+	// "<owner>", <callback>() message through the sendtoflat command (FUN_00412EC0,
+	// the same forwarder sendtoflat uses). The loop's frame chain is not traced.
+	raiseFlatLoop := func(loop scripts.ScriptLoop) error {
+		source, label := fmt.Sprintf("sendtoflat(%q,%s())", loop.Owner, loop.Callback), loop.Owner+" "+loop.Callback+"()"
+		if scriptTask != nil {
+			return runScriptIn(label, nil, source)
+		}
+		return startScriptSourceIn(label, nil, source, nil)
+	}
 	scriptHost.Env.EndBall = func(name, message string) error {
 		source, label := fmt.Sprintf("sendtoprop(%q,endball(%q))", name, message), name+" endball("+message+")"
 		if scriptTask != nil {
@@ -3103,6 +3113,9 @@ func run() error {
 				}
 				if loop.Kind == scripts.LoopKindProp {
 					return 0, raisePropLoop(loop)
+				}
+				if loop.Kind == scripts.LoopKindFlat {
+					return 0, raiseFlatLoop(loop)
 				}
 				return 0, fmt.Errorf("unknown native loop callback %q", loop.Callback)
 			}
