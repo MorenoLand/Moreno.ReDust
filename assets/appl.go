@@ -90,26 +90,37 @@ func newContainer(reader io.ReaderAt, size int64, closer io.Closer) (*Container,
 
 func (c *Container) Header() Header { return c.header }
 
-func (c *Container) ReadEntry(index uint32) ([]byte, error) {
+// recordLength is the directory step of a load: the index must be in range and
+// have a file offset, and the record header must carry the same index (FUN_00401D80,
+// which FUN_004014F0 runs before its memory gate). It returns the payload's file
+// offset and length. The length is the size the gate is asked about, and no
+// payload byte is read here.
+func (c *Container) recordLength(index uint32) (int64, uint32, error) {
 	offset, err := c.entryOffset(index)
 	if err != nil {
-		return nil, err
+		return 0, 0, err
 	}
 	if offset == 0 {
-		return nil, fmt.Errorf("resource %d: %w", index, ErrMissingEntry)
+		return 0, 0, fmt.Errorf("resource %d: %w", index, ErrMissingEntry)
 	}
 	if int64(offset) > c.size-8 {
-		return nil, fmt.Errorf("resource %d record header exceeds APPL file size", index)
+		return 0, 0, fmt.Errorf("resource %d record header exceeds APPL file size", index)
 	}
 	var record [8]byte
 	if _, err := io.ReadFull(io.NewSectionReader(c.reader, int64(offset), int64(len(record))), record[:]); err != nil {
-		return nil, fmt.Errorf("read resource %d record header: %w", index, err)
+		return 0, 0, fmt.Errorf("read resource %d record header: %w", index, err)
 	}
 	if id := binary.LittleEndian.Uint32(record[0:4]); id != index {
-		return nil, fmt.Errorf("resource %d record contains index %d: %w", index, id, ErrRecordIndexMismatch)
+		return 0, 0, fmt.Errorf("resource %d record contains index %d: %w", index, id, ErrRecordIndexMismatch)
 	}
-	length := binary.LittleEndian.Uint32(record[4:8])
-	dataOffset := int64(offset) + int64(len(record))
+	return int64(offset) + int64(len(record)), binary.LittleEndian.Uint32(record[4:8]), nil
+}
+
+func (c *Container) ReadEntry(index uint32) ([]byte, error) {
+	dataOffset, length, err := c.recordLength(index)
+	if err != nil {
+		return nil, err
+	}
 	if uint64(length) > uint64(c.size-dataOffset) {
 		return nil, fmt.Errorf("resource %d payload length %d exceeds APPL file size", index, length)
 	}

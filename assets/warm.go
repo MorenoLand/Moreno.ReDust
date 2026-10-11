@@ -15,10 +15,10 @@ import (
 // variant is acquired and released in turn, and then the block itself is released.
 //
 // A failed acquire is the native raise: FUN_004014F0 returns nonzero and the warm-up
-// calls FUN_0042C470 with 0x100F (FUN_0040E120) or 0x1203 (FUN_00421DD0). Only the
-// three directory failures are mapped to the diagnostic, because only those are
-// verified in the port's model (key out of range, no file offset, record id not the
-// key). Read and host failures are returned as plain errors.
+// calls FUN_0042C470 with 0x100F (FUN_0040E120) or 0x1203 (FUN_00421DD0). The raise
+// is on any nonzero status (verified in both decompiles), so the three directory
+// failures and the memory gate's shortfall (0x66) are mapped to the diagnostic. Read
+// failures and other host failures are returned as plain errors.
 
 // WarmSubTableCountOffset is the sub-table's variant count, at block +0x72.
 const WarmSubTableCountOffset = 0x72
@@ -139,10 +139,10 @@ func warmVariantKeys(data []byte) ([]uint32, error) {
 	return keys, nil
 }
 
-// warmDiagnostic maps a directory failure to the warm-up's diagnostic. Other errors
-// (a closed cache, a short read) pass through unchanged.
+// warmDiagnostic maps a directory failure or a memory shortfall to the warm-up's
+// diagnostic. Other errors (a closed cache, a short read) pass through unchanged.
 func warmDiagnostic(code uint16, err error) error {
-	if errors.Is(err, ErrIndexOutOfRange) || errors.Is(err, ErrMissingEntry) || errors.Is(err, ErrRecordIndexMismatch) {
+	if errors.Is(err, ErrIndexOutOfRange) || errors.Is(err, ErrMissingEntry) || errors.Is(err, ErrRecordIndexMismatch) || errors.Is(err, ErrResourceMemoryShortfall) {
 		return &ResourceDiagnostic{Code: code, Cause: err}
 	}
 	return err
