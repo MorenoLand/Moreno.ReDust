@@ -36,9 +36,14 @@ type ActorRecord struct {
 	TurnRate int16
 	// ZClip is +0x4E, stored unclamped (FUN_0040D4F0).
 	ZClip int16
-	// HitboxWidth is +0x50; actorhitbox stores only its first number for an
-	// actor (FUN_0040BC40).
+	// HitboxWidth is +0x50, the z half-size: actorhitbox's first number for an
+	// actor (FUN_0040BC40 stores it through the record copy).
 	HitboxWidth int16
+	// HitboxSide is +0x52, the x and y half-size: actorhitbox's second number.
+	// The disassembly of FUN_0040BC40 stores it through the same copy (a
+	// MOV word ptr at copy+0x52 that the decompile omits); the constructor sets
+	// it to 0. The ball hit test (FUN_00410E50) needs it at least 1.
+	HitboxSide int16
 	// Value is actorvalue (FUN_0040D450).
 	Value int32
 	// Set, Star and Owner are the 16-byte name fields at +0x64, +0x74 and
@@ -181,6 +186,7 @@ type ActorRecordState struct {
 	TurnRate    int16                 `json:"turnRate"`
 	ZClip       int16                 `json:"zclip"`
 	HitboxWidth int16                 `json:"hitboxWidth"`
+	HitboxSide  int16                 `json:"hitboxSide"`
 	Value       int32                 `json:"value"`
 	Set         string                `json:"set"`
 	Star        string                `json:"star"`
@@ -200,7 +206,7 @@ func (t *ScriptActors) Snapshot(names []string) map[string]ActorRecordState {
 		if status != 0 {
 			continue
 		}
-		state := ActorRecordState{Visible: actor.Visible, Placed: actor.Placed, Heading: actor.Heading, Position: actor.Position, Pose: actor.Pose, Frame: actor.Frame, Speed: actor.Speed, Depth: actor.Depth, Scale: actor.Scale, TurnRate: actor.TurnRate, ZClip: actor.ZClip, HitboxWidth: actor.HitboxWidth, Value: actor.Value, Set: actor.Set, Star: actor.Star, Owner: actor.Owner}
+		state := ActorRecordState{Visible: actor.Visible, Placed: actor.Placed, Heading: actor.Heading, Position: actor.Position, Pose: actor.Pose, Frame: actor.Frame, Speed: actor.Speed, Depth: actor.Depth, Scale: actor.Scale, TurnRate: actor.TurnRate, ZClip: actor.ZClip, HitboxWidth: actor.HitboxWidth, HitboxSide: actor.HitboxSide, Value: actor.Value, Set: actor.Set, Star: actor.Star, Owner: actor.Owner}
 		if job := actor.Job; job != nil {
 			state.JobMode, state.JobTarget, state.JobHeading = job.Mode, job.Target, job.Heading
 			if job.Walk != nil {
@@ -226,7 +232,7 @@ func (t *ScriptActors) Restore(states map[string]ActorRecordState) error {
 		}
 		actor.Visible, actor.Placed, actor.Heading, actor.Position = state.Visible, state.Placed, state.Heading, state.Position
 		actor.Pose, actor.Frame, actor.Speed, actor.Depth, actor.Scale = state.Pose, state.Frame, state.Speed, state.Depth, state.Scale
-		actor.TurnRate, actor.ZClip, actor.HitboxWidth, actor.Value = state.TurnRate, state.ZClip, state.HitboxWidth, state.Value
+		actor.TurnRate, actor.ZClip, actor.HitboxWidth, actor.HitboxSide, actor.Value = state.TurnRate, state.ZClip, state.HitboxWidth, state.HitboxSide, state.Value
 		actor.Set, actor.Star, actor.Owner, actor.Job = state.Set, state.Star, state.Owner, nil
 		if state.JobMode != 0 {
 			job := &ActorJob{Mode: state.JobMode, Target: state.JobTarget, Heading: state.JobHeading}

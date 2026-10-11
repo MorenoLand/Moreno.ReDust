@@ -130,9 +130,8 @@ func (h *GameHost) StepBalls() error {
 	return nil
 }
 
-// stepBall is one pass of FUN_00410980 for a ball. The actor boxes are not tested:
-// the recovered code tests an actor's second half-size, which no decoded write sets,
-// so no actor stops a ball here.
+// stepBall is one pass of FUN_00410980 for a ball: the lifetime, the motion, the
+// ground and cell tests, then the actor boxes and the player box.
 func (h *GameHost) stepBall(ball *PropBallJob) error {
 	ball.Lifetime--
 	if ball.Lifetime < 0 {
@@ -174,13 +173,62 @@ func (h *GameHost) stepBall(ball *PropBallJob) error {
 		ball.Active = false
 		return h.endBall(ball.Name, "building")
 	}
-	if h.ballMeetsPlayer([3]int32{int32(oldX), int32(oldY), int32(oldZ)}, [3]int32{int32(ball.X), int32(ball.Y), int32(ball.Z)}) {
+	oldPos := [3]int32{int32(oldX), int32(oldY), int32(oldZ)}
+	newPos := [3]int32{int32(ball.X), int32(ball.Y), int32(ball.Z)}
+	if actor := h.ballMeetsActor(oldPos, newPos); actor != nil {
+		h.placeBall(ball)
+		ball.Active = false
+		return h.endBall(ball.Name, actor.Name)
+	}
+	if h.ballMeetsPlayer(oldPos, newPos) {
 		h.placeBall(ball)
 		ball.Active = false
 		return h.endBall(ball.Name, "player")
 	}
 	h.placeBall(ball)
 	return nil
+}
+
+// ballMeetsActor is the actor loop of FUN_00410980: the first actor in table order
+// whose box FUN_00410E50 meets, or nil. The actors are the script actors; the set
+// is DAT_00459A82, the current set, and nil when no set is reported.
+func (h *GameHost) ballMeetsActor(old, new [3]int32) *ActorRecord {
+	if h.Actors == nil || h.Env.CurrentSet == nil {
+		return nil
+	}
+	set := h.Env.CurrentSet()
+	for index := 1; index <= h.Actors.Count(); index++ {
+		actor, ok := h.Actors.At(index)
+		if ok && actorBoxMeets(actor, set, old, new) {
+			return actor
+		}
+	}
+	return nil
+}
+
+// actorBoxMeets is FUN_00410E50 for one actor. The actor must be visible (+0x00),
+// placed (+0x12) and in the current set (+0x64, compared with FUN_0042E5B0), and
+// both half-sizes must be at least 1: +0x50 on z and +0x52 on x and y. The box is
+// centred on the actor's position (+0x1A, +0x1C, +0x1E). The walk from the old to
+// the new position meets it when, on every axis, the two positions are not both
+// on the same outer side of the box.
+func actorBoxMeets(actor *ActorRecord, set string, old, new [3]int32) bool {
+	if !actor.Visible || !actor.Placed || !strings.EqualFold(actor.Set, set) {
+		return false
+	}
+	zHalf, xyHalf := int32(actor.HitboxWidth), int32(actor.HitboxSide)
+	if zHalf < 1 || xyHalf < 1 {
+		return false
+	}
+	center := [3]int32{int32(actor.Position[0]), int32(actor.Position[1]), int32(actor.Position[2])}
+	size := [3]int32{xyHalf, xyHalf, zHalf}
+	for axis := range center {
+		low, high := center[axis]-size[axis], center[axis]+size[axis]
+		if old[axis] < low && new[axis] < low || high < old[axis] && high < new[axis] {
+			return false
+		}
+	}
+	return true
 }
 
 // placeBall stores the ball's position in its prop, as FUN_004214A0 stores the

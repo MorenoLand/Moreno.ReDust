@@ -544,7 +544,10 @@ func (h *GameHost) command(call *ScriptCall) (int, uint16, error) {
 		if status != 0 {
 			return 0, status, nil
 		}
+		// FUN_0040BC40 stores the first number at +0x50 and the second at +0x52
+		// (the second is in the disassembly only).
 		actor.HitboxWidth = int16(args[1].Int)
+		actor.HitboxSide = int16(args[2].Int)
 		return consumed, 0, nil
 	case "actorxyz":
 		actor, args, consumed, status, err := h.actorArgs(call, 4)
