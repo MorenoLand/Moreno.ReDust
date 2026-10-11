@@ -877,7 +877,7 @@ func run() error {
 		if err != nil {
 			return render.WorldPropSprite{}, err
 		}
-		return render.WorldPropSprite{Name: name, Set: prop.Set, Position: [3]int16{int16(prop.X), int16(prop.Y), int16(prop.Z)}, Heading: int16(prop.Degree), Scale: int16(prop.Scale), ZClip: int16(prop.ZClip), Frame: int(prop.Frame), Archive: archive, View: view, Visible: true}, nil
+		return render.WorldPropSprite{Name: name, Set: prop.Set, Position: prop.DrawPosition(), Heading: int16(prop.Degree), Scale: int16(prop.Scale), ZClip: int16(prop.ZClip), Frame: int(prop.Frame), Archive: archive, View: view, Visible: true}, nil
 	}
 	// Script props the open set shows are drawn from HOUSE.PRP with the view the
 	// script chose, as the bone is. The bone is drawn separately, and an unknown
@@ -965,9 +965,10 @@ func run() error {
 			Projected: prop.Projected,
 			// Words 10 and 11: the anchor's low word is y and its high word is x. The
 			// propxy statement stores its second argument in word 11 and its third in
-			// word 10 (FUN_0041FDF0), so X and Y are those arguments. The value form
-			// reads word 11 for selector 1 and word 10 for selector 2 (FUN_0041FEE0).
-			Anchor: uint32(uint16(int16(prop.Y))) | uint32(uint16(int16(prop.X)))<<16,
+			// word 10 (FUN_0041FDF0), which the anchor fields hold apart from the live
+			// position. The value form reads word 11 for selector 1 and word 10 for
+			// selector 2 (FUN_0041FEE0).
+			Anchor: prop.AnchorWord(),
 			// Word 20 is stored on the record. FUN_00420370 starts it at -1, and propxy
 			// (FUN_0041FDF0) and propis3d (FUN_0041FFD0) store -1 over a non-negative value.
 			Walker: prop.Walker,
@@ -1117,6 +1118,9 @@ func run() error {
 		prop := scriptHost.Props.Get("bone")
 		prop.Owner, prop.Visible, prop.View, prop.Set = boneOwner, boneWorldProp.Visible, boneWorldProp.View.Name, boneWorldProp.Set
 		prop.X, prop.Y, prop.Z = int32(boneWorldProp.Position[0]), int32(boneWorldProp.Position[1]), int32(boneWorldProp.Position[2])
+		// The bone record is a port mirror, not a native record traced here. Its anchor
+		// keeps the position it had before the split, which pointinprop read.
+		prop.AnchorX, prop.AnchorY = prop.X, prop.Y
 		prop.Degree, prop.Scale, prop.ZClip = boneWorldProp.Heading, int32(boneWorldProp.Scale), int32(boneWorldProp.ZClip)
 	}
 	publishBone()

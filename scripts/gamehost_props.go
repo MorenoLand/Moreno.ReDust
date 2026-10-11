@@ -22,6 +22,14 @@ type PropRecord struct {
 	View    string
 	Set     string
 	Star    string
+	// AnchorX and AnchorY are record words 11 and 10, the anchor propxy sets
+	// (FUN_0041FDF0). Only propxy's value form and the path A readers use them. The
+	// native record has no third anchor word, so the anchor has no z.
+	AnchorX, AnchorY int32
+	// X, Y and Z are the live position, record words 13, 14 and 15. propxyz
+	// (FUN_0041FBD0), propset and propstar (FUN_0041E9E0, FUN_0041EF60) and the ball
+	// write-back (FUN_00410980) set them, propxyz's value form (FUN_0041FCD0) reads
+	// them, and makeball (FUN_00410760) starts a ball from them.
 	X, Y, Z int32
 	Scale   int32
 	ZClip   int32
@@ -33,12 +41,14 @@ type PropRecord struct {
 	Frame int16
 
 	// Projected is record word 9 being non-zero, which selects path B of the
-	// projection (FUN_00421820). propset (FUN_0041E9E0), propstar (FUN_0041EF60) and
-	// propxyz (FUN_0041FBD0) each store 1 there, propxy (FUN_0041FDF0) stores 0, and
-	// propis3d (FUN_0041FFD0) stores the low word of its boolean argument.
-	// The port's new records start at 0, which is path A. The shop record constructor
-	// FUN_00420370 can set word 9 to 1 when the record's set is the open set and its
-	// star resolves (FUN_0041B850 not traced); the port does not build those records.
+	// projection (FUN_00421820): the live position, words 13 to 15. A zero word 9 is
+	// path A, the anchor, words 10 and 11. propset (FUN_0041E9E0), propstar
+	// (FUN_0041EF60), propxyz (FUN_0041FBD0) and the ball write-back (FUN_00410980,
+	// before each of its stores) set 1 there. propxy (FUN_0041FDF0) stores 0, and
+	// propis3d (FUN_0041FFD0) stores its argument. The port's new records start at 0,
+	// which is path A. The shop record constructor FUN_00420370 can set word 9 to 1
+	// when the record's set is the open set and its star resolves (FUN_0041B850 not
+	// traced); the port does not build those records.
 	Projected bool
 
 	// Walker is record word 20. A negative value runs the unscaled walker and a
@@ -60,6 +70,25 @@ func (r *PropRecord) UnmarshalJSON(data []byte) error {
 	}
 	*r = PropRecord(record)
 	return nil
+}
+
+// AnchorWord is the packed anchor the propxy value form reads: word 10 is y in the low
+// half and word 11 is x in the high half. FUN_0041FEE0 reads word 11 for selector 1,
+// word 10 for selector 2, and both as one dword for selector 3.
+func (p *PropRecord) AnchorWord() uint32 {
+	return uint32(uint16(int16(p.AnchorY))) | uint32(uint16(int16(p.AnchorX)))<<16
+}
+
+// DrawPosition is where the world draw places the prop. FUN_00421820 reads the live
+// position (words 13 to 15) for a projected record and the anchor (words 10 and 11) for
+// an unprojected one. The anchor has no z, so an unprojected prop keeps the live z. The
+// native path A draw is screen-anchored and does not read z, so that z is a port
+// approximation, the same one the draw used before the split.
+func (p *PropRecord) DrawPosition() [3]int16 {
+	if p.Projected {
+		return [3]int16{int16(p.X), int16(p.Y), int16(p.Z)}
+	}
+	return [3]int16{int16(p.AnchorX), int16(p.AnchorY), int16(p.Z)}
 }
 
 // ScriptProps holds the props scripts have touched, keyed case-insensitively.
@@ -490,10 +519,10 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 		// the record is stored after that (FUN_004214A0). The statement stores the low
 		// 16-bit word of each number (MOV word ptr): argument 2 goes to word 11 (x, the
 		// high word of the anchor) and argument 3 to word 10 (y, the low word), and word
-		// 9 is cleared (FUN_0041FDF0). The port keeps those two words in X and Y.
+		// 9 is cleared (FUN_0041FDF0). The live position, words 13 to 15, is not written.
 		h.Props.StopBall(args[0].Text)
 		prop := h.Props.Get(args[0].Text)
-		prop.X, prop.Y = int32(int16(args[1].Int)), int32(int16(args[2].Int))
+		prop.AnchorX, prop.AnchorY = int32(int16(args[1].Int)), int32(int16(args[2].Int))
 		prop.Projected = false
 		if extra {
 			return consumed, ScriptStatusMalformed, true, nil
@@ -648,8 +677,7 @@ func (h *GameHost) propValue(name string, call *ScriptCall) (Record, int, uint16
 		// low half) and word 11 is x (the high half), so the packed value is x<<16|y.
 		// Propxy (proptable.go, FUN_0041FEE0) applies the selector: 1 and 2 are the
 		// sign-extended halves, 3 is the whole dword, and anything else is 0x0E.
-		packed := uint32(uint16(int16(prop.Y))) | uint32(uint16(int16(prop.X)))<<16
-		value, _, err := Propxy(packed, args[1].Int)
+		value, _, err := Propxy(prop.AnchorWord(), args[1].Int)
 		if err != nil {
 			return Record{}, 0, ScriptStatusWrongType, true, nil
 		}

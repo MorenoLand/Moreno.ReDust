@@ -184,10 +184,13 @@ func (h *GameHost) stepBall(ball *PropBallJob) error {
 }
 
 // placeBall stores the ball's position in its prop, as FUN_004214A0 stores the
-// prop record the step copies.
+// prop record the step copies. FUN_00410980 sets record word 9 to 1 before each of its
+// four stores, so the prop is projected and drawn from its live position (words 13 to
+// 15). The anchor (words 10 and 11) is not written.
 func (h *GameHost) placeBall(ball *PropBallJob) {
 	prop := h.Props.Get(ball.Name)
 	prop.X, prop.Y, prop.Z = int32(ball.X), int32(ball.Y), int32(ball.Z)
+	prop.Projected = true
 }
 
 func (h *GameHost) ballBlocked(x, y int16) bool {
