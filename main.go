@@ -2283,6 +2283,22 @@ func run() error {
 	scriptHost.Env.CurrentFlat = func() string {
 		return strings.ToLower(string(stage.Scenes[currentScene].Name[1:]))
 	}
+	scriptHost.Env.SceneCount = func() (int, bool) {
+		if activeSet == nil {
+			return 0, false
+		}
+		return len(activeSet.Views()), true
+	}
+	scriptHost.Env.SceneName = func(index int) (string, bool) {
+		if activeSet == nil {
+			return "", false
+		}
+		views := activeSet.Views()
+		if index < 0 || index >= len(views) {
+			return "", false
+		}
+		return string(views[index].Name[1:]), true
+	}
 	// The open stage is NEW.FLT, which BOOTFILE opens with openstagefile("new.flt").
 	// Stages that other sets open are not modelled yet.
 	scriptHost.Env.FlatCount = func() (int, bool) { return len(stage.Scenes), true }

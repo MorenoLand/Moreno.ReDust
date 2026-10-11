@@ -147,6 +147,11 @@ type GameHostEnv struct {
 	// (FUN_00412110). FlatButtonName is a button's name, row +0x10 (FUN_00412210).
 	FlatButtonCount func(flat int) (int, error)
 	FlatButtonName  func(flat, index int) (string, error)
+	// SceneCount is the open set's scene count (dword at +0x1C0C, FUN_0041B4F0). The
+	// bool is false when no set is open.
+	SceneCount func() (int, bool)
+	// SceneName is the open set's 0-based scene name (row +0x0C, FUN_0041B540).
+	SceneName func(index int) (string, bool)
 	// Voice plays voicesound on the voice channel currentvoice reports.
 	Voice func(name string) error
 	// Tracks is the open track files and sound channels.
@@ -208,6 +213,15 @@ func (h *GameHost) openFlats() (int, bool) {
 		return 0, false
 	}
 	return h.Env.FlatCount()
+}
+
+// openScenes is the open set's scene count. The bool is false when no set is open,
+// which FUN_0041B4F0 and FUN_0041B540 test first (status 0x28).
+func (h *GameHost) openScenes() (int, bool) {
+	if h.Env.SceneCount == nil || h.Env.SceneName == nil {
+		return 0, false
+	}
+	return h.Env.SceneCount()
 }
 
 func (h *GameHost) gap(call *ScriptCall) error {
@@ -954,6 +968,37 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 			return Record{}, 0, 0x0a, nil
 		}
 		return text(string(pascal[1:]), consumed)
+	case "countscenes":
+		count, open := h.openScenes()
+		if !open {
+			return Record{}, 0, StatusNoActiveSet, nil
+		}
+		_, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		return number(int32(count), consumed)
+	case "indextoscene":
+		count, open := h.openScenes()
+		if !open {
+			return Record{}, 0, StatusNoActiveSet, nil
+		}
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		if len(args) != 1 || args[0].Kind != 4 {
+			return Record{}, 0, ScriptStatusWrongType, nil
+		}
+		index := int(args[0].Int)
+		if index < 1 || index > count {
+			return Record{}, 0, 0x0a, nil
+		}
+		name, ok := h.Env.SceneName(index - 1)
+		if !ok {
+			return Record{}, 0, 0x0a, nil
+		}
+		return text(name, consumed)
 	case "countshops":
 		_, consumed, status, err := call.Args()
 		if err != nil || status != 0 {
