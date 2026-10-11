@@ -31,8 +31,9 @@ func hostClose(call *ScriptCall) (int, uint16) {
 	return 3, 0
 }
 
-// hostCommand handles showcursor and hidecursor. FUN_0042B7E0 (showcursor) and
-// FUN_0042B7F0 (hidecursor) call ShowCursor(1) and ShowCursor(0), then run the
+// hostCommand handles showcursor, hidecursor, exportclut and mixclut.
+// FUN_0042B7E0 (showcursor) and FUN_0042B7F0 (hidecursor) call ShowCursor(1)
+// and ShowCursor(0), then run the
 // message pump FUN_0042BD80. The count is the Win32 display count: the cursor
 // shows while it is zero or more, so showcursor adds one and hidecursor takes
 // one away. The Win32 count rule is documented API behaviour and is not decoded
@@ -68,6 +69,9 @@ func (h *GameHost) hostCommand(name string, call *ScriptCall) (int, uint16, bool
 		}
 		consumed, status := hostClose(call)
 		return consumed, status, true, nil
+	case "mixclut":
+		consumed, status, err := mixclutStatement(call)
+		return consumed, status, true, err
 	}
 	return 0, 0, false, nil
 }
