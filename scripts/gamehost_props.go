@@ -153,33 +153,36 @@ func (h *GameHost) propArgs(call *ScriptCall, count int) (*PropRecord, []ScriptV
 
 // propNamedArgs reads the arguments of a prop statement or value and runs the
 // checks the native readers run, in the native order. FUN_00417100 (propxy's
-// statement), FUN_004171C0 (propxyz) and FUN_00417070 (the value form) return 0x1C
-// for a missing comma, and the port returns 0x1C for fewer arguments than count,
-// as pointinprop does. Then the name must be a string (0x0E, FUN_00421FC0) and in
-// the prop table (0x0A, FUN_004213C0). The caller checks the other arguments after
-// that, so an unknown name reports 0x0A whatever the other arguments are. Unlike
-// propArgs, it does not create a record for a name the table does not hold.
-func (h *GameHost) propNamedArgs(call *ScriptCall, count int) ([]ScriptValue, int, uint16, error) {
-	args, consumed, status, err := call.ArgsSeparated(ScriptStatusMissingComma)
+// statement), FUN_004171C0 (propxyz) and FUN_00417070 (the value form) read count
+// arguments and return 0x1C for a missing comma. The port also returns 0x1C for
+// fewer arguments than count, as pointinprop does. Then the name must be a string
+// (0x0E, FUN_00421FC0) and in the prop table (0x0A, FUN_004213C0). The caller
+// checks the other arguments after that, so an unknown name reports 0x0A whatever
+// the other arguments are. Unlike propArgs, it does not create a record for a name
+// the table does not hold.
+//
+// extra reports more arguments than count. The native dispatcher (FUN_00424890,
+// FUN_004137B0) runs the handler first and returns 2 only when the handler
+// succeeds and the token after the count arguments is not the closing paren, so
+// the caller does its work and then returns 2.
+func (h *GameHost) propNamedArgs(call *ScriptCall, count int) (args []ScriptValue, consumed int, extra bool, status uint16, err error) {
+	args, consumed, status, err = call.ArgsSeparated(ScriptStatusMissingComma)
 	if err != nil || status != 0 {
-		return nil, 0, status, err
+		return nil, 0, false, status, err
 	}
 	if len(args) < count {
-		return nil, 0, ScriptStatusMissingComma, nil
-	}
-	if len(args) != count {
-		return nil, 0, ScriptStatusMalformed, nil
+		return nil, 0, false, ScriptStatusMissingComma, nil
 	}
 	if args[0].Kind != 3 {
-		return nil, 0, ScriptStatusWrongType, nil
+		return nil, 0, false, ScriptStatusWrongType, nil
 	}
 	if h.Props == nil {
-		return nil, 0, 0, fmt.Errorf("props are unavailable")
+		return nil, 0, false, 0, fmt.Errorf("props are unavailable")
 	}
 	if !h.Props.Known(args[0].Text) {
-		return nil, 0, 0x0a, nil
+		return nil, 0, false, 0x0a, nil
 	}
-	return args, consumed, 0, nil
+	return args[:count], consumed, len(args) > count, 0, nil
 }
 
 // propCommand handles the prop setters. handled is false for other opcodes.
@@ -274,7 +277,7 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 		if name == "propxyz" {
 			count = 4
 		}
-		args, consumed, status, err := h.propNamedArgs(call, count)
+		args, consumed, extra, status, err := h.propNamedArgs(call, count)
 		if err != nil || status != 0 {
 			return 0, status, true, err
 		}
@@ -296,6 +299,10 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 			prop.Z = int32(int16(args[3].Int))
 		}
 		prop.Projected = name == "propxyz"
+		if extra {
+			// The dispatcher's closing-paren check runs after the handler and returns 2.
+			return consumed, ScriptStatusMalformed, true, nil
+		}
 		return consumed, 0, true, nil
 	case "propinstance":
 		// FUN_0041E840: propinstance(source, name) appends a copy of the source
@@ -363,7 +370,7 @@ func (h *GameHost) propValue(name string, call *ScriptCall) (Record, int, uint16
 		number := map[string]int32{"propdeg": int32(prop.Degree), "propvalue": prop.Value, "propscale": prop.Scale, "propzclip": prop.ZClip, "propspeed": prop.Speed}[name]
 		return Record{Kind: 4, Data: uint32(number)}, consumed, 0, true, nil
 	case "propxy":
-		args, consumed, status, err := h.propNamedArgs(call, 2)
+		args, consumed, extra, status, err := h.propNamedArgs(call, 2)
 		if err != nil || status != 0 {
 			return Record{}, 0, status, true, err
 		}
@@ -379,6 +386,9 @@ func (h *GameHost) propValue(name string, call *ScriptCall) (Record, int, uint16
 		value, _, err := Propxy(packed, args[1].Int)
 		if err != nil {
 			return Record{}, 0, ScriptStatusWrongType, true, nil
+		}
+		if extra {
+			return Record{}, 0, ScriptStatusMalformed, true, nil
 		}
 		return Record{Kind: 4, Data: uint32(value)}, consumed, 0, true, nil
 	case "propxyz":
