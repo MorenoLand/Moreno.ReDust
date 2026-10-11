@@ -283,6 +283,9 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 				return 0, ScriptStatusWrongType, true, nil
 			}
 		}
+		// FUN_0040F7D0 stops the prop's ball, a slot whose active word is cleared, and
+		// the record is stored after that (FUN_004214A0).
+		h.Props.StopBall(args[0].Text)
 		prop := h.Props.Get(args[0].Text)
 		// The statement stores the low 16-bit word of each number (MOV word ptr). For
 		// propxy, argument 2 is word 11 (x, the high word of the anchor) and argument 3
