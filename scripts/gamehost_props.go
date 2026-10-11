@@ -334,7 +334,24 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 		}
 		h.Props.StopBall(args[0].Text)
 		return consumed, 0, true, nil
-	case "propdeg", "propvalue", "propscale", "propzclip", "propspeed":
+	case "propdeg":
+		// FUN_0041F2B0. The readers run first, then the name (0x0E, and 0x0A with no record
+		// created), then the value must be a number (0x0E). The low byte of the number is
+		// stored as a word in the record (AND AX,0xFF at record +0x18), then FUN_004214A0
+		// stores the record. Extra arguments run all of that and then return 2.
+		args, consumed, extra, status, err := h.propStatementArgs(call)
+		if err != nil || status != 0 {
+			return 0, status, true, err
+		}
+		if args[1].Kind != 4 {
+			return 0, ScriptStatusWrongType, true, nil
+		}
+		h.Props.Get(args[0].Text).Degree = int16(args[1].Int & 0xff)
+		if extra {
+			return consumed, ScriptStatusMalformed, true, nil
+		}
+		return consumed, 0, true, nil
+	case "propvalue", "propscale", "propzclip", "propspeed":
 		prop, args, consumed, status, err := h.propArgs(call, 2)
 		if err != nil || status != 0 {
 			return 0, status, true, err
@@ -343,8 +360,6 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 			return 0, ScriptStatusWrongType, true, nil
 		}
 		switch name {
-		case "propdeg":
-			prop.Degree = int16(args[1].Int & 0xff)
 		case "propvalue":
 			prop.Value = args[1].Int
 		case "propscale":
