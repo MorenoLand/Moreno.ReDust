@@ -127,6 +127,13 @@ type GameHostEnv struct {
 	// SceneChain is sendtoscene's [scene script, set script] chain for the
 	// named scene; found is false when the set has no such scene.
 	SceneChain func(name string) (chain []ScriptFrame, found bool, err error)
+	// SetScript is the open set's script (the u32 at SET metadata +0x1B78, DAT_00459A48)
+	// that sendtosetfx and sendtoset run a message against.
+	SetScript func() (*Program, error)
+	// FloorScript is the area script the set's table at +0x1B8C holds for a floor index
+	// (0..31), which sendtofloorfx runs. found is false for an index past the table.
+	FloorScript func(index int) (program *Program, found bool, err error)
+
 	AdvanceDay func() error
 	Busy       func() bool
 	// View is the player's scene name and facing ("north".."west");
@@ -644,6 +651,10 @@ func (h *GameHost) command(call *ScriptCall) (int, uint16, error) {
 			return 0, status, err
 		}
 		return consumed, 0, nil
+	case "sendtoset":
+		return h.sendToSetFx(call, nil)
+	case "sendtofloor":
+		return h.sendToFloorFx(call, nil)
 	case "sendtoactor":
 		return h.sendToActor(call)
 	case "sendtoscene":
@@ -1435,6 +1446,9 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 			return Record{}, 0, 0, fmt.Errorf("%s has no source", name)
 		}
 		return number(source(), consumed)
+	}
+	if value, consumed, status, handled, err := h.sendToValue(name, call); handled {
+		return value, consumed, status, err
 	}
 	if value, consumed, status, handled, err := h.hostValue(name, call); handled {
 		return value, consumed, status, err

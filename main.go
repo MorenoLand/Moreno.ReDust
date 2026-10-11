@@ -989,6 +989,29 @@ func run() error {
 		}
 		return nil, false, nil
 	}
+	// sendtosetfx and sendtoset run the open set's script; sendtofloorfx runs the
+	// area script at a floor index from the same table FUN_0041A1A0 reads, at SET
+	// metadata +0x1B8C. Both use the set resource SceneChain uses.
+	scriptHost.Env.SetScript = func() (*scripts.Program, error) {
+		if activeSet == nil {
+			return nil, fmt.Errorf("no set is open")
+		}
+		return scriptProgram(activeSet.File(), activeSet.ScriptResource())
+	}
+	scriptHost.Env.FloorScript = func(index int) (*scripts.Program, bool, error) {
+		if activeSet == nil {
+			return nil, false, nil
+		}
+		resource, ok := activeSet.SceneScriptResource(uint16(index))
+		if !ok {
+			return nil, false, nil
+		}
+		program, err := scriptProgram(activeSet.File(), resource)
+		if err != nil {
+			return nil, false, err
+		}
+		return program, true, nil
+	}
 	scriptInterpreter.Builtins = map[string]func(*scripts.ScriptCall) (int, uint16, error){}
 	var scriptBlackFrame render.IndexedFrame
 	// deliverScriptEvent raises an event the native way. A non-zero status is
