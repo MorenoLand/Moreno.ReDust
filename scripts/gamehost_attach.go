@@ -137,12 +137,45 @@ func (h *GameHost) buttonScriptCommand(call *ScriptCall) (int, uint16, error) {
 	return consumed, 0, nil
 }
 
+// floorScriptCommand is floorscript, FUN_0041AB70 (12037), a command with one
+// number argument. The native order, from the cached decompile and assembly: with
+// no open set (DAT_00459A24 clear) the status is 0x28 before the argument is read;
+// the argument is evaluated and an expression status passes through; a non-number
+// is 0x0E; an index outside 0 to 31 is 0x0E. A valid index reads the open set's
+// floor table at +0x1B8C (the value is not used), builds "Floor Script: " and the
+// index in the scratch DAT_00459BD0, clears the result slot DAT_00459720 through
+// FUN_00418930, and returns 0. It runs no script: its callees are the expression
+// reader, the string helpers, GlobalLock and GlobalUnlock, and FUN_00418930. The
+// text is the pool string at 0x0045D6A8, which FUN_00427FC0 turns into a Pascal
+// string in place. Nothing reads the scratch before a cached function rewrites
+// it (the four READ references to DAT_00459BD0 each follow a write in the same
+// function), and the cleared slot is read only by result (16010), which the port
+// does not wire. So the port carries the gates and the statuses, and not the
+// scratch or the slot. Extra arguments run the checks and then report 2, as in
+// the attach statements.
+func (h *GameHost) floorScriptCommand(call *ScriptCall) (int, uint16, error) {
+	if _, open := h.setRect(); !open {
+		return 0, StatusNoActiveSet, nil
+	}
+	args, consumed, extra, status, err := h.propReadArgs(call, 1)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	if args[0].Kind != 4 || args[0].Int < 0 || args[0].Int >= 0x20 {
+		return 0, ScriptStatusWrongType, nil
+	}
+	if extra {
+		return consumed, ScriptStatusMalformed, nil
+	}
+	return consumed, 0, nil
+}
+
 // scriptAttachCommand handles the script-attach statements. handled is false
 // for opcodes it does not own.
 func (h *GameHost) scriptAttachCommand(name string, call *ScriptCall) (consumed int, status uint16, handled bool, err error) {
 	switch name {
 	case "actorscript", "castscript", "propscript", "shopscript", "puppetscript", "buttonscript",
-		"actorwarm", "castwarm", "propwarm", "shopwarm":
+		"actorwarm", "castwarm", "propwarm", "shopwarm", "floorscript":
 	default:
 		return 0, 0, false, nil
 	}
@@ -153,6 +186,10 @@ func (h *GameHost) scriptAttachCommand(name string, call *ScriptCall) (consumed 
 	}
 	if name == "buttonscript" {
 		consumed, status, err = h.buttonScriptCommand(call)
+		return consumed, status, true, err
+	}
+	if name == "floorscript" {
+		consumed, status, err = h.floorScriptCommand(call)
 		return consumed, status, true, err
 	}
 	// FUN_00408AD0 tests DAT_00459A92, the open-puppet flag, before it reads its
