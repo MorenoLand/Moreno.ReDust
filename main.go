@@ -2125,7 +2125,13 @@ func run() error {
 					return false, err
 				}
 			}
-			dialogue, err := engine.NewPuppetDialogue(convPuppet, convTable.Entries, []string{line}, audioContext)
+			// A replay ends a puppet line on its authored cue timing. Its audio is muted but
+			// still plays in real time, which would make the line length depend on load.
+			voiceContext := audioContext
+			if *silentScript != "" {
+				voiceContext = nil
+			}
+			dialogue, err := engine.NewPuppetDialogue(convPuppet, convTable.Entries, []string{line}, voiceContext)
 			if err != nil {
 				return false, err
 			}
