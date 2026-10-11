@@ -23,10 +23,12 @@ import (
 //	handler                        the target's kind, 0x0E
 //	                               the target's lookup, 0x0A
 //
-// Only the senders whose target lookup and chain delivery the port already has
-// are here: sendtoactorfx, sendtoscenefx, sendtopropfx, sendtobootfx, sendtosetfx
-// and sendtofloorfx, plus the statements sendtoset and sendtofloor. sendtoshopfx is
-// in puppetValue, and sendtoflatfx and sendtobuttonfx stay gaps (see the ledger).
+// The senders whose target lookup and chain delivery the port has are here:
+// sendtoactorfx, sendtoscenefx, sendtopropfx, sendtobootfx, sendtosetfx,
+// sendtofloorfx, sendtoflatfx and sendtobuttonfx, plus the statements sendtoset and
+// sendtofloor. sendtoshopfx is in puppetValue. The flat senders run the flat and
+// button chains that gamehost_flats.go builds, and refuse the flats the port answers
+// by hand.
 
 // floorCount is the number of floor indexes the set's area table holds: FUN_0041A5C0
 // accepts 0 through 0x1F and reads the table at SET metadata +0x1B8C, 32 dwords.
@@ -34,8 +36,8 @@ const floorCount = 0x20
 
 // sendToBootLabel and sendToBootName are FUN_00418420's frame: the label is
 // "Boot Message: " (DAT_0045D5B8), and the Me and Target strings are both
-// DAT_0045D060, which is "System" in the engine string region. The port's
-// statement sendtoboot names its frame "boot" instead; the ledger records the gap.
+// DAT_0045D060, the Pascal string "System" (FUN_00427FC0 writes the length over the
+// placeholder byte before the text). The statement sendtoboot runs the same frame.
 const (
 	sendToBootLabel = "Boot Message: "
 	sendToBootName  = "System"
@@ -280,6 +282,150 @@ func (h *GameHost) sendToFloorFx(call *ScriptCall, result *Record) (int, uint16,
 	return h.sendToChainFx(call, chain, message, result)
 }
 
+// flatHandWritten reports whether the port answers a flat's messages by hand.
+func (h *GameHost) flatHandWritten(name string) bool {
+	return h.Env.FlatHandWritten != nil && h.Env.FlatHandWritten(name)
+}
+
+// sendToFlatFx is sendtoflatfx (20093), FUN_00412EE0 with a result slot. It runs the
+// message against the flat's script and then the stage script, the chain sendtoflat
+// builds, and returns the message's value. The checks run in the statement's order:
+// the stage (0x0B), the "(", the comma (0x1C), the name's kind (0x0E), the flat (0x0A).
+// A flat the port answers by hand has no value to return, so it reports a gap, and so
+// does a flat whose script is not runnable.
+func (h *GameHost) sendToFlatFx(call *ScriptCall, result *Record) (int, uint16, error) {
+	if !h.flatHooksWired() {
+		return 0, 0, h.gap(call)
+	}
+	if !h.Env.StageOpen() {
+		return 0, StatusNoActiveStage, nil
+	}
+	if status := sendToOpen(call); status != 0 {
+		return 0, status, nil
+	}
+	target, message, status, err := h.sendToTarget(call)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	if target.Kind != 3 {
+		return 0, ScriptStatusWrongType, nil
+	}
+	flat, found := h.Env.FlatIndex(target.Text)
+	if !found {
+		return 0, StatusNameNotFound, nil
+	}
+	flatName, ok := h.Env.FlatName(flat)
+	if !ok {
+		return 0, StatusNameNotFound, nil
+	}
+	if h.flatHandWritten(flatName) {
+		return 0, 0, h.gap(call)
+	}
+	flatProgram, ok, err := h.Env.FlatScript(flat)
+	if err != nil {
+		return 0, 0, err
+	}
+	if !ok {
+		return 0, 0, h.gap(call)
+	}
+	stageProgram, err := h.Env.StageScript("stage")
+	if err != nil {
+		return 0, 0, err
+	}
+	chain := []ScriptFrame{
+		{Program: flatProgram, Me: flatName, Target: flatName, Label: PoolLabelFlatScript},
+		{Program: stageProgram, Me: "stage", Target: flatName, Label: PoolLabelStageScript, Last: true},
+	}
+	return h.sendToChainFx(call, chain, message, result)
+}
+
+// sendToButtonFx is sendtobuttonfx (20092), FUN_00412A90 with a result slot. It runs
+// the message against the button's script, then the flat's, then the stage's, the
+// chain sendtobutton builds, and returns the message's value. The checks follow
+// FUN_00417070 and FUN_00412A90: the stage (0x0B), the "(", both commas (0x1C) before
+// either name's kind, the flat's kind (0x0E) and lookup (0x0A), then the button's kind
+// (0x0E) and lookup (0x0A). A hand-written flat or an unrunnable script is a gap.
+func (h *GameHost) sendToButtonFx(call *ScriptCall, result *Record) (int, uint16, error) {
+	if !h.buttonHooksWired() {
+		return 0, 0, h.gap(call)
+	}
+	if !h.Env.StageOpen() {
+		return 0, StatusNoActiveStage, nil
+	}
+	if status := sendToOpen(call); status != 0 {
+		return 0, status, nil
+	}
+	flatValue, buttonAt, status, err := h.sendToTarget(call)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	buttonTarget, buttonConsumed, status, err := call.Eval(buttonAt)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	buttonValue, status, err := call.Interpreter.Value(buttonTarget)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	comma := buttonAt + buttonConsumed
+	if call.Kind(comma) != opComma {
+		return 0, ScriptStatusMissingComma, nil
+	}
+	message := comma + 1
+	if flatValue.Kind != 3 {
+		return 0, ScriptStatusWrongType, nil
+	}
+	flat, found := h.Env.FlatIndex(flatValue.Text)
+	if !found {
+		return 0, StatusNameNotFound, nil
+	}
+	if buttonValue.Kind != 3 {
+		return 0, ScriptStatusWrongType, nil
+	}
+	button, found, err := h.flatButtonIndex(flat, buttonValue.Text)
+	if err != nil {
+		return 0, 0, err
+	}
+	if !found {
+		return 0, StatusNameNotFound, nil
+	}
+	flatName, ok := h.Env.FlatName(flat)
+	if !ok {
+		return 0, StatusNameNotFound, nil
+	}
+	buttonName, err := h.Env.FlatButtonName(flat, button)
+	if err != nil {
+		return 0, 0, err
+	}
+	if h.flatHandWritten(flatName) {
+		return 0, 0, h.gap(call)
+	}
+	buttonProgram, ok, err := h.Env.FlatButtonScript(flat, button)
+	if err != nil {
+		return 0, 0, err
+	}
+	if !ok {
+		return 0, 0, h.gap(call)
+	}
+	flatProgram, ok, err := h.Env.FlatScript(flat)
+	if err != nil {
+		return 0, 0, err
+	}
+	if !ok {
+		return 0, 0, h.gap(call)
+	}
+	stageProgram, err := h.Env.StageScript("stage")
+	if err != nil {
+		return 0, 0, err
+	}
+	chain := []ScriptFrame{
+		{Program: buttonProgram, Me: buttonName, Target: buttonName, Label: PoolLabelButtonScript},
+		{Program: flatProgram, Me: flatName, Target: buttonName, Label: PoolLabelFlatScript},
+		{Program: stageProgram, Me: "stage", Target: buttonName, Label: PoolLabelStageScript, Last: true},
+	}
+	return h.sendToChainFx(call, chain, message, result)
+}
+
 // sendToValue dispatches the value senders in this file. handled is false for a
 // name it does not own, so the caller's other handlers still see it.
 func (h *GameHost) sendToValue(name string, call *ScriptCall) (value Record, consumed int, status uint16, handled bool, err error) {
@@ -297,6 +443,10 @@ func (h *GameHost) sendToValue(name string, call *ScriptCall) (value Record, con
 		consumed, status, err = h.sendToSetFx(call, &result)
 	case "sendtofloorfx":
 		consumed, status, err = h.sendToFloorFx(call, &result)
+	case "sendtoflatfx":
+		consumed, status, err = h.sendToFlatFx(call, &result)
+	case "sendtobuttonfx":
+		consumed, status, err = h.sendToButtonFx(call, &result)
 	default:
 		return Record{}, 0, 0, false, nil
 	}

@@ -530,27 +530,10 @@ func (h *GameHost) puppetCommand(name string, call *ScriptCall) (consumed int, s
 		h.PuppetParams[args[0].Int-1] = int16(args[1].Int)
 		return consumed, 0, true, nil
 	case "sendtoboot":
-		// sendtoboot(message(args)) runs against the BOOTFILE script.
-		if call.Kind(call.Start+1) != opOpen {
-			return 0, ScriptStatusMalformed, true, nil
-		}
-		if h.Env.BootScript == nil {
-			return 0, 0, true, fmt.Errorf("%w: sendtoboot has no boot script", ErrHostOpcodeUnimplemented)
-		}
-		program, err := h.Env.BootScript()
-		if err != nil {
-			return 0, 0, true, err
-		}
-		message := call.Start + 2
-		chain := []ScriptFrame{{Program: program, Me: "boot", Target: "boot", Label: "Boot Message: ", Last: true}}
-		used, status, err := call.Interpreter.callCode(chain, 0, call.Chain, call.FrameIndex, call.Locals, call.Program, message, nil)
-		if err != nil || status != 0 {
-			return 0, status, true, err
-		}
-		if call.Kind(message+used) != opClose {
-			return 0, ScriptStatusMalformed, true, nil
-		}
-		return message + used + 1 - call.Start, 0, true, nil
+		// sendtoboot(message(args)) is FUN_00418400, which forwards to FUN_00418420
+		// with a zero result slot. sendToBootFx builds the boot frame for both forms.
+		consumed, status, err := h.sendToBootFx(call, nil)
+		return consumed, status, true, err
 	case "flushevents":
 		_, consumed, status, err := call.Args()
 		return consumed, status, true, err

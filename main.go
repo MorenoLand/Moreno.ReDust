@@ -961,30 +961,12 @@ func run() error {
 			if !strings.EqualFold(string(sceneView.Name[1:]), name) {
 				continue
 			}
-			me := strings.ToLower(name)
-			var chain []scripts.ScriptFrame
-			// FUN_0041A1A0 builds the chain from the view's own script (a
-			// walkable cell's resource), the script of its area (the table at
-			// metadata offset 0x1B8C) and the set script.
-			if sceneView.IsCell() {
-				program, err := scriptProgram(activeSet.File(), sceneView.Resource)
-				if err != nil {
-					return nil, false, err
-				}
-				chain = append(chain, scripts.ScriptFrame{Program: program, Me: me, Target: me, Label: "Scene Script: "})
-			}
-			if resource, ok := activeSet.SceneScriptResource(sceneView.ReferenceIndex); ok {
-				program, err := scriptProgram(activeSet.File(), resource)
-				if err != nil {
-					return nil, false, err
-				}
-				chain = append(chain, scripts.ScriptFrame{Program: program, Me: me, Target: me, Label: "Area Script: "})
-			}
-			program, err := scriptProgram(activeSet.File(), activeSet.ScriptResource())
+			chain, err := sceneChainFrames(activeSet, activeSetName, sceneView, string(sceneView.Name[1:]), func(resource uint32) (*scripts.Program, error) {
+				return scriptProgram(activeSet.File(), resource)
+			})
 			if err != nil {
 				return nil, false, err
 			}
-			chain = append(chain, scripts.ScriptFrame{Program: program, Me: me, Target: me, Label: "Set Script: ", Last: true})
 			return chain, true, nil
 		}
 		return nil, false, nil
@@ -2436,6 +2418,11 @@ func run() error {
 		}
 		program, err := flatResourceProgram(handlers[index].ScriptResource)
 		return program, err == nil, err
+	}
+	// mainScriptFallback answers mainpanel's and death's messages by hand, so a value
+	// send to either flat has no script value to return (see gamehost_sendto.go).
+	scriptHost.Env.FlatHandWritten = func(name string) bool {
+		return strings.EqualFold(name, "mainpanel") || strings.EqualFold(name, "death")
 	}
 	scriptHost.Env.Fallback = &mainScriptFallback{tiphat: func() error {
 		return startAvatarTiphat(nil)
@@ -5557,6 +5544,39 @@ func (p *scriptPresenter) PlayMovie(name string) error                 { return 
 func (p *scriptPresenter) MovieDone() bool                             { return p.movie() }
 func (p *scriptPresenter) PickInventory() error                        { return p.pick() }
 func (p *scriptPresenter) Picked() bool                                { return p.picked() }
+
+// sceneChainFrames is FUN_0041A1A0's chain for one scene view, in the order the frame
+// walk searches it: the view's own script when the view is a walkable cell, the area
+// script from the set's table at the view's ReferenceIndex, then the set script. Me is
+// the scene name for the cell frame, the decimal ReferenceIndex for the area frame
+// (FUN_0042E7D0 formats the signed short) and the set's name for the set frame
+// (DAT_00459A82). Target is the scene name in every frame. scene is the view's stored
+// name: FUN_0041B7C0 copies the row's own 16-byte name (row +0x0C), so the frames keep
+// the stored case rather than the caller's.
+func sceneChainFrames(set *assets.Set, setName string, view assets.SetView, scene string, program func(resource uint32) (*scripts.Program, error)) ([]scripts.ScriptFrame, error) {
+	var chain []scripts.ScriptFrame
+	if view.IsCell() {
+		loaded, err := program(view.Resource)
+		if err != nil {
+			return nil, err
+		}
+		chain = append(chain, scripts.ScriptFrame{Program: loaded, Me: scene, Target: scene, Label: "Scene Script: "})
+	}
+	if resource, ok := set.SceneScriptResource(view.ReferenceIndex); ok {
+		loaded, err := program(resource)
+		if err != nil {
+			return nil, err
+		}
+		area := fmt.Sprint(int16(view.ReferenceIndex))
+		chain = append(chain, scripts.ScriptFrame{Program: loaded, Me: area, Target: scene, Label: "Area Script: "})
+	}
+	loaded, err := program(set.ScriptResource())
+	if err != nil {
+		return nil, err
+	}
+	chain = append(chain, scripts.ScriptFrame{Program: loaded, Me: setName, Target: scene, Label: "Set Script: ", Last: true})
+	return chain, nil
+}
 
 // mainScriptFallback handles the flat messages the port routes to existing
 // code until flats run through the interpreter: mainpanel's tiphat.

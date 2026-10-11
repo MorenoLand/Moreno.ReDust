@@ -183,6 +183,10 @@ type GameHostEnv struct {
 	// flat message to Fallback (see gamehost_flats.go).
 	FlatScript       func(flat int) (program *Program, ok bool, err error)
 	FlatButtonScript func(flat, index int) (program *Program, ok bool, err error)
+	// FlatHandWritten reports a flat whose messages the port answers by hand
+	// (mainpanel and death, see mainScriptFallback in main.go). A value send to one
+	// of them has no port-side value, so sendtoflatfx and sendtobuttonfx report a gap.
+	FlatHandWritten func(name string) bool
 	// SceneCount is the open set's scene count (dword at +0x1C0C, FUN_0041B4F0). The
 	// bool is false when no set is open.
 	SceneCount func() (int, bool)
