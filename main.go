@@ -148,6 +148,10 @@ func run() error {
 	loadPath := flag.String("load", "", "load a ReDust save before starting")
 	flag.Parse()
 	if *silentScript != "" {
+		// Replays run on the frame clock, so their timing does not depend on machine load.
+		native.EnableVirtualTick()
+	}
+	if *silentScript != "" {
 		*silent = true
 	}
 	workspace, err := assets.NewWorkspace(*work)

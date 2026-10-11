@@ -16,6 +16,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 
 	"redust/render"
+	"redust/scripts/native"
 )
 
 type Game struct {
@@ -225,6 +226,8 @@ func RunSilent(frame render.IndexedFrame, onUpdate func() (render.IndexedFrame, 
 		return err
 	}
 	step := func(key *ebiten.Key, button *ebiten.MouseButton, released bool) error {
+		// One frame of replay time per step (see native.EnableVirtualTick).
+		native.AdvanceVirtualTick()
 		if key != nil && keyDown != nil {
 			keyDown(*key)
 		}
@@ -283,14 +286,10 @@ func RunSilent(frame render.IndexedFrame, onUpdate func() (render.IndexedFrame, 
 		case "mouse_move":
 			err = step(nil, nil, false)
 		case "wait":
-			deadline := time.Now().Add(time.Duration(*action.Milliseconds) * time.Millisecond)
+			deadline := native.NativeTickMilliseconds() + uint32(*action.Milliseconds)
 			for err == nil {
-				remaining := time.Until(deadline)
-				if remaining > 0 {
-					time.Sleep(min(remaining, time.Second/60))
-				}
 				err = step(nil, nil, false)
-				if remaining <= time.Second/60 {
+				if native.NativeTickMilliseconds() >= deadline {
 					break
 				}
 			}
@@ -310,7 +309,7 @@ func RunSilent(frame render.IndexedFrame, onUpdate func() (render.IndexedFrame, 
 				err = fmt.Errorf("wait_until action requires a state provider")
 				break
 			}
-			deadline := time.Now().Add(time.Duration(*action.Milliseconds) * time.Millisecond)
+			deadline := native.NativeTickMilliseconds() + uint32(*action.Milliseconds)
 			for {
 				if err = step(nil, nil, false); err != nil {
 					break
@@ -319,12 +318,10 @@ func RunSilent(frame render.IndexedFrame, onUpdate func() (render.IndexedFrame, 
 				if mismatch == nil {
 					break
 				}
-				remaining := time.Until(deadline)
-				if remaining <= 0 {
+				if native.NativeTickMilliseconds() >= deadline {
 					err = fmt.Errorf("wait_until timed out: %w", mismatch)
 					break
 				}
-				time.Sleep(min(remaining, time.Second/60))
 			}
 		}
 		if err != nil {
