@@ -4084,8 +4084,24 @@ func run() error {
 				} else {
 					currentFrame = nextFrame
 				}
+			case scripts.LookupOpcode("wipeleft"), scripts.LookupOpcode("wiperight"):
+				effectName = scripts.ScreenEffectName(effect)
+				direction := 0
+				if effect == scripts.LookupOpcode("wipeleft") {
+					direction = 1
+				}
+				transition, err = render.NewWipeEffect(currentFrame, nextFrame, duration, direction)
+			case scripts.LookupOpcode("irisopen"):
+				effectName = "irisopen"
+				transition, err = render.NewIrisOpenEffect(currentFrame, nextFrame, duration)
 			default:
-				return render.IndexedFrame{}, false, fmt.Errorf("flat script resource %d uses unsupported visual effect %d", source, effect)
+				kind, known := stripEffectKinds[effect]
+				schedule, scheduled := scripts.VisualEffectSchedule(effect, duration)
+				if !known || !scheduled {
+					return render.IndexedFrame{}, false, fmt.Errorf("flat script resource %d uses unsupported visual effect %d", source, effect)
+				}
+				effectName = scripts.ScreenEffectName(effect)
+				transition, err = render.NewScreenEffect(kind, currentFrame, nextFrame, schedule.TicksPerStep)
 			}
 			if err != nil {
 				return render.IndexedFrame{}, false, fmt.Errorf("start %s transition: %w", effectName, err)
@@ -5403,6 +5419,19 @@ func run() error {
 		return fmt.Errorf("close initial stage: %w", closeErr)
 	}
 	return nil
+}
+
+// stripEffectKinds maps the strip keywords that FUN_00407160 runs to the render
+// kinds that draw them. The schedule for each keyword is in scripts.VisualEffectSchedule.
+var stripEffectKinds = map[uint16]render.ScreenEffectKind{
+	scripts.LookupOpcode("wipeup"):      render.ScreenWipeUp,
+	scripts.LookupOpcode("wipedown"):    render.ScreenWipeDown,
+	scripts.LookupOpcode("scrollup"):    render.ScreenScrollUp,
+	scripts.LookupOpcode("scrolldown"):  render.ScreenScrollDown,
+	scripts.LookupOpcode("scrolleft"):   render.ScreenScrollLeft,
+	scripts.LookupOpcode("scrollright"): render.ScreenScrollRight,
+	scripts.LookupOpcode("venetian"):    render.ScreenVenetian,
+	scripts.LookupOpcode("irisclose"):   render.ScreenIrisClose,
 }
 
 func main() {

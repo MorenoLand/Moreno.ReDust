@@ -355,22 +355,36 @@ func (h *GameHost) puppetCommand(name string, call *ScriptCall) (consumed int, s
 		return consumed, 0, true, h.waitTicks(args[1].Int)
 	case "visualeffect":
 		// visualeffect(<effect keyword>, ticks): the keyword is a 24000-band
-		// record, not an expression.
+		// record, not an expression. FUN_00425D30 answers 0x0E for a keyword
+		// outside 24001..24014, 0x1C for a missing comma and 0x0E for a
+		// duration that is not a number, then clamps the duration to 1..1000.
 		if call.Kind(call.Start+1) != opOpen {
 			return 0, ScriptStatusMalformed, true, nil
 		}
 		effect := call.Kind(call.Start + 2)
-		if effect < 24000 || call.Kind(call.Start+3) != opComma {
+		if !ScreenEffectKeyword(effect) {
 			return 0, ScriptStatusWrongType, true, nil
+		}
+		if call.Kind(call.Start+3) != opComma {
+			return 0, ScriptStatusMissingComma, true, nil
 		}
 		ticks, used, status, err := call.Eval(call.Start + 4)
 		if err != nil || status != 0 {
 			return 0, status, true, err
 		}
-		if ticks.Kind != 4 || call.Kind(call.Start+4+used) != opClose {
+		if ticks.Kind != 4 {
+			return 0, ScriptStatusWrongType, true, nil
+		}
+		if call.Kind(call.Start+4+used) != opClose {
 			return 0, ScriptStatusMalformed, true, nil
 		}
-		return 4 + used + 1, 0, true, h.waitTicks(int32(ticks.Data))
+		// The wait is the handler's own schedule where it is verified
+		// (VisualEffectSchedule); other keywords keep the raw duration.
+		wait := int32(ticks.Data)
+		if schedule, ok := VisualEffectSchedule(effect, int(int32(ticks.Data))); ok {
+			wait = int32(schedule.Steps * schedule.TicksPerStep)
+		}
+		return 4 + used + 1, 0, true, h.waitTicks(wait)
 	case "cursor":
 		args, consumed, status, err := call.Args()
 		if err != nil || status != 0 {
