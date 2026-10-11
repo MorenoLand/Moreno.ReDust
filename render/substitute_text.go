@@ -38,9 +38,9 @@ var substituteFaces = struct {
 // from the curve tables, which are not traced, so only the index is verified.
 const substituteInkIndex = 0
 
-// substituteCoverage is the glyph coverage at which a pixel takes the ink. Text
-// is aliased, as GDI's raster text is on a palette DC, so the glyph edge is a
-// threshold and not a blend.
+// substituteCoverage is the glyph coverage at which a pixel takes the ink. The
+// glyph edge is a threshold, not a blend, so the text stays in palette index
+// space. Whether the native's text edges are antialiased is not verified.
 const substituteCoverage = 128
 
 // DrawSubstituteText draws drawstring's text on frame with its baseline-left
