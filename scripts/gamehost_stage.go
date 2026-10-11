@@ -158,3 +158,111 @@ func (h *GameHost) leaveStage(call *ScriptCall) (uint16, error) {
 	_, status, err = h.sendToFlat(sendCall)
 	return status, err
 }
+
+// openStageCommand is openstagefile(name), opcode 12060, FUN_00411860. The reference
+// runs, in order:
+//
+//	if (DAT_00459A00 != 0) return 0x0B;              // a stage is already open; no argument is read
+//	status = FUN_004220A0(argument); if status != 0 return status
+//	if argument kind != 3 return 0x0E;               // FUN_00421FC0: only a string converts
+//	status = FUN_004178C0(name); if status != 0 return status    // 0x34, 0x2A or 0x31
+//	FUN_00411900(name, &DAT_00459A00);               // the gate, stage, name and stage script word
+//	FUN_00413430(0);                                 // current flat 0, with its picture
+//	return FUN_00411D40();                           // openstage(), then "<flat>", openflat()
+//
+// The dispatcher requires "(" before the handler and ")" after a status 0 result, so
+// the install happens before that check, as it does natively: a surplus argument
+// installs the stage and then reports 2. FUN_00411900 also sets DAT_00459A02, the
+// stagevisible word, to 1; that is GameHost.StageVisible.
+//
+// Verified here: the inverted 0x0B gate, the argument's string check, the install
+// order and FUN_00411D40's two messages (see openStageFrames). The name check and the
+// search are FUN_004178C0's, which the host runs through scripts.ResolveStageFile.
+// A nil hook is a gap before anything runs, so an unwired host never installs half a
+// stage.
+func (h *GameHost) openStageCommand(call *ScriptCall) (int, uint16, error) {
+	if call.Kind(call.Start+1) != opOpen {
+		return 0, ScriptStatusMalformed, nil
+	}
+	if !h.openStageWired() {
+		return 0, 0, h.gap(call)
+	}
+	if status := OpenStageFileBlocked(ScriptContext{StageOpen: h.stageIsOpen()}); status != 0 {
+		return 0, status, nil
+	}
+	record, used, status, err := call.Eval(call.Start + 2)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	if record.Kind != ValueTypeString {
+		return 0, StatusWrongOperandType, nil
+	}
+	name, status, err := call.Interpreter.Value(record)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	status, err = h.Env.OpenStage(name.Text)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	h.StageVisible = 1
+	status, err = h.openStageFrames(call)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	closeAt := call.Start + 2 + used
+	if call.Kind(closeAt) != opClose {
+		return 0, ScriptStatusMalformed, nil
+	}
+	return closeAt + 1 - call.Start, 0, nil
+}
+
+// openStageWired reports whether every hook openstagefile uses is present, so that
+// nothing is installed before a gap can be reported.
+func (h *GameHost) openStageWired() bool {
+	return h.Env.StageOpen != nil && h.Env.OpenStage != nil && h.Env.CurrentFlat != nil && h.flatHooksWired()
+}
+
+// openStageFrames is FUN_00411D40, which runs once the stage is installed. The reference:
+//
+//	status = FUN_00413130("openstage()");            // the stage script, the Stage Script frame
+//	if status != 0 return status
+//	if the gate or the current flat index changed return 0
+//	FUN_00412DE0("\"<current flat>\", openflat()")   // sendtoflat(name, openflat())
+//	return that status, or 0 when it is 0
+//
+// The stage frame's Me and Target are DAT_00459A14, the stage's own name (FUN_00413230).
+// The recheck uses the current flat name as the stand-in for the index, as leaveStage
+// does. The guard word DAT_00459A04+0xD34 is not modelled.
+func (h *GameHost) openStageFrames(call *ScriptCall) (uint16, error) {
+	flat := h.Env.CurrentFlat()
+	stageProgram, err := h.Env.StageScript("stage")
+	if err != nil {
+		return 0, err
+	}
+	message, err := CompileText([]byte(PoolNameStageOpen))
+	if err != nil {
+		return 0, err
+	}
+	stageName := "stage"
+	if h.Env.StageName != nil {
+		if name := h.Env.StageName(); name != "" {
+			stageName = name
+		}
+	}
+	stageChain := []ScriptFrame{{Program: stageProgram, Me: stageName, Target: stageName, Label: PoolLabelStageScript, Last: true}}
+	_, status, err := call.Interpreter.Call(stageChain, call.Chain, call.FrameIndex, call.Locals, &message, 0)
+	if err != nil || status != 0 {
+		return status, err
+	}
+	if !h.stageIsOpen() || h.Env.CurrentFlat() != flat {
+		return 0, nil
+	}
+	send, err := CompileText([]byte(fmt.Sprintf("sendtoflat(%q, openflat())", flat)))
+	if err != nil {
+		return 0, err
+	}
+	sendCall := &ScriptCall{Interpreter: call.Interpreter, Chain: call.Chain, FrameIndex: call.FrameIndex, Locals: call.Locals, Program: &send, Start: 0}
+	_, status, err = h.sendToFlat(sendCall)
+	return status, err
+}

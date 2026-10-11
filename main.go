@@ -243,6 +243,10 @@ func run() error {
 		return fmt.Errorf("open initial stage: %w", err)
 	}
 	mainStage := stage
+	// openedStages holds the stage files this run has opened, by upper-case path.
+	// A closed stage stays here, as the reference keeps a checked-in file object on
+	// its cache list, so openstagefile of the same name reuses it.
+	openedStages := map[string]*assets.Stage{stage.Path: stage}
 	lease, err := stage.AcquireSceneFrameResource(0)
 	if err != nil {
 		stage.Close()
@@ -2278,8 +2282,73 @@ func run() error {
 		currentFrame, stageFrame, convDirty = frame, frame, true
 		return nil
 	}
+	// The stage script is the open stage's resource HeaderValue (FUN_004186D0 with
+	// DAT_00459A10). For NEW.FLT that is resource 1, as it was before openstagefile.
 	scriptHost.Env.StageScript = func(string) (*scripts.Program, error) {
-		return scriptProgram("DATA/NEW.FLT", 1)
+		if stage == nil {
+			return nil, fmt.Errorf("no stage is open")
+		}
+		return scriptProgram(stage.Path, stage.HeaderValue)
+	}
+	scriptHost.Env.StageName = func() string {
+		if stage == nil || len(stage.Name) == 0 {
+			return ""
+		}
+		return string(stage.Name[1:])
+	}
+	// openstagefile's install. The name is resolved as FUN_004178C0 does it (the
+	// validation and the search are scripts.ResolveStageFile). The port has one
+	// candidate, the DATA directory of the asset root, and it stands in for the
+	// eight prefixes, which the reference fills at startup and the static image
+	// does not hold. A stage already in openedStages is reused, as the cache reuses
+	// a checked-in object, so a closed NEW.FLT reopens as the same stage.
+	scriptHost.Env.OpenStage = func(name string) (uint16, error) {
+		var resolved string
+		resolution, status, err := scripts.ResolveStageFile(name, scripts.StageSearch{
+			PrefixOf: func(index int) (string, bool) {
+				return "DATA/", index == 1
+			},
+			Exists: func(candidate string) (bool, bool) {
+				path := strings.ToUpper(candidate)
+				if _, cached := openedStages[path]; !cached && !workspace.HasAsset(path) {
+					return false, false
+				}
+				resolved = path
+				return true, true
+			},
+		})
+		if resolution != scripts.StageResolved {
+			if *debug && err != nil {
+				log.Printf("openstagefile %q: %v", name, err)
+			}
+			return status, nil
+		}
+		next, cached := openedStages[resolved]
+		if !cached {
+			loaded, err := workspace.OpenStage(resolved)
+			if err != nil {
+				return 0, fmt.Errorf("open stage %s: %w", resolved, err)
+			}
+			openedStages[resolved] = loaded
+			next = loaded
+		}
+		// FUN_00411900 refuses a stage whose playfield is not 512 by 384.
+		if err := scripts.CheckStageHeaderGeometry(next.Width, next.Height); err != nil {
+			return 0, fmt.Errorf("stage %s: %w", resolved, err)
+		}
+		// The gate, the stage and the flat block (FUN_00411900), then flat 0
+		// (FUN_00413430(0)): the flat switch loads flat 0's picture and sets the
+		// current flat. A reopened stage clears the closed mark.
+		stage, closedStage = next, nil
+		if _, _, err := applyFlatTarget(0, 0, 0, 0); err != nil {
+			return 0, err
+		}
+		if stage == mainStage {
+			if err := refreshWorldScene(); err != nil {
+				return 0, err
+			}
+		}
+		return 0, nil
 	}
 	scriptHost.Env.Theme = func() string {
 		if themePlayer == nil {

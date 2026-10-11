@@ -39,10 +39,6 @@ const (
 	// StageNameStatusNotAFile is native status 0x31, returned when a directory
 	// entry matched by name is not a regular file.
 	StageNameStatusNotAFile uint16 = 0x31
-	// StageNameStatusNoExtension is native status 0x34's sibling for a name
-	// with no dot: the reference keeps searching the extensionless branch, so a
-	// name with no extension is not rejected here.
-	StageNameStatusNoExtension uint16 = 0
 )
 
 // Stage file name bounds, verified.
@@ -151,18 +147,6 @@ func ValidateStageName(name string) (status uint16, reason StageNameRejection, e
 	return 0, StageNameAccepted, nil
 }
 
-// HasStageExtension reports whether a validated name carries a dot. The
-// reference branches on this: an extensionless name is searched directly,
-// while a name with an extension is tried against each of the eight prefixes.
-func HasStageExtension(name string) bool {
-	for i := 0; i < len(name); i++ {
-		if name[i] == '.' {
-			return true
-		}
-	}
-	return false
-}
-
 // Stage resolution outcome, mirroring the tail of FUN_004178C0.
 type StageResolution uint8
 
@@ -180,12 +164,10 @@ const (
 
 // StageSearch describes the search the reference performs after validation.
 type StageSearch struct {
-	// Extension reports whether the name carried a dot, which selects the two
-	// branches: a name with an extension is prefixed and tried up to eight
-	// times, a name without one is looked up directly.
-	Extension bool
-	// Candidates is how many prefixed names to try. It is exactly
-	// StageNamePrefixCandidates for a name with an extension and 1 otherwise.
+	// Candidates is how many prefixed names to try. The reference always tries
+	// StageNamePrefixCandidates. It makes no difference whether the name has a
+	// dot: FUN_00401120 overwrites the dot flag with its memory-gate result before
+	// the search loop reads it, so there is no extensionless branch.
 	Candidates int
 	// PrefixOf returns the prefix candidate to prepend for a given 1-based
 	// index, or ok=false when the index is out of range. The reference builds
@@ -208,15 +190,10 @@ func ResolveStageFile(name string, search StageSearch) (StageResolution, uint16,
 		return StageUnvalidated, status, err
 	}
 	candidates := search.Candidates
-	if search.Extension {
-		if candidates == 0 {
-			// The reference always tries exactly eight, so an unset count
-			// means the verified eight rather than none.
-			candidates = StageNamePrefixCandidates
-		}
-	} else {
-		// The extensionless branch looks the name up directly.
-		candidates = 1
+	if candidates == 0 {
+		// The reference always tries exactly eight, so an unset count means the
+		// verified eight rather than none.
+		candidates = StageNamePrefixCandidates
 	}
 	if search.PrefixOf == nil || search.Exists == nil {
 		return StageUnvalidated, 0, fmt.Errorf("stage name %q validated but no search was supplied", name)
@@ -244,12 +221,8 @@ func ResolveStageFile(name string, search StageSearch) (StageResolution, uint16,
 		return StageNotAFile, lastNotAFile,
 			fmt.Errorf("stage name %q matched an entry that is not a regular file", name)
 	}
-	if search.Extension && candidates >= StageNamePrefixCandidates {
-		return StagePrefixesExhausted, StageNameStatusExhausted,
-			fmt.Errorf("stage name %q matched none of the %d candidate prefixes", name, StageNamePrefixCandidates)
-	}
 	return StagePrefixesExhausted, StageNameStatusExhausted,
-		fmt.Errorf("stage name %q was not found", name)
+		fmt.Errorf("stage name %q matched none of the %d candidate prefixes", name, candidates)
 }
 
 // Stage header geometry, verified from FUN_00411900, the routine that installs

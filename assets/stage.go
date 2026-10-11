@@ -31,7 +31,10 @@ type Stage struct {
 	Name        []byte
 	PaletteRaw  []byte
 	Scenes      []StageScene
-	cache       *ResourceCache
+	// Path is the workspace path the stage was opened from, such as DATA/NEW.FLT.
+	// The stage script is the resource HeaderValue names in this file.
+	Path  string
+	cache *ResourceCache
 }
 
 func ParseStage(data []byte) (Stage, error) {
@@ -98,6 +101,7 @@ func (w Workspace) OpenStage(name string) (*Stage, error) {
 		return nil, err
 	}
 	stage.cache = cache
+	stage.Path = name
 	return &stage, nil
 }
 

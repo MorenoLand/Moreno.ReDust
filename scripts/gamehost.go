@@ -234,6 +234,16 @@ type GameHostEnv struct {
 	// DAT_00459A00 when closestagefile closes the stage. It is called only after the
 	// leave step has run with the stage still open. Nil makes closestagefile a gap.
 	CloseStage func()
+	// OpenStage is the install openstagefile performs: FUN_004178C0 validates and
+	// resolves the name (status 0x34, 0x2A or 0x31 comes back as the status), then
+	// FUN_00411900 installs the stage (the gate, the stage object and its name) and
+	// FUN_00413430(0) makes flat 0 current. The host loads the file through its
+	// workspace. status is 0 once the stage is installed. Nil makes openstagefile a gap.
+	OpenStage func(name string) (status uint16, err error)
+	// StageName is the open stage's name, DAT_00459A14: the header's Pascal name at
+	// 0x824, copied by FUN_00411900. FUN_00413230 gives the stage frame it as Me and
+	// Target. Nil makes the openstage frame use "stage".
+	StageName func() string
 	// FlatButtons is the button block of the named flat in the open stage
 	// (FUN_00413530 by name, then the block the flat's record names). found is
 	// false for a flat the stage does not have.
@@ -735,6 +745,8 @@ func (h *GameHost) command(call *ScriptCall) (int, uint16, error) {
 		return h.stageVisibleCommand(call)
 	case "closestagefile":
 		return h.closeStageCommand(call)
+	case "openstagefile":
+		return h.openStageCommand(call)
 	case "sendtoactor":
 		return h.sendToActor(call)
 	case "sendtoscene":
