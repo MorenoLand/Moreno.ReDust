@@ -493,22 +493,46 @@ func (h *GameHost) propValue(name string, call *ScriptCall) (Record, int, uint16
 		}
 		return Record{Kind: 4, Data: uint32(value)}, consumed, 0, true, nil
 	case "propxyz":
-		prop, args, consumed, status, err := h.propArgs(call, 2)
+		// FUN_0041FCD0. FUN_00417070 reads the name and the selector (0x1C for a missing
+		// comma). The name must be a string (0x0E) and in the prop table (0x0A, no record
+		// created), and then the selector must be a number (0x0E). Selectors 1, 2 and 3
+		// are words 13, 14 and 15, sign-extended, and selector 4 is words 13 and 14 as one
+		// dword with word 13 high. Any other selector is 0x0E. Extra arguments compute the
+		// value and then return 2.
+		args, consumed, extra, status, err := h.propReadArgs(call, 2)
 		if err != nil || status != 0 {
 			return Record{}, 0, status, true, err
+		}
+		if h.Props == nil {
+			return Record{}, 0, 0, true, fmt.Errorf("props are unavailable")
+		}
+		if args[0].Kind != 3 {
+			return Record{}, 0, ScriptStatusWrongType, true, nil
+		}
+		prop, found := h.Props.Lookup(args[0].Text)
+		if !found {
+			return Record{}, 0, StatusNameNotFound, true, nil
 		}
 		if args[1].Kind != 4 {
 			return Record{}, 0, ScriptStatusWrongType, true, nil
 		}
+		var data uint32
 		switch args[1].Int {
 		case 1:
-			return Record{Kind: 4, Data: uint32(prop.X)}, consumed, 0, true, nil
+			data = uint32(int32(int16(prop.X)))
 		case 2:
-			return Record{Kind: 4, Data: uint32(prop.Y)}, consumed, 0, true, nil
+			data = uint32(int32(int16(prop.Y)))
 		case 3:
-			return Record{Kind: 4, Data: uint32(prop.Z)}, consumed, 0, true, nil
+			data = uint32(int32(int16(prop.Z)))
+		case 4:
+			data = uint32(uint16(int16(prop.X)))<<16 | uint32(uint16(int16(prop.Y)))
+		default:
+			return Record{}, 0, ScriptStatusWrongType, true, nil
 		}
-		return Record{}, 0, ScriptStatusWrongType, true, nil
+		if extra {
+			return Record{}, 0, ScriptStatusMalformed, true, nil
+		}
+		return Record{Kind: 4, Data: data}, consumed, 0, true, nil
 	}
 	return Record{}, 0, 0, false, nil
 }
