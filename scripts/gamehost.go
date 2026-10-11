@@ -203,6 +203,11 @@ type GameHostEnv struct {
 	// (FUN_00413530 by name, then the block the flat's record names). found is
 	// false for a flat the stage does not have.
 	FlatButtons func(flat string) (buttons []SceneButton, found bool, err error)
+	// PropPoint resolves the prop pointinprop names, from the prop table and store
+	// the draw reads, with the frame FUN_00421B70 selects for it. found is false for
+	// a name the prop table does not have (status 0x0A). A nil hook makes
+	// pointinprop a gap.
+	PropPoint func(name string) (record PropPointRecord, found bool, err error)
 	// Fallback handles opcodes this host does not; nil makes them gaps.
 	Fallback ScriptHost
 	// Log receives diagnostics when non-nil.
@@ -1476,6 +1481,8 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 		return boolean(key != nil && key(), consumed)
 	case "pointinbutton":
 		return h.pointInButton(call)
+	case "pointinprop":
+		return h.pointInProp(call)
 	case "frame", "framerate":
 		_, consumed, status, err := call.Args()
 		if err != nil || status != 0 {

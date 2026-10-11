@@ -30,6 +30,12 @@ type PropRecord struct {
 	// frame it points at and steps it once per pump, wrapping at the view's count;
 	// see assets.NextFrameCursor. Its starting value for a new record is unverified.
 	Frame int16
+
+	// Projected is record word 9 being non-zero, which selects path B of the
+	// projection (FUN_00421820). propset (FUN_0041E9E0), propstar (FUN_0041EF60) and
+	// propxyz (FUN_0041FBD0) each store 1 there, and propxy (FUN_0041FDF0) stores 0.
+	// A new record starts at 0 (FUN_00420370), so it is path A.
+	Projected bool
 }
 
 // ScriptProps holds the props scripts have touched, keyed case-insensitively.
@@ -56,6 +62,24 @@ func (t *ScriptProps) TableName(index int) (string, bool) {
 		return "", false
 	}
 	return t.table[index-1], true
+}
+
+// Lookup resolves a prop name the way FUN_004213C0 does: the name must be in the
+// prop table, and the first match in table order is the record. Unlike Get it never
+// creates a record, so a read by pointinprop leaves the store as it found it. A
+// table name the scripts never touched reads as the native default record, which
+// is hidden and has no view.
+func (t *ScriptProps) Lookup(name string) (*PropRecord, bool) {
+	for _, entry := range t.table {
+		if !strings.EqualFold(entry, name) {
+			continue
+		}
+		if prop, ok := t.props[strings.ToLower(name)]; ok {
+			return prop, true
+		}
+		return &PropRecord{Name: name, Owner: "none", Scale: 1000}, true
+	}
+	return nil, false
 }
 
 // PropBallJob is one ball slot, the 48-byte job FUN_00410760 builds: speeds
@@ -150,6 +174,7 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 			prop.Star = args[1].Text
 		}
 		if name == "propset" || name == "propstar" {
+			prop.Projected = true
 			h.Props.StopBall(prop.Name)
 			if strings.EqualFold(prop.Set, h.currentSet()) && h.Env.ResolveStar != nil {
 				if position, ok := h.Env.ResolveStar(prop.Set, prop.Star); ok {
@@ -229,6 +254,7 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 		if name == "propxyz" {
 			prop.Z = args[3].Int
 		}
+		prop.Projected = name == "propxyz"
 		return consumed, 0, true, nil
 	case "propinstance":
 		// FUN_0041E840: propinstance(source, name) appends a copy of the source

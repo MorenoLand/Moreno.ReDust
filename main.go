@@ -895,6 +895,54 @@ func run() error {
 		}
 		return sprites
 	}
+	// pointinprop reads the same prop store the draw reads, by name through the
+	// prop table (FUN_004213C0). The frame is the one FUN_00421B70 selects at the
+	// record's cursor (word 18) and angle (word 12), from the same archive and alias
+	// the draw uses. FUN_00421B70 selects nothing when no header row matches the
+	// view or no variant matches the sequence, and that is a nil frame, not an error.
+	scriptHost.Env.PropPoint = func(name string) (scripts.PropPointRecord, bool, error) {
+		prop, found := scriptHost.Props.Lookup(name)
+		if !found {
+			return scripts.PropPointRecord{}, false, nil
+		}
+		key := strings.ToLower(name)
+		if original, aliased := propInstances[key]; aliased {
+			key = original
+		}
+		archive := propArchive
+		if _, found := inventoryArchive.Definition(key); found {
+			archive = inventoryArchive
+		}
+		record := scripts.PropPointRecord{
+			Visible: prop.Visible,
+			// Word 9 is set by propset, propstar and propxyz and cleared by propxy.
+			Projected: prop.Projected,
+			// Words 10 and 11: the anchor's low word is y and its high word is x. The
+			// port's X and Y are taken as those words: the value form propxy reads word
+			// 11 for selector 1 and word 10 for selector 2 (FUN_0041FEE0), but which
+			// argument of the propxy statement lands in each word is not verified.
+			Anchor: uint32(uint16(int16(prop.Y))) | uint32(uint16(int16(prop.X)))<<16,
+			// Word 20 is -1 on every record that is not projected: FUN_00420370 starts
+			// it at -1, and propxy (FUN_0041FDF0) resets a non-negative value to -1.
+			Walker: -1,
+		}
+		if prop.View == "" {
+			return record, true, nil
+		}
+		info, err := archive.FrameInfo(key, prop.View, int(prop.Frame), int16(prop.Degree))
+		if err != nil {
+			if *debug {
+				log.Printf("script-note pointinprop %s view %q frame %d: %v", name, prop.View, prop.Frame, err)
+			}
+			return record, true, nil
+		}
+		data, err := archive.Resource(info.Resource)
+		if err != nil {
+			return scripts.PropPointRecord{}, false, err
+		}
+		record.Frame = &scripts.PropFrame{Info: info, Data: data}
+		return record, true, nil
+	}
 	// The prop table starts with the house props and then the inventory props,
 	// the order BOOTFILE opens house.prp and inven.prp in.
 	for _, name := range propArchive.ListNames() {
