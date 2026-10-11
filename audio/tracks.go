@@ -332,6 +332,16 @@ func (t *Tracks) stopChannel(index int) {
 // (FUN_00433300): the channel's player is still playing.
 func (c *soundChannel) busy() bool { return c.player.IsPlaying() }
 
+// VoiceDone is voicedone (FUN_0040EEB0 -> FUN_00434C10): true when the voice
+// channel (native channel 0) holds no sound after the poll. The poll is the one
+// CurrentVoice runs. It is true while the audio system is down.
+func (t *Tracks) VoiceDone() bool {
+	if t.context == nil {
+		return true
+	}
+	return t.CurrentVoice() == ""
+}
+
 // SoundDone is sounddone (FUN_0040EE80 -> FUN_00434BE0): true when neither sound
 // channel holds a sound after the poll. It is true while the audio system is
 // down, as the native gate returns before it reads the channels.

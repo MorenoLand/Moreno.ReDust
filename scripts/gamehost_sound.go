@@ -62,6 +62,9 @@ type TrackHost interface {
 	// SoundDone is sounddone (FUN_0040EE80 -> FUN_00434BE0): true when neither
 	// sound channel holds a sound after the device poll.
 	SoundDone() bool
+	// VoiceDone is voicedone (FUN_0040EEB0 -> FUN_00434C10): true when the voice
+	// channel holds no sound after the device poll.
+	VoiceDone() bool
 }
 
 // soundCommand handles the track-file and sound-channel statements.
@@ -294,6 +297,16 @@ func (h *GameHost) soundValue(name string, call *ScriptCall) (Record, int, uint1
 		}
 		record, status, err := call.Interpreter.Record(ScriptValue{Kind: 3, Text: sound})
 		return record, consumed, status, true, err
+	case "voicedone":
+		// FUN_0040EEB0 takes no argument, so the dispatcher wants "( )" and
+		// answers 2 for anything else. The result is a boolean (kind 2).
+		if call.Kind(call.Start+1) != opOpen || call.Kind(call.Start+2) != opClose {
+			return Record{}, 0, ScriptStatusMalformed, true, nil
+		}
+		if h.Env.Tracks == nil {
+			return Record{}, 0, 0, true, fmt.Errorf("%w: voicedone has no track files", ErrHostOpcodeUnimplemented)
+		}
+		return Record{Kind: 2, Data: boolWord(h.Env.Tracks.VoiceDone())}, 3, 0, true, nil
 	case "sounddone":
 		// FUN_0040EE80 takes no argument, so the dispatcher wants "( )" and
 		// answers 2 for anything else. The result is a boolean (kind 2).
