@@ -565,6 +565,8 @@ func run() error {
 	// scriptWorldProps lists the script-driven props visible in the open set;
 	// it is assigned once the script host exists.
 	var scriptWorldProps func() []render.WorldPropSprite
+	// scriptFrameSteps is the pump's walk over the script props, assigned with them.
+	var scriptFrameSteps func(point [3]int16) ([]render.WorldPropSprite, bool)
 	worldPropSprites := func() []render.WorldPropSprite {
 		sprites := []render.WorldPropSprite{boneWorldProp}
 		if scriptWorldProps != nil {
@@ -858,6 +860,23 @@ func run() error {
 		},
 	}}
 	propInstances := map[string]string{}
+	// resolveScriptProp is one script prop's world sprite: the view the script chose,
+	// from the same archive and alias the draw uses. Its error is the view lookup's.
+	resolveScriptProp := func(name string, prop *scripts.PropRecord) (render.WorldPropSprite, error) {
+		key := strings.ToLower(name)
+		if original, aliased := propInstances[key]; aliased {
+			key = original
+		}
+		archive := propArchive
+		if _, found := inventoryArchive.Definition(key); found {
+			archive = inventoryArchive
+		}
+		view, err := archive.View(key, prop.View)
+		if err != nil {
+			return render.WorldPropSprite{}, err
+		}
+		return render.WorldPropSprite{Name: name, Set: prop.Set, Position: [3]int16{int16(prop.X), int16(prop.Y), int16(prop.Z)}, Heading: int16(prop.Degree), Scale: int16(prop.Scale), ZClip: int16(prop.ZClip), Frame: int(prop.Frame), Archive: archive, View: view, Visible: true}, nil
+	}
 	// Script props the open set shows are drawn from HOUSE.PRP with the view the
 	// script chose, as the bone is. The bone is drawn separately, and an unknown
 	// view is logged, not fatal.
@@ -871,29 +890,53 @@ func run() error {
 			if !prop.Visible || prop.View == "" || !strings.EqualFold(prop.Set, activeSetName) {
 				continue
 			}
-			key := strings.ToLower(name)
-			if original, aliased := propInstances[key]; aliased {
-				key = original
-			}
 			// An item that is owned is held or given away, so it is not in the world;
 			// an unowned inventory item a script placed is drawn from INVEN.PRP.
 			if prop.Owner != "none" {
 				continue
 			}
-			archive := propArchive
-			if _, found := inventoryArchive.Definition(key); found {
-				archive = inventoryArchive
-			}
-			view, err := archive.View(key, prop.View)
+			sprite, err := resolveScriptProp(name, prop)
 			if err != nil {
 				if *debug {
 					log.Printf("script-note prop %s view %q: %v", name, prop.View, err)
 				}
 				continue
 			}
-			sprites = append(sprites, render.WorldPropSprite{Name: name, Set: prop.Set, Position: [3]int16{int16(prop.X), int16(prop.Y), int16(prop.Z)}, Heading: int16(prop.Degree), Scale: int16(prop.Scale), ZClip: int16(prop.ZClip), Frame: int(prop.Frame), Archive: archive, View: view, Visible: true})
+			sprites = append(sprites, sprite)
 		}
 		return sprites
+	}
+	// scriptFrameSteps lists the script props whose sequence cursor the pump steps, and
+	// whether the world shows one of them. FUN_00406BF0(1) passes every record of the
+	// prop table to FUN_00421820 (FUN_004216F0), which returns at once for a record whose
+	// visible flag (word 0) is zero. A visible path A record (word 9 == 0) then reaches
+	// FUN_00421B70 with no further gate, so its set and owner do not matter. A path B
+	// record (word 9 != 0) steps only past the world's gates: the open set, unowned, and
+	// the depth test. The set and owner gates are the port's own; the native path B has
+	// no owner test.
+	scriptFrameSteps = func(point [3]int16) ([]render.WorldPropSprite, bool) {
+		var steps []render.WorldPropSprite
+		shown := false
+		for _, name := range scriptHost.Props.Names() {
+			if strings.EqualFold(name, "bone") {
+				continue
+			}
+			prop := scriptHost.Props.Get(name)
+			if !prop.Visible || prop.View == "" {
+				continue
+			}
+			sprite, err := resolveScriptProp(name, prop)
+			if err != nil {
+				continue
+			}
+			inWorld := strings.EqualFold(prop.Set, activeSetName) && prop.Owner == "none"
+			if prop.Projected && (!inWorld || !render.WorldPropReachesFrame(point, sprite)) {
+				continue
+			}
+			steps = append(steps, sprite)
+			shown = shown || inWorld
+		}
+		return steps, shown
 	}
 	// pointinprop reads the same prop store the draw reads, by name through the
 	// prop table (FUN_004213C0). The frame is the one FUN_00421B70 selects at the
@@ -2744,17 +2787,15 @@ func run() error {
 			return false, fmt.Errorf("native scene scheduler returned status %#x", status)
 		}
 
-		// FUN_00406920 draws the pump's frames and then steps each set prop's sequence
-		// cursor (FUN_004216F0 through FUN_00421B70). So the pump's own draw shows the
-		// frame the cursor selects, and every later draw shows the next one.
+		// FUN_00406920 runs FUN_00406BF0(1) before its draw, and each record selects the
+		// frame its cursor held before its own step (FUN_00421B70 reads the sequence before
+		// it stores cursor + 1). So the pump's own draw shows that frame, and the steps
+		// below are applied after the refresh, so every later draw shows the next one.
 		var frameSteps []render.WorldPropSprite
-		if pumpDue && scriptWorldProps != nil {
-			for _, sprite := range scriptWorldProps() {
-				if render.WorldPropReachesFrame(worldPoint, sprite) {
-					frameSteps = append(frameSteps, sprite)
-				}
-			}
-			if len(frameSteps) > 0 && currentScene == 0 {
+		if pumpDue && scriptFrameSteps != nil {
+			var shown bool
+			frameSteps, shown = scriptFrameSteps(worldPoint)
+			if shown && currentScene == 0 {
 				displayChanged = true
 			}
 		}

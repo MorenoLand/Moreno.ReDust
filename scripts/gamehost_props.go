@@ -34,7 +34,9 @@ type PropRecord struct {
 	// Projected is record word 9 being non-zero, which selects path B of the
 	// projection (FUN_00421820). propset (FUN_0041E9E0), propstar (FUN_0041EF60) and
 	// propxyz (FUN_0041FBD0) each store 1 there, and propxy (FUN_0041FDF0) stores 0.
-	// A new record starts at 0 (FUN_00420370), so it is path A.
+	// The port's new records start at 0, which is path A. The shop record constructor
+	// FUN_00420370 can set word 9 to 1 when the record's set is the open set and its
+	// star resolves (FUN_0041B850 not traced); the port does not build those records.
 	Projected bool
 }
 
