@@ -219,6 +219,37 @@ func (t *Tracks) CurrentVoice() string {
 	return t.voiceName
 }
 
+// SoundCount is countsounds (FUN_0040EEE0): the count of the first row array of
+// the open track whose internal name matches (record +4, the header word at
+// 0x18). found is false when no open track has the name (status 0x0A).
+func (t *Tracks) SoundCount(name string) (count int, found bool, err error) {
+	track := t.Find(name)
+	if track == nil {
+		return 0, false, nil
+	}
+	count, _, err = track.Bank.soundRows()
+	return count, true, err
+}
+
+// SoundName is the lookup behind indextosound (FUN_0040EF60): the Pascal name
+// in row index (1-based) of the matching track's first row array, which
+// FUN_00434A10 copies to the row's +0x45 field. The caller checks 1..count
+// first; found is false only when the row is outside the array.
+func (t *Tracks) SoundName(name string, index int) (sound string, found bool, err error) {
+	track := t.Find(name)
+	if track == nil {
+		return "", false, nil
+	}
+	_, names, err := track.Bank.soundRows()
+	if err != nil {
+		return "", false, err
+	}
+	if index < 1 || index > len(names) {
+		return "", false, nil
+	}
+	return names[index-1], true, nil
+}
+
 // Close releases every open track except those adopted from the caller.
 func (t *Tracks) Close() {
 	t.HaltSound()

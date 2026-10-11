@@ -339,6 +339,48 @@ func nativeSampleByte(predictor uint16) byte {
 	return byte(int(int8(byte(predictor))) + 0x40)
 }
 
+// soundRows reads the first row array of a track file the way FUN_0040E340
+// does: the signed count at header 0x18 (copied to the open record's +4) and
+// the Pascal name at +8 of each 0x18-byte row from 0xB2. Row i holds sound
+// resource i+1, so the names come back in the order the native counts them.
+func (b *SoundBank) soundRows() (count int, names []string, err error) {
+	if b == nil || b.resources == nil {
+		return 0, nil, fmt.Errorf("sound bank is closed")
+	}
+	lease, err := b.resources.Acquire(0)
+	if err != nil {
+		return 0, nil, err
+	}
+	metadata, err := lease.Bytes()
+	if closeErr := lease.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return 0, nil, err
+	}
+	if len(metadata) < nativeSoundTableOffset {
+		return 0, nil, fmt.Errorf("sound bank metadata is shorter than its table header")
+	}
+	count = int(int16(binary.LittleEndian.Uint16(metadata[0x18:0x1a])))
+	if count <= 0 {
+		return count, nil, nil
+	}
+	if count > (len(metadata)-nativeSoundTableOffset)/nativeSoundRowSize {
+		return 0, nil, fmt.Errorf("sound bank has %d sound rows outside its metadata", count)
+	}
+	names = make([]string, 0, count)
+	for index := 0; index < count; index++ {
+		row := nativeSoundTableOffset + index*nativeSoundRowSize
+		nameStart := row + 8
+		nameLength := int(metadata[nameStart])
+		if nameLength+1 > row+nativeSoundRowSize-nameStart {
+			return 0, nil, fmt.Errorf("sound bank row %d has a truncated Pascal name", index)
+		}
+		names = append(names, string(metadata[nameStart+1:nameStart+1+nameLength]))
+	}
+	return count, names, nil
+}
+
 func (b *SoundBank) Close() error {
 	if b == nil || b.resources == nil {
 		return nil

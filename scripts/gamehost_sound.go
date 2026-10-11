@@ -25,6 +25,13 @@ type TrackHost interface {
 	// CurrentVoice is currentvoice (FUN_0040F1D0): the name of the sound the
 	// voice channel is playing, "" when it is idle.
 	CurrentVoice() string
+	// SoundCount is countsounds (FUN_0040EEE0): the number of sounds in the
+	// matching open track's first row array. found is false when no open track
+	// has the internal name (status 0x0A).
+	SoundCount(track string) (count int, found bool, err error)
+	// SoundName is the lookup behind indextosound (FUN_0040EF60): the name in
+	// the 1-based row of that track's first row array.
+	SoundName(track string, index int) (name string, found bool, err error)
 }
 
 // soundCommand handles the track-file and sound-channel statements.
@@ -118,6 +125,69 @@ func (h *GameHost) soundValue(name string, call *ScriptCall) (Record, int, uint1
 			return Record{}, 0, 0, true, fmt.Errorf("%w: currentvoice has no track files", ErrHostOpcodeUnimplemented)
 		}
 		record, status, err := call.Interpreter.Record(ScriptValue{Kind: 3, Text: h.Env.Tracks.CurrentVoice()})
+		return record, consumed, status, true, err
+	case "countsounds":
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, true, err
+		}
+		// FUN_004220A0 takes the name and FUN_00421FC0 rejects a non-string (0x0E).
+		if len(args) != 1 || args[0].Kind != 3 {
+			return Record{}, 0, ScriptStatusWrongType, true, nil
+		}
+		if h.Env.Tracks == nil {
+			return Record{}, 0, 0, true, fmt.Errorf("%w: countsounds has no track files", ErrHostOpcodeUnimplemented)
+		}
+		count, found, err := h.Env.Tracks.SoundCount(args[0].Text)
+		if err != nil {
+			return Record{}, 0, 0, true, err
+		}
+		if !found {
+			return Record{}, 0, 0x0a, true, nil
+		}
+		record, status, err := call.Interpreter.Record(ScriptValue{Kind: 4, Int: int32(count)})
+		return record, consumed, status, true, err
+	case "indextosound":
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, true, err
+		}
+		// FUN_00417070 wants a comma after the name (0x1C) before it reads the index.
+		switch {
+		case len(args) == 1:
+			return Record{}, 0, ScriptStatusMissingComma, true, nil
+		case len(args) != 2:
+			return Record{}, 0, ScriptStatusMalformed, true, nil
+		}
+		if args[0].Kind != 3 {
+			return Record{}, 0, ScriptStatusWrongType, true, nil
+		}
+		if h.Env.Tracks == nil {
+			return Record{}, 0, 0, true, fmt.Errorf("%w: indextosound has no track files", ErrHostOpcodeUnimplemented)
+		}
+		// The track is looked up before the index is type-checked (0x0A, then 0x0E).
+		count, found, err := h.Env.Tracks.SoundCount(args[0].Text)
+		if err != nil {
+			return Record{}, 0, 0, true, err
+		}
+		if !found {
+			return Record{}, 0, 0x0a, true, nil
+		}
+		if args[1].Kind != 4 {
+			return Record{}, 0, ScriptStatusWrongType, true, nil
+		}
+		index := int(args[1].Int)
+		if index < 1 || index > count {
+			return Record{}, 0, 0x0a, true, nil
+		}
+		sound, found, err := h.Env.Tracks.SoundName(args[0].Text, index)
+		if err != nil {
+			return Record{}, 0, 0, true, err
+		}
+		if !found {
+			return Record{}, 0, 0x0a, true, nil
+		}
+		record, status, err := call.Interpreter.Record(ScriptValue{Kind: 3, Text: sound})
 		return record, consumed, status, true, err
 	}
 	return Record{}, 0, 0, false, nil
