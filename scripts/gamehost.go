@@ -297,9 +297,16 @@ type GameHost struct {
 	// KeyAborts is DAT_00459996, the keyaborts flag. keyaborts(bool) stores the
 	// low word of its argument and keyaborts() reads it back sign-extended.
 	KeyAborts int16
-	// StageVisible is DAT_00459A02, the word stagevisible 16008 writes. Nothing
-	// in the port reads it yet, since pointinstage 20042 is not wired.
+	// StageVisible is DAT_00459A02, the word stagevisible 16008 writes. hittest
+	// reads it for the stage branch.
 	StageVisible int16
+	// context holds the result slot DAT_00459720 (ResultBuffer) that the result
+	// statement and value and the hittest value share.
+	context ScriptContextState
+	// resultStale is set when a builtin that writes the slot natively has run without
+	// its writer being ported (indextoactor and indextoprop), so the slot's content is
+	// unknown and result() reports a gap until a ported writer stores a value.
+	resultStale bool
 	// Props is the prop table scripts read and write; the game keeps its own
 	// copies of owner and degree in step around script runs.
 	Props      *ScriptProps
@@ -439,6 +446,8 @@ func (h *GameHost) command(call *ScriptCall) (int, uint16, error) {
 	switch name {
 	case "path":
 		return h.pathStatement(call)
+	case "result":
+		return h.resultStatement(call)
 	case "notedialog":
 		return h.noteDialog(call)
 	case "actorvisible":
@@ -1042,6 +1051,8 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 		if !ok {
 			return Record{}, 0, 0x0a, nil
 		}
+		// FUN_0040D090 also writes the result slot (the cast name), which is not ported.
+		h.resultStale = true
 		return text(actor.Name, consumed)
 	case "propdist":
 		prop, _, consumed, status, err := h.propArgs(call, 1)
@@ -1358,6 +1369,8 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 		if !ok {
 			return Record{}, 0, 0x0a, nil
 		}
+		// FUN_00421210 also writes the result slot (the owning shop's name), which is not ported.
+		h.resultStale = true
 		return text(name, consumed)
 	case "countcasts":
 		// FUN_0040D060 (opcode 20029) takes no arguments and returns DAT_004599E4
@@ -1565,6 +1578,10 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 		return h.pointInButton(call)
 	case "pointinprop":
 		return h.pointInProp(call)
+	case "hittest":
+		return h.hitTest(call)
+	case "result":
+		return h.resultValue(call)
 	case "frame", "framerate":
 		_, consumed, status, err := call.Args()
 		if err != nil || status != 0 {
