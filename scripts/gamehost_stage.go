@@ -195,7 +195,8 @@ func (h *GameHost) leaveStage(call *ScriptCall) (uint16, error) {
 //
 // Verified here: the inverted 0x0B gate, the argument's string check, the install
 // order and FUN_00411D40's two messages (see openStageFrames). The name check and the
-// search are FUN_004178C0's, which the host runs through scripts.ResolveStageFile.
+// search are FUN_004178C0's, which the host runs through
+// scripts.ResolveStageFileInPrefixes over the verified prefix table.
 // A nil hook is a gap before anything runs, so an unwired host never installs half a
 // stage.
 func (h *GameHost) openStageCommand(call *ScriptCall) (int, uint16, error) {

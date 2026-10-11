@@ -89,12 +89,10 @@ func (h *GameHost) keyAbortsValue(call *ScriptCall) (Record, int, uint16, error)
 // with FUN_004220A0 and must be a string, since FUN_00421FC0 answers 0x0E for any
 // other kind. The result is a type-2 boolean that is true when the name exists.
 //
-// The reference probes eight candidates, the path prefix table's slots 1 through 8
-// with the name appended, and stops at the first that exists. The port has one
-// asset root, so every candidate names the same file and a single lookup gives the
-// answer the loop would. That collapse is a port decision, not a verified native
-// behaviour: it holds only while the eight prefixes all denote the asset root,
-// which the reference does not show.
+// The reference probes the path prefix table's slots 1 through 8 with the name
+// appended, and stops at the first that exists. The port searches the verified
+// slots in that order through FileExists. Slot 6, which location scripts write to a
+// different folder each time, is skipped (see StageSearchPrefix in paths.go).
 func (h *GameHost) findFileValue(call *ScriptCall) (Record, int, uint16, error) {
 	arg, closeAt, status, err := builtinArgument(call)
 	if err != nil || status != 0 {

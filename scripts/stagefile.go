@@ -170,9 +170,9 @@ type StageSearch struct {
 	// the search loop reads it, so there is no extensionless branch.
 	Candidates int
 	// PrefixOf returns the prefix candidate to prepend for a given 1-based
-	// index, or ok=false when the index is out of range. The reference builds
-	// each candidate with FUN_00417820, so the prefix text is not a constant
-	// and is supplied by the caller.
+	// index. ok=false skips that slot, so it is not searched and the other slots
+	// keep their order. The reference builds each candidate with FUN_00417820;
+	// StageSearchPrefix is the verified table of those prefixes.
 	PrefixOf func(index int) (prefix string, ok bool)
 	// Exists reports whether a fully qualified candidate names an existing
 	// entry, and whether that entry is a regular file. A hit on a directory or
@@ -202,7 +202,9 @@ func ResolveStageFile(name string, search StageSearch) (StageResolution, uint16,
 	for i := 1; i <= candidates; i++ {
 		prefix, ok := search.PrefixOf(i)
 		if !ok {
-			break
+			// An unverified slot is not searched. The search goes on to the next
+			// slot, so the verified ones keep their native order.
+			continue
 		}
 		candidate := prefix + name
 		isFile, found := search.Exists(candidate)
@@ -223,6 +225,13 @@ func ResolveStageFile(name string, search StageSearch) (StageResolution, uint16,
 	}
 	return StagePrefixesExhausted, StageNameStatusExhausted,
 		fmt.Errorf("stage name %q matched none of the %d candidate prefixes", name, candidates)
+}
+
+// ResolveStageFileInPrefixes runs ResolveStageFile over the verified prefix table,
+// so the caller supplies only the existence check. The candidates are tried in
+// slot order, and a slot whose text is not verified is skipped (StageSearchPrefix).
+func ResolveStageFileInPrefixes(name string, exists func(candidate string) (isRegularFile bool, found bool)) (StageResolution, uint16, error) {
+	return ResolveStageFile(name, StageSearch{PrefixOf: StageSearchPrefix, Exists: exists})
 }
 
 // Stage header geometry, verified from FUN_00411900, the routine that installs

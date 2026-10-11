@@ -2306,26 +2306,26 @@ func run() error {
 		}
 		return string(stage.Name[1:])
 	}
-	// openstagefile's install. The name is resolved as FUN_004178C0 does it (the
-	// validation and the search are scripts.ResolveStageFile). The port has one
-	// candidate, the DATA directory of the asset root, and it stands in for the
-	// eight prefixes, which the reference fills at startup and the static image
-	// does not hold. A stage already in openedStages is reused, as the cache reuses
-	// a checked-in object, so a closed NEW.FLT reopens as the same stage.
+	// openstagefile's install. The name is resolved as FUN_004178C0 does it: the
+	// validation and the search are scripts.ResolveStageFileInPrefixes, which tries
+	// the verified prefixes of the path table in slot order. Slot 6 is not verified
+	// (location scripts write it) and is skipped. Each candidate is reduced to its
+	// asset path first, so a stage reached through two prefixes is one object. A
+	// stage already in openedStages is reused, as the cache reuses a checked-in
+	// object, so a closed NEW.FLT reopens as the same stage.
 	scriptHost.Env.OpenStage = func(name string) (uint16, error) {
 		var resolved string
-		resolution, status, err := scripts.ResolveStageFile(name, scripts.StageSearch{
-			PrefixOf: func(index int) (string, bool) {
-				return "DATA/", index == 1
-			},
-			Exists: func(candidate string) (bool, bool) {
-				path := strings.ToUpper(candidate)
-				if _, cached := openedStages[path]; !cached && !workspace.HasAsset(path) {
-					return false, false
-				}
-				resolved = path
-				return true, true
-			},
+		resolution, status, err := scripts.ResolveStageFileInPrefixes(name, func(candidate string) (bool, bool) {
+			asset, err := assets.ResolveAssetName(candidate)
+			if err != nil {
+				return false, false
+			}
+			path := strings.ToUpper(asset)
+			if _, cached := openedStages[path]; !cached && !workspace.HasAsset(path) {
+				return false, false
+			}
+			resolved = path
+			return true, true
 		})
 		if resolution != scripts.StageResolved {
 			if *debug && err != nil {
@@ -2445,7 +2445,13 @@ func run() error {
 		return nil
 	}
 	scriptHost.Env.PuppetFile = workspace.OpenPuppetFile
-	scriptHost.Env.FileExists = workspace.HasAsset
+	// findfile searches the same verified prefixes as openstagefile (FUN_00415780),
+	// slot by slot, and each candidate is looked up in the asset root.
+	scriptHost.Env.FileExists = func(name string) bool {
+		return scripts.FindFileInStagePrefixes(name, func(candidate string) bool {
+			return workspace.HasAsset(strings.ToUpper(candidate))
+		})
+	}
 	scriptHost.Env.Program = scriptProgram
 	scriptHost.Env.Shop = func(name string) (string, uint32, bool) {
 		// INVEN.PRP is the inventory shop the NEW.FLT boot opens for the

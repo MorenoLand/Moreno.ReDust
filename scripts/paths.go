@@ -145,6 +145,62 @@ func PathValue(table *PathPrefixTable, argument Record, registers *StringRegiste
 	return record, status, nil
 }
 
+// StageSearchPrefix returns the prefix text the stage-file search (FUN_004178C0)
+// and findfile (FUN_00415780) put in front of a name at slot index, for the slots
+// whose text is verified. Both search slots 1 through 8 in order and stop at the
+// first candidate that exists, so this order is the native order.
+//
+// The text of slots 1, 2, 3, 4, 5 and 8 is written by boot(), in BOOTFILE
+// resource 1, with path statements. Slot 1 is path(1, path(1) @ "local:"), so it
+// reads "appl:local:" because slot 1 is "appl:" at engine start. Slot 7 is "appl:"
+// because no script in the shipped assets writes it; the engine-start value is
+// kept. The native volumes are the executable's directory for "appl:" and the
+// drive labelled DUST for "dust:"; the port maps both to its asset root
+// (assets.ResolveAssetName), which is a port model and not a verified equivalence.
+//
+// Slot 6 is not verified and returns ok=false, so it is skipped. Location scripts
+// write it with path(6, ...) to a different folder each time (salgames, kid,
+// fight, crack, target, drugs, scorp, yunnibox and checkers), so it has no single
+// value at the time of an open. A name that exists only in one of those folders
+// is therefore not found until slot 6 is modelled as state. Slot 0 is never
+// searched.
+func StageSearchPrefix(index int) (string, bool) {
+	if index < PathPrefixFirst || index > PathPrefixLast {
+		return "", false
+	}
+	prefix := verifiedStageSearchPrefixes[index]
+	return prefix, prefix != ""
+}
+
+// verifiedStageSearchPrefixes holds the verified prefix text by slot. An empty
+// entry is an unverified slot, which the search skips.
+var verifiedStageSearchPrefixes = [PathPrefixSlots]string{
+	1: "appl:local:",
+	2: "dust:data:",
+	3: "dust:movies:",
+	4: "dust:puppets:",
+	5: "dust:under:",
+	7: "appl:",
+	8: "dust:inven:",
+}
+
+// FindFileInStagePrefixes is findfile's existence search, FUN_00415780. It appends
+// the name to each verified prefix in slot order and answers true at the first
+// candidate that exists. The name is not validated first, unlike openstagefile, so
+// a name the stage validator would refuse is still searched.
+func FindFileInStagePrefixes(name string, exists func(candidate string) bool) bool {
+	for index := PathPrefixFirst; index <= PathPrefixLast; index++ {
+		prefix, ok := StageSearchPrefix(index)
+		if !ok {
+			continue
+		}
+		if exists(prefix + name) {
+			return true
+		}
+	}
+	return false
+}
+
 // Prop block field offsets, from FUN_00421820, which projects a prop to the
 // screen. The prop is addressed as a `short *`, so the indexes Ghidra prints are
 // doubled to reach byte offsets.
