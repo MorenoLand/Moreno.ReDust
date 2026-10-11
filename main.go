@@ -940,6 +940,21 @@ func run() error {
 		}
 		return render.WorldPropSprite{Name: name, Set: prop.Set, Position: prop.DrawPosition(), Heading: int16(prop.Degree), Scale: int16(prop.Scale), ZClip: int16(prop.ZClip), Frame: int(prop.Frame), Archive: archive, View: view, Visible: true}, nil
 	}
+	// propOwnedOutOfWorld reports whether a prop's owner keeps it out of the world. Only
+	// an inventory item is held or given away by its owner. A house prop's owner is the
+	// place its door leads: setupprop stores it when the door opens, and propowner(me,
+	// "none") clears it when the door closes, so an open door is drawn with an owner set.
+	// The archive choice follows resolveScriptProp.
+	propOwnedOutOfWorld := func(name string, prop *scripts.PropRecord) bool {
+		key := strings.ToLower(name)
+		if original, aliased := propInstances[key]; aliased {
+			key = original
+		}
+		if _, found := inventoryArchive.Definition(key); !found {
+			return false
+		}
+		return prop.Owner != "none"
+	}
 	// Script props the open set shows are drawn from HOUSE.PRP with the view the
 	// script chose, as the bone is. The bone is drawn separately, and an unknown
 	// view is logged, not fatal.
@@ -953,9 +968,9 @@ func run() error {
 			if !prop.Visible || prop.View == "" || !strings.EqualFold(prop.Set, activeSetName) {
 				continue
 			}
-			// An item that is owned is held or given away, so it is not in the world;
+			// An owned inventory item is held or given away, so it is not in the world;
 			// an unowned inventory item a script placed is drawn from INVEN.PRP.
-			if prop.Owner != "none" {
+			if propOwnedOutOfWorld(name, prop) {
 				continue
 			}
 			sprite, err := resolveScriptProp(name, prop)
@@ -992,7 +1007,7 @@ func run() error {
 			if err != nil {
 				continue
 			}
-			inWorld := strings.EqualFold(prop.Set, activeSetName) && prop.Owner == "none"
+			inWorld := strings.EqualFold(prop.Set, activeSetName) && !propOwnedOutOfWorld(name, prop)
 			if prop.Projected && (!inWorld || !render.WorldPropReachesFrame(point, sprite)) {
 				continue
 			}
@@ -1349,7 +1364,7 @@ func run() error {
 	// FUN_00419D20, FUN_00419EE0, FUN_00419BC0 and FUN_00419C70 do for the sets
 	// whose scripts the port runs. setEventsOpen is true between the set's open
 	// and close events.
-	scriptedSets := map[string]bool{"town": true}
+	scriptedSets := map[string]bool{"town": true, "court": true, "nitecour": true}
 	setEventsOpen := false
 	var raiseSetEvent func(set bool, message string) error
 	deliverScriptEvent := func(event scripts.ActorEvent) error {
