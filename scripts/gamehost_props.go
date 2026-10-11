@@ -289,7 +289,13 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 		}
 		return consumed, 0, true, nil
 	case "propview":
-		prop, args, consumed, status, err := h.propArgs(call, 2)
+		// FUN_0041F130. The readers run first, then the name (0x0E, and 0x0A with no record
+		// created), then the value must be a string (0x0E) of at most 15 bytes (0x1A). The
+		// native then tests the view against the prop's view list (FUN_00421D00, 0x0A when it
+		// is absent). That list is not modelled, so any view name is accepted here. The
+		// frame cursor at record +0x24 is cleared, the view string is copied into the record,
+		// and FUN_004214A0 stores it. Extra arguments run all of that and then return 2.
+		args, consumed, extra, status, err := h.propStatementArgs(call)
 		if err != nil || status != 0 {
 			return 0, status, true, err
 		}
@@ -299,7 +305,12 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 		if status := nativeName(args[1].Text); status != 0 {
 			return 0, status, true, nil
 		}
+		prop := h.Props.Get(args[0].Text)
 		prop.View = args[1].Text
+		prop.Frame = 0
+		if extra {
+			return consumed, ScriptStatusMalformed, true, nil
+		}
 		return consumed, 0, true, nil
 	case "makeball":
 		consumed, status, err := h.makeBall(call)
