@@ -734,6 +734,22 @@ func run() error {
 	// extra.cst (record 205) on the straight-line boot path. The port has no
 	// opencastfile of its own, so the mini-game casts are not in the table.
 	castTable := []string{gangCast.ScriptName, extraCast.ScriptName}
+	// nativeCamera is the reference's camera state (FUN_00406570's globals). The port does
+	// not run the reference's cell-to-cell camera move (FUN_00405DF0), so the camera rests on
+	// the player's cell and direction (worldPoint), which placeNativeCamera keeps current
+	// wherever it is read or pumped.
+	var nativeCamera render.NativeCamera
+	placeNativeCamera := func() {
+		pullback, height := 0, 0
+		if activeSet != nil {
+			pullback, height = activeSet.CameraPullback(), activeSet.CameraHeight()
+		}
+		cell := [2]int16{worldPoint[0], worldPoint[1]}
+		if nativeCamera.Cell != cell || nativeCamera.Dir != worldPoint[2] || int(nativeCamera.Pullback) != pullback || int(nativeCamera.Height) != height {
+			nativeCamera.Pullback, nativeCamera.Height = int16(pullback), int16(height)
+			nativeCamera.Place(worldPoint[0], worldPoint[1], worldPoint[2])
+		}
+	}
 	scriptHost := &scripts.GameHost{Actors: scriptActors, Props: scripts.NewScriptProps(), Loops: &nativeLoops, Random: &nativeRandom, Shops: []string{"house", "inven"}, Env: scripts.GameHostEnv{
 		CurrentSet: func() string { return activeSetName },
 		StageOpen:  stageOpen,
@@ -823,6 +839,16 @@ func run() error {
 		},
 		Player: func() [3]int16 {
 			return [3]int16{worldPoint[0]*256 + 128, worldPoint[1]*256 + 128, 0}
+		},
+		CameraState: func() scripts.CameraState {
+			placeNativeCamera()
+			state := scripts.CameraState{Position: nativeCamera.Position, Heading: nativeCamera.Heading, Pullback: nativeCamera.Pullback}
+			if activeSet != nil {
+				state.SetName = activeSet.Name()
+				top, left, width, height := activeSet.PointerExtent()
+				state.Pointer = scripts.SetPointerRect(top, left, width, height)
+			}
+			return state
 		},
 		Camera: func() [3]int16 {
 			camera := render.NativeActorCameraPosition(worldPoint)
@@ -998,6 +1024,29 @@ func run() error {
 			// Word 20 is stored on the record. FUN_00420370 starts it at -1, and propxy
 			// (FUN_0041FDF0) and propis3d (FUN_0041FFD0) store -1 over a non-negative value.
 			Walker: prop.Walker,
+			// Path B reads the owner, the live position, the angle, the z clip and the
+			// scale (words +0x5E, 13 to 15, 12, 38 and 21 and 22).
+			Owner:    prop.Owner,
+			Position: [3]int16{int16(prop.X), int16(prop.Y), int16(prop.Z)},
+			Degree:   int16(prop.Degree),
+			ZClip:    int16(prop.ZClip),
+			Scale:    prop.Scale,
+		}
+		// FrameAt is FUN_00421B70 at the record's cursor for any angle. Path B asks for its
+		// own angle, so the frame is selected per call and a missing view or variant is nil.
+		record.FrameAt = func(angle int16) (*scripts.PropFrame, error) {
+			if prop.View == "" {
+				return nil, nil
+			}
+			info, err := archive.FrameInfo(key, prop.View, int(prop.Frame), angle)
+			if err != nil {
+				return nil, nil
+			}
+			data, err := archive.Resource(info.Resource)
+			if err != nil {
+				return nil, err
+			}
+			return &scripts.PropFrame{Info: info, Data: data}, nil
 		}
 		if prop.View == "" {
 			return record, true, nil
@@ -2952,6 +3001,9 @@ func run() error {
 			if err := scriptHost.StepBalls(); err != nil {
 				return false, err
 			}
+			// FUN_0040F4E0 ends with the camera step, FUN_004059D0, after the job tables.
+			placeNativeCamera()
+			nativeCamera.Pump(activeSet != nil)
 		}
 		status, err := nativeLoops.PassWhere(func(loop scripts.ScriptLoop) (uint16, error) {
 			if event, isActor := scripts.LoopEvent(loop); isActor && scriptManaged[strings.ToLower(loop.Owner)] {

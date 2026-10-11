@@ -31,6 +31,20 @@ type PropPointRecord struct {
 	// Frame is the variant FUN_00421B70 selects at the record's cursor (word 18)
 	// and angle (word 12), with the frame resource's bytes.
 	Frame *PropFrame
+	// Owner is the owner string at record +0x5E, which path B compares with the open
+	// set's name (FUN_0042E5B0 against DAT_00459A82).
+	Owner string
+	// Position is record words 13, 14 and 15: the live x, y and z path B projects.
+	Position [3]int16
+	// Degree is record word 12, the angle FUN_00421B70 and path B's bearing use.
+	Degree int16
+	// ZClip is record word 38 (propzclip), subtracted from the depth in path B's gate.
+	ZClip int16
+	// Scale is the dword at words 21 and 22 (propscale), the factor of path B's size.
+	Scale int32
+	// FrameAt selects the variant FUN_00421B70 picks for an angle at the record's
+	// cursor. It returns nil when no variant matches. Path B calls it with its own angle.
+	FrameAt func(angle int16) (*PropFrame, error)
 }
 
 // propFrameHeaderBytes is the frame resource's header: word 0 the column count,
@@ -189,22 +203,15 @@ func (h *GameHost) pointInProp(call *ScriptCall) (Record, int, uint16, error) {
 	return Record{Kind: 2, Data: boolWord(hit)}, consumed, 0, nil
 }
 
-// propPointHit is FUN_00421820 followed by the hit test of FUN_0041FA40, for path A.
-// Path B (word 9 non-zero) is not ported. Its visible flag is tested first, as
-// the reference does. Past that, its two set gates are verified to give false, which
-// is returned. With the set open, the path B projection is not verified, so it is a
-// documented gap rather than a value. No port record has word 9 set unless propset,
-// propstar, propxyz or propis3d placed it, and the set gate covers those as well.
+// propPointHit is FUN_00421820 followed by the hit test of FUN_0041FA40. Its visible
+// flag is tested first, as the reference does. A projected record (word 9 non-zero)
+// runs path B, projectedPropHit; the others run path A.
 func (h *GameHost) propPointHit(prop PropPointRecord, point uint32) (bool, error) {
 	if !prop.Visible {
 		return false, nil
 	}
 	if prop.Projected {
-		_, open := h.setRect()
-		if !PointInSetWillTest(SetState{Active: open, Visible: h.setVisible}) {
-			return false, nil
-		}
-		return false, fmt.Errorf("%w: pointinprop of a projected prop (word 9 != 0) with a set open", ErrHostOpcodeUnimplemented)
+		return h.projectedPropHit(prop, point)
 	}
 	if prop.Frame == nil {
 		return false, nil

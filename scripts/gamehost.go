@@ -27,6 +27,10 @@ type GameHostEnv struct {
 	// Player and Camera are DAT_00459A6C and DAT_00459A78.
 	Player func() [3]int16
 	Camera func() [3]int16
+	// CameraState is what projected props (word 9 != 0) read for path B of
+	// pointinprop: the camera, its heading and pullback, the open set's name and
+	// its pointer rectangle. Nil leaves path B a documented gap.
+	CameraState func() CameraState
 	// ProjectedDepth is FUN_0040DB70 for one actor: its depth and whether it
 	// survives the cull.
 	ProjectedDepth func(actor *ActorRecord) (int16, bool)
