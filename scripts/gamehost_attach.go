@@ -20,6 +20,17 @@ import (
 // slot. Nothing in the port reads either one: the scratch is always rewritten
 // before any cached function reads it, and the result slot is read only by
 // result (16010), which the port does not wire.
+//
+// The warm-ups actorwarm (12085, FUN_0040B450), castwarm (12088, FUN_0040B4D0),
+// propwarm (12086, FUN_0041F7E0) and shopwarm (12087, FUN_0041F860) read one
+// name and look it up the same way. They then preload the record's resource
+// blocks through FUN_0040E120 or FUN_00421DD0. Those call FUN_004014F0 and
+// FUN_00401670, which only move the resource cache: a load leaves the entry at
+// zero uses. The cache's last-found globals (DAT_00442004 and DAT_00442014) are a
+// lookup hint that returns the same index either way. The port loads resources on
+// demand, so it carries the warm-ups' checks and statuses and not the preload.
+// The resource-missing diagnostics that FUN_0042C470 raises (0x100F, 0x1010,
+// 0x1203 and 0x1204) are not reproduced.
 
 // attachNameArgument reads the single name argument of an attach statement in
 // the native order: the argument is evaluated, an empty one is 0x0E, and a
@@ -45,10 +56,10 @@ func (h *GameHost) attachNameArgument(call *ScriptCall) (name string, consumed i
 // byte table DAT_0045DDF0 has not been checked.
 func (h *GameHost) attachTargetFound(statement, name string) (bool, error) {
 	switch statement {
-	case "actorscript":
+	case "actorscript", "actorwarm":
 		_, status := h.Actors.Lookup(name)
 		return status == 0, nil
-	case "castscript":
+	case "castscript", "castwarm":
 		if h.Env.CastCount == nil || h.Env.CastName == nil {
 			return false, fmt.Errorf("%s has no cast table", statement)
 		}
@@ -58,12 +69,12 @@ func (h *GameHost) attachTargetFound(statement, name string) (bool, error) {
 			}
 		}
 		return false, nil
-	case "propscript":
+	case "propscript", "propwarm":
 		if h.Props == nil {
 			return false, fmt.Errorf("props are unavailable")
 		}
 		return h.Props.Known(name), nil
-	case "shopscript":
+	case "shopscript", "shopwarm":
 		if h.Env.Shop == nil {
 			return false, fmt.Errorf("%s has no shop table", statement)
 		}
@@ -130,7 +141,8 @@ func (h *GameHost) buttonScriptCommand(call *ScriptCall) (int, uint16, error) {
 // for opcodes it does not own.
 func (h *GameHost) scriptAttachCommand(name string, call *ScriptCall) (consumed int, status uint16, handled bool, err error) {
 	switch name {
-	case "actorscript", "castscript", "propscript", "shopscript", "puppetscript", "buttonscript":
+	case "actorscript", "castscript", "propscript", "shopscript", "puppetscript", "buttonscript",
+		"actorwarm", "castwarm", "propwarm", "shopwarm":
 	default:
 		return 0, 0, false, nil
 	}
