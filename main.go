@@ -891,7 +891,7 @@ func run() error {
 				}
 				continue
 			}
-			sprites = append(sprites, render.WorldPropSprite{Name: name, Set: prop.Set, Position: [3]int16{int16(prop.X), int16(prop.Y), int16(prop.Z)}, Heading: int16(prop.Degree), Scale: int16(prop.Scale), ZClip: int16(prop.ZClip), Archive: archive, View: view, Visible: true})
+			sprites = append(sprites, render.WorldPropSprite{Name: name, Set: prop.Set, Position: [3]int16{int16(prop.X), int16(prop.Y), int16(prop.Z)}, Heading: int16(prop.Degree), Scale: int16(prop.Scale), ZClip: int16(prop.ZClip), Frame: int(prop.Frame), Archive: archive, View: view, Visible: true})
 		}
 		return sprites
 	}
@@ -2695,16 +2695,30 @@ func run() error {
 		if status != 0 {
 			return false, fmt.Errorf("native scene scheduler returned status %#x", status)
 		}
-		
+
+		// FUN_00406920 draws the pump's frames and then steps each set prop's sequence
+		// cursor (FUN_004216F0 through FUN_00421B70). So the pump's own draw shows the
+		// frame the cursor selects, and every later draw shows the next one.
+		var frameSteps []render.WorldPropSprite
+		if pumpDue && scriptWorldProps != nil {
+			for _, sprite := range scriptWorldProps() {
+				if render.WorldPropReachesFrame(worldPoint, sprite) {
+					frameSteps = append(frameSteps, sprite)
+				}
+			}
+			if len(frameSteps) > 0 && currentScene == 0 {
+				displayChanged = true
+			}
+		}
 		if displayChanged {
 			if err := refreshWorldScene(); err != nil {
 				return false, err
 			}
 		}
-		
-		
-		
-		
+		for _, sprite := range frameSteps {
+			prop := scriptHost.Props.Get(sprite.Name)
+			prop.Frame = assets.NextFrameCursor(prop.Frame, sprite.View.FrameCount())
+		}
 		return displayChanged, nil
 	}
 	startSceneMovie := func(name string) error {
@@ -4396,12 +4410,17 @@ func run() error {
 			}
 			if scriptHost.PassRequested() && nativePumpDue() {
 				forceNativePump = true
-				if _, err := runNativeScheduler(false); err != nil {
+				drawn, err := runNativeScheduler(false)
+				if err != nil {
 					return render.IndexedFrame{}, false, err
 				}
 				scriptHost.Passed()
-				if err := refreshWorldScene(); err != nil {
-					return render.IndexedFrame{}, false, err
+				// A scheduler that reports a change has already drawn this pump, before the
+				// pump stepped the prop frames, so drawing again would show the next frame.
+				if !drawn {
+					if err := refreshWorldScene(); err != nil {
+						return render.IndexedFrame{}, false, err
+					}
 				}
 				displayChanged = true
 			}

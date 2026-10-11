@@ -25,6 +25,11 @@ type PropRecord struct {
 	Scale   int32
 	ZClip   int32
 	Speed   int32
+
+	// Frame is the sequence cursor at record byte +0x24. FUN_00421B70 selects the
+	// frame it points at and steps it once per pump, wrapping at the view's count;
+	// see assets.NextFrameCursor. Its starting value for a new record is unverified.
+	Frame int16
 }
 
 // ScriptProps holds the props scripts have touched, keyed case-insensitively.

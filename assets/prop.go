@@ -22,6 +22,11 @@ const (
 	propDescriptorDegreeCount = 0x72
 )
 
+// ErrPropFrameNoVariant reports that no variant of a view matches a frame's
+// sequence value. FUN_00421B70 returns false in that case, so the native projection
+// draws nothing for the frame, so projectWorldProp treats this error as "not drawn".
+var ErrPropFrameNoVariant = fmt.Errorf("prop frame has no variant for its sequence")
+
 type PropArchive struct {
 	cache         *ResourceCache
 	resourceCount uint32
@@ -246,7 +251,7 @@ func (a *PropArchive) FrameInfo(propName, viewName string, frameIndex int, angle
 		}
 	}
 	if !selected {
-		return PropFrameInfo{}, fmt.Errorf("prop view %q frame %d has no variant for sequence %d at angle %d", viewName, frameIndex, sequence, angle)
+		return PropFrameInfo{}, fmt.Errorf("%w: prop view %q frame %d sequence %d at angle %d", ErrPropFrameNoVariant, viewName, frameIndex, sequence, angle)
 	}
 	return result, nil
 }
@@ -272,9 +277,26 @@ func (v PropView) FrameInfo(frameIndex int, angle int16) (PropFrameInfo, error) 
 		}
 	}
 	if !selected {
-		return PropFrameInfo{}, fmt.Errorf("prop view %q frame %d has no variant for sequence %d at angle %d", v.Name, frameIndex, sequence, angle)
+		return PropFrameInfo{}, fmt.Errorf("%w: prop view %q frame %d sequence %d at angle %d", ErrPropFrameNoVariant, v.Name, frameIndex, sequence, angle)
 	}
 	return result, nil
+}
+
+// FrameCount is the number of entries in the view's sequence, which is the count
+// the native frame cursor wraps at.
+func (v PropView) FrameCount() int { return len(v.sequences) }
+
+// NextFrameCursor steps a prop record's sequence cursor the way FUN_00421B70 does
+// at 0x00421C02..0x00421C2D: the cursor selects the frame it is at, then is stored
+// back as cursor+1, and is reset to 0 once that value reaches the view's sequence
+// count (the signed word at resource +0x70). So the cursor cycles through
+// 0..count-1, and a count of zero or less keeps it at 0.
+func NextFrameCursor(cursor int16, frameCount int) int16 {
+	next := int(cursor) + 1
+	if next >= frameCount {
+		return 0
+	}
+	return int16(next)
 }
 
 func (v PropView) FrameResource(degree, frame int) (uint32, error) {
