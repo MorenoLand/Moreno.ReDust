@@ -709,8 +709,12 @@ func run() error {
 		scriptPrograms[key] = &program
 		return &program, nil
 	}
-	// stageOpen is the open-stage gate, DAT_00459A00: the port has a stage.
-	stageOpen := func() bool { return stage != nil }
+	// closedStage is the stage that closestagefile closed (FUN_00411A70 clears
+	// DAT_00459A00). The port keeps the stage object for its drawing and resource
+	// loads, so the open gate is "a stage is present and it is not the closed one".
+	// A different stage object, such as the hotel hotplate's, opens the gate again.
+	var closedStage *assets.Stage
+	stageOpen := func() bool { return stage != nil && stage != closedStage }
 	// castTable is the cast table countcasts and indextocast read, in
 	// opencastfile order. BOOTFILE r1 opens gang.cst (record 200) and then
 	// extra.cst (record 205) on the straight-line boot path. The port has no
@@ -719,6 +723,7 @@ func run() error {
 	scriptHost := &scripts.GameHost{Actors: scriptActors, Props: scripts.NewScriptProps(), Loops: &nativeLoops, Random: &nativeRandom, Shops: []string{"house", "inven"}, Env: scripts.GameHostEnv{
 		CurrentSet: func() string { return activeSetName },
 		StageOpen:  stageOpen,
+		CloseStage: func() { closedStage = stage },
 		Managed:    func(name string) bool { return scriptManaged[strings.ToLower(name)] },
 		SetSize: func() (int16, int16, bool) {
 			if activeSet == nil {

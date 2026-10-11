@@ -230,6 +230,10 @@ type GameHostEnv struct {
 	// StageOpen reports whether a stage is open (DAT_00459A00). pointinbutton
 	// returns 0x0B without one, before it evaluates its arguments.
 	StageOpen func() bool
+	// CloseStage clears the stage-open gate, the write FUN_00411A70 makes to
+	// DAT_00459A00 when closestagefile closes the stage. It is called only after the
+	// leave step has run with the stage still open. Nil makes closestagefile a gap.
+	CloseStage func()
 	// FlatButtons is the button block of the named flat in the open stage
 	// (FUN_00413530 by name, then the block the flat's record names). found is
 	// false for a flat the stage does not have.
