@@ -183,16 +183,6 @@ func CurrentSetName(active bool, liveName string) string {
 	return NameNoneUpper
 }
 
-// PointInSet resolves the pointinset builtin. Verified FUN_0041B330 always
-// produces a type-2 boolean result; it only performs the hit test when both
-// runtime slots it requires are non-zero, and yields false when either is empty.
-func PointInSet(hasSet, hasHitData bool, hit bool) ValueResult {
-	if !hasSet || !hasHitData {
-		return BoolResult(false)
-	}
-	return BoolResult(hit)
-}
-
 // EqualValueName compares two builtin-returned names the way the native handlers
 // feed them into the string register pool, which is case-insensitive for
 // ASCII letters and exact for every other byte. That is the same mapping

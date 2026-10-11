@@ -87,6 +87,15 @@ type Set struct {
 	file               string
 	scriptResource     uint32
 	sceneScripts       []uint32
+
+	// pointerLeft, pointerTop, pointerWidth and pointerHeight are the metadata
+	// words (+0x16, +0x14, +0x2C, +0x2A) FUN_004195F0 copies into DAT_00459A56,
+	// DAT_00459A54, DAT_00459A52 and DAT_00459A50. FUN_004057D0 builds the set's
+	// pointer rectangle from them.
+	pointerLeft   int16
+	pointerTop    int16
+	pointerWidth  int16
+	pointerHeight int16
 }
 
 // File is the name the set was opened under.
@@ -111,6 +120,14 @@ func (s *Set) SceneScriptResource(sceneID uint16) (uint32, bool) {
 // from.
 func (s *Set) CameraPullback() int { return s.cameraPullback }
 func (s *Set) CameraHeight() int   { return s.cameraHeight }
+
+// PointerExtent returns the four inputs of the set's pointer rectangle, verified
+// from FUN_004195F0: left (+0x16), top (+0x14), width (+0x2C) and height (+0x2A).
+// The rectangle itself is derived by the scripts package, which owns the native
+// rectangle rules.
+func (s *Set) PointerExtent() (left, top, width, height int16) {
+	return s.pointerLeft, s.pointerTop, s.pointerWidth, s.pointerHeight
+}
 
 func (w Workspace) OpenSet(name string) (*Set, error) {
 	cache, err := w.OpenResourceCache(name)
@@ -170,7 +187,7 @@ func (w Workspace) OpenSet(name string) (*Set, error) {
 		sceneScripts = append(sceneScripts, binary.LittleEndian.Uint32(metadata[offset:offset+4]))
 	}
 	failed = false
-	return &Set{cache: cache, views: views, backgroundResource: backgroundResource, backgroundCount: backgroundCount, backgroundTable: backgroundTable, palette: append([]byte(nil), metadata[setPaletteOffset:setPaletteOffset+setPaletteSize]...), secondaryResource: secondaryResource, resourceCount: header.CountB, cameraPullback: int(binary.LittleEndian.Uint16(metadata[0x18:0x1a])), cameraHeight: int(binary.LittleEndian.Uint16(metadata[0x1a:0x1c])), file: name, scriptResource: binary.LittleEndian.Uint32(metadata[0x1b78:0x1b7c]), sceneScripts: sceneScripts}, nil
+	return &Set{cache: cache, views: views, backgroundResource: backgroundResource, backgroundCount: backgroundCount, backgroundTable: backgroundTable, palette: append([]byte(nil), metadata[setPaletteOffset:setPaletteOffset+setPaletteSize]...), secondaryResource: secondaryResource, resourceCount: header.CountB, cameraPullback: int(binary.LittleEndian.Uint16(metadata[0x18:0x1a])), cameraHeight: int(binary.LittleEndian.Uint16(metadata[0x1a:0x1c])), pointerLeft: int16(binary.LittleEndian.Uint16(metadata[0x16:0x18])), pointerTop: int16(binary.LittleEndian.Uint16(metadata[0x14:0x16])), pointerWidth: int16(binary.LittleEndian.Uint16(metadata[0x2c:0x2e])), pointerHeight: int16(binary.LittleEndian.Uint16(metadata[0x2a:0x2c])), file: name, scriptResource: binary.LittleEndian.Uint32(metadata[0x1b78:0x1b7c]), sceneScripts: sceneScripts}, nil
 }
 
 func readSetResource(cache *ResourceCache, index uint32) ([]byte, error) {

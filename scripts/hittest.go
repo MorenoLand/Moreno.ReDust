@@ -215,6 +215,120 @@ func LookupByID(data []byte, count StageObjectCount, id int32) (index int, row [
 	return 0, nil, StatusNameNotFound, nil
 }
 
+// The pointer rectangles behind pointinset 20041 and pointinstage 20042.
+//
+// FUN_004057D0 rebuilds the set's pointer rectangle DAT_00442340..46 each time a
+// set opens (callers FUN_004195F0 and FUN_00423F20), from the four words
+// DAT_00459A50..A56 that FUN_004195F0 loads from the set metadata:
+//
+//	DAT_00442340 (left)   = DAT_00459A56  = metadata +0x16
+//	DAT_00442342 (top)    = DAT_00459A54  = metadata +0x14
+//	DAT_00442344 (right)  = left + DAT_00459A52  (width  = metadata +0x2C)
+//	DAT_00442346 (bottom) = top  + DAT_00459A50  (height = metadata +0x2A)
+//
+// The stage view rectangle DAT_00459700..07 is written only by FUN_0041C6E0 at
+// init, as (0, 0, 0x180, 0x200), so the stage is 384 wide and 512 high.
+
+// Limits and diagnostic codes FUN_004057D0 checks for a set's pointer rectangle.
+// A diagnostic is reported through FUN_0042C470, which shows a message box; the
+// rectangle is still installed, since the rebuild has no early return.
+const (
+	// SetPointerMaxHeight is the largest height FUN_004057D0 accepts, 0x200.
+	SetPointerMaxHeight int16 = 0x200
+	// SetPointerMaxWidth is the largest width FUN_004057D0 accepts, 0x180.
+	SetPointerMaxWidth int16 = 0x180
+	// SetPointerHeightDiag is raised when height > 0x200.
+	SetPointerHeightDiag uint16 = 0x13EC
+	// SetPointerWidthDiag is raised when width > 0x180.
+	SetPointerWidthDiag uint16 = 0x13ED
+	// SetPointerOutsideStageDiag is raised when the pointer rectangle is not
+	// inside the stage view rectangle.
+	SetPointerOutsideStageDiag uint16 = 0x13EE
+)
+
+// StageViewRect is DAT_00459700..07, the stage view rectangle FUN_0041C6E0 sets.
+var StageViewRect = Rect{Left: 0, Top: 0, Right: 0x180, Bottom: 0x200}
+
+// SetPointerRect builds the set's pointer rectangle from the four metadata words,
+// with the 16-bit wrap the native stores use.
+func SetPointerRect(left, top, width, height int16) Rect {
+	return Rect{Left: left, Top: top, Right: left + width, Bottom: top + height}
+}
+
+// CheckSetPointerRect returns the diagnostics FUN_004057D0 raises for a set's
+// pointer rectangle, in the order it raises them. The containment test is the
+// native's: FUN_0042E380 takes the bounding union of the set rectangle and the
+// stage view, and FUN_0042E2F0 requires that union to equal the stage view.
+// That is the same as the set rectangle lying inside the stage view.
+func CheckSetPointerRect(width, height int16, rect Rect) []uint16 {
+	var codes []uint16
+	if height > SetPointerMaxHeight {
+		codes = append(codes, SetPointerHeightDiag)
+	}
+	if width > SetPointerMaxWidth {
+		codes = append(codes, SetPointerWidthDiag)
+	}
+	if unionRect(rect, StageViewRect) != StageViewRect {
+		codes = append(codes, SetPointerOutsideStageDiag)
+	}
+	return codes
+}
+
+// unionRect reproduces FUN_0042E380 on two rectangles: the left and top edges
+// take the smaller value and the right and bottom edges the larger.
+func unionRect(a, b Rect) Rect {
+	out := b
+	if a.Left < b.Left {
+		out.Left = a.Left
+	}
+	if a.Top < b.Top {
+		out.Top = a.Top
+	}
+	if b.Right < a.Right {
+		out.Right = a.Right
+	}
+	if b.Bottom < a.Bottom {
+		out.Bottom = a.Bottom
+	}
+	return out
+}
+
+// PointFromPacked splits a packed 32-bit point the way FUN_0042E340 reads it: the
+// low word is compared with the left and right edges and the high word with the
+// top and bottom edges.
+func PointFromPacked(packed uint32) Point {
+	return Point{X: int16(uint16(packed)), Y: int16(uint16(packed >> 16))}
+}
+
+// PointInSetValue reproduces pointinset 20041, FUN_0041B330, once its argument
+// has been evaluated. An argument that is not numeric (type 4) gives status 0x0E
+// with no result. Otherwise the result is a type-2 boolean. The box test runs only
+// when DAT_00459A24 and DAT_00459A26 are both set, and is false otherwise.
+func PointInSetValue(argType uint16, packed uint32, state SetState, rect Rect) (ValueResult, uint16) {
+	if argType != ValueTypeNumeric {
+		return ValueResult{}, StatusWrongOperandType
+	}
+	if !PointInSetWillTest(state) {
+		return BoolResult(false), 0
+	}
+	return BoolResult(ContainsPoint(PointFromPacked(packed), rect)), 0
+}
+
+// PointInStageValue reproduces pointinstage 20042, FUN_00412690. The argument rule
+// is the same as PointInSetValue. The box test runs when the stage is open
+// (DAT_00459A00) and DAT_00459A02 is set, against the stage view rectangle. The
+// stage's visible flag is the one stagevisible 16008 writes, so this is false
+// whenever that flag is clear.
+func PointInStageValue(argType uint16, packed uint32, stageOpen, stageVisible bool) (ValueResult, uint16) {
+	if argType != ValueTypeNumeric {
+		return ValueResult{}, StatusWrongOperandType
+	}
+	if !stageOpen || !stageVisible {
+		return BoolResult(false), 0
+	}
+	return BoolResult(ContainsPoint(PointFromPacked(packed), StageViewRect)), 0
+}
+
 // readInt32 reads a little-endian signed 32-bit value, which is how every 32-bit
 // field in the reference is stored.
 func readInt32(data []byte) int32 {

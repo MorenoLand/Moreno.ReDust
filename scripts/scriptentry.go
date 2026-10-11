@@ -168,9 +168,9 @@ type ScriptContext struct {
 	StageOpen bool
 	// SetActive reports an active set, the DAT_00459A24 slot.
 	SetActive bool
-	// HitDataReady is the second slot FUN_0041B330's pointinset hit test
-	// requires alongside the set.
-	HitDataReady bool
+	// SetVisible is DAT_00459A26, the visible flag FUN_0041B330 requires
+	// alongside SetActive before it runs the pointinset box test.
+	SetVisible bool
 }
 
 // ScriptContextState is the mutable state the entry path updates: the shared
