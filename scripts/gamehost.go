@@ -726,6 +726,9 @@ func (h *GameHost) command(call *ScriptCall) (int, uint16, error) {
 	if consumed, status, handled, err := h.propCommand(name, call); handled {
 		return consumed, status, err
 	}
+	if consumed, status, handled, err := h.scriptAttachCommand(name, call); handled {
+		return consumed, status, err
+	}
 	if consumed, status, handled, err := h.worldCommand(name, call); handled {
 		return consumed, status, err
 	}
