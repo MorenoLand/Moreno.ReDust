@@ -37,9 +37,10 @@ type MouseEvent struct {
 }
 
 type MouseState struct {
-	Point        uint32
-	LeftDown     bool
-	LeftReleased bool
+	Point         uint32
+	LeftDown      bool
+	LeftReleased  bool
+	RightReleased bool
 }
 
 func NewGame(frame render.IndexedFrame) (*Game, error) {
@@ -120,7 +121,7 @@ func (g *Game) Update() error {
 		}
 	}
 	if g.mouseState != nil {
-		frame, changed, err := g.mouseState(MouseState{Point: g.pointerPoint(), LeftDown: ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft), LeftReleased: inpututil.IsMouseButtonJustReleased(ebiten.MouseButtonLeft)})
+		frame, changed, err := g.mouseState(MouseState{Point: g.pointerPoint(), LeftDown: ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft), LeftReleased: inpututil.IsMouseButtonJustReleased(ebiten.MouseButtonLeft), RightReleased: inpututil.IsMouseButtonJustReleased(ebiten.MouseButtonRight)})
 		if err != nil {
 			return err
 		}

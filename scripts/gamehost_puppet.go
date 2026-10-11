@@ -590,6 +590,8 @@ func (h *GameHost) puppetValue(name string, call *ScriptCall) (Record, int, uint
 		if len(args) != 1 || args[0].Kind != 4 {
 			return Record{}, 0, ScriptStatusWrongType, true, nil
 		}
+		// FUN_00409F90 begins with FUN_0042C9A0, which clears the pending table.
+		h.pending.reset()
 		if h.Env.Presenter == nil {
 			return Record{}, 0, 0, true, fmt.Errorf("puppetevent has no puppet presenter")
 		}
@@ -607,6 +609,8 @@ func (h *GameHost) puppetValue(name string, call *ScriptCall) (Record, int, uint
 			deadline = h.Env.Ticks() + uint32(timeout)
 		}
 		if err := h.wait(func() bool {
+			// Each poll is one pass of the FUN_00409F90 loop, which removes a 0x0E record.
+			h.pending.puppetPoll()
 			if chosen, ok := h.Env.Presenter.Chosen(); ok {
 				event = chosen
 				return true

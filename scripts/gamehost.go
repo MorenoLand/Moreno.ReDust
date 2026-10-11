@@ -309,6 +309,10 @@ type GameHost struct {
 	// cursorCount is the Win32 display count that showcursor and hidecursor
 	// move; the cursor shows at zero or more.
 	cursorCount int
+	// pending is the window procedure's input queue, and leftDown is the left
+	// button state stilldown reads when no button-up record is pending.
+	pending  pendingTable
+	leftDown bool
 }
 
 // setRect reads the set gate and the pointer rectangle through the host hook.
@@ -1315,6 +1319,14 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 			return Record{}, 0, 0, fmt.Errorf("props are unavailable")
 		}
 		return boolean(h.Props.BallActive(args[0].Text), consumed)
+	case "stilldown":
+		// FUN_00415E90: takes no argument and returns a type-2 result, 0 while a
+		// flag-4 pending record exists and otherwise the left button state.
+		_, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		return boolean(h.pending.stilldown(h.leftDown), consumed)
 	case "countprops":
 		_, consumed, status, err := call.Args()
 		if err != nil || status != 0 {
@@ -1696,8 +1708,11 @@ func (h *GameHost) Deliver(in *Interpreter, event ActorEvent) (uint16, error) {
 // OpenSet is FUN_0040D9A0, run when a set opens (FUN_00419520): every placed
 // actor whose set is the newly current one is moved to its star's location.
 func (h *GameHost) OpenSet() {
-	// FUN_004195F0 sets DAT_00459A26 to 1 as the set opens.
+	// FUN_004195F0 sets DAT_00459A26 to 1 as the set opens, and its last call
+	// (line 57 of the export, on every path) is FUN_0042C9A0, which clears the
+	// pending table.
 	h.setVisible = true
+	h.pending.reset()
 	current := h.currentSet()
 	for _, key := range h.Actors.Names() {
 		actor := h.Actors.actors[key]

@@ -5683,6 +5683,7 @@ func run() error {
 		}
 		return applyFlatTarget(action.FlatTarget, action.VisualEffect, action.Duration, handler.ScriptResource)
 	}, func(state engine.MouseState) (render.IndexedFrame, bool, error) {
+		scriptHost.NoteMouse(state.Point, state.LeftDown, state.LeftReleased, state.RightReleased)
 		if options.modal.Active() {
 			return options.modal.HandleMouseState(state)
 		}
