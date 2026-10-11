@@ -170,6 +170,10 @@ type GameHostEnv struct {
 	// CursorVisible receives the cursor's visibility after showcursor or
 	// hidecursor changes the display count. Nil leaves the cursor alone.
 	CursorVisible func(visible bool)
+	// DrawString receives each drawstring call that passes the native checks
+	// (FUN_00425A00). The native TextOutA draws onto the DC, so the host draws the
+	// text on the frame it currently owns. Nil leaves drawstring unimplemented.
+	DrawString func(draw TextDraw) error
 	// FreeMemory is the host's memory reading that freemem takes the minimum of
 	// (FUN_0042C420, through GlobalMemoryStatus): the page file's available
 	// bytes, the available virtual bytes and the total physical bytes. The

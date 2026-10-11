@@ -72,6 +72,9 @@ func (h *GameHost) hostCommand(name string, call *ScriptCall) (int, uint16, bool
 	case "mixclut":
 		consumed, status, err := mixclutStatement(call)
 		return consumed, status, true, err
+	case "drawstring":
+		consumed, status, err := h.drawStringCommand(call)
+		return consumed, status, true, err
 	}
 	return 0, 0, false, nil
 }
