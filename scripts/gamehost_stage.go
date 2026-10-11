@@ -49,3 +49,35 @@ func (h *GameHost) stageVisibleEffectsNotPorted(visible bool) {
 	}
 	h.logf("stagevisible(true): picture load not ported (FUN_004014F0, FUN_00427580, FUN_00401670); bitmap unchanged")
 }
+
+// closeStageCommand is closestagefile(), opcode 12061, the command side of
+// FUN_004119C0. The reference runs, in order:
+//
+//	*result = 0
+//	if (DAT_00459A00 == 0) return 0x0B;             // no open stage; no argument is read
+//	status = FUN_00411E80();                          // leaves the open flat (FUN_00413130, not traced)
+//	if status != 0 return status
+//	recheck DAT_00459A00 and the guard DAT_00459A04+0xD34; a change returns 0
+//	FUN_00411A70(&DAT_00459A00);                      // releases the stage file (FUN_00401670, FUN_004019F0)
+//	FUN_00427EC0(bitmap, w*h);                        // frees the stage picture
+//	FUN_004055C0(2);                                  // redraw level 2, not ported
+//	return 0
+//
+// The dispatcher requires "(" first and, after a status 0 result, ")" after
+// that. The port holds its stage for the whole run and has no open path that
+// could bring a stage back, so only the no-stage gate is carried here. With a
+// stage open the close is a gap error, which is what the handler did before.
+// A nil StageOpen hook is also a gap, since the port does not know the stage
+// state then rather than knowing it is closed.
+func (h *GameHost) closeStageCommand(call *ScriptCall) (int, uint16, error) {
+	if call.Kind(call.Start+1) != opOpen {
+		return 0, ScriptStatusMalformed, nil
+	}
+	if h.Env.StageOpen == nil {
+		return 0, 0, h.gap(call)
+	}
+	if !h.Env.StageOpen() {
+		return 0, 0x0b, nil
+	}
+	return 0, 0, h.gap(call)
+}

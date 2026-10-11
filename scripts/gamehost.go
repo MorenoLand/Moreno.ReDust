@@ -690,6 +690,8 @@ func (h *GameHost) command(call *ScriptCall) (int, uint16, error) {
 		return h.sendToFloorFx(call, nil)
 	case "stagevisible":
 		return h.stageVisibleCommand(call)
+	case "closestagefile":
+		return h.closeStageCommand(call)
 	case "sendtoactor":
 		return h.sendToActor(call)
 	case "sendtoscene":
