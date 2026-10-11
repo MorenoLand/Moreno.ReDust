@@ -835,6 +835,9 @@ func run() error {
 		FrameRate: func() int32 { return 3 },
 		OptionKey: func() bool { return ebiten.IsKeyPressed(ebiten.KeyAlt) },
 		ShiftKey:  func() bool { return ebiten.IsKeyPressed(ebiten.KeyShift) },
+		ControlDown: func() bool {
+			return ebiten.IsKeyPressed(ebiten.KeyControlLeft) || ebiten.IsKeyPressed(ebiten.KeyControlRight)
+		},
 		Chain: func(actor *scripts.ActorRecord) ([]scripts.ScriptFrame, error) {
 			key := strings.ToLower(actor.Name)
 			cast := scriptActorCasts[key]

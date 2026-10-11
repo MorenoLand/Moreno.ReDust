@@ -50,6 +50,10 @@ type GameHostEnv struct {
 	// FUN_0042C7C0 reads as GetKeyState(VK_LBUTTON) < 0 after its pump. Nil makes
 	// button a gap.
 	LeftButton func() bool
+	// ControlDown reports whether a Control key is down, the state FUN_0042EB80
+	// reads as GetKeyState(VK_CONTROL) < 0 for commandkey. Nil makes commandkey
+	// report up (false), since the port has no keyboard source in that case.
+	ControlDown func() bool
 	// Heading is FUN_004113F0, the bearing from one point to another, in the
 	// convention the renderer draws headings with.
 	Heading func(from, to [3]int16) int16

@@ -146,6 +146,24 @@ func (h *GameHost) hostValue(name string, call *ScriptCall) (Record, int, uint16
 			return Record{}, 0, status, true, nil
 		}
 		return Record{Kind: 2, Data: boolWord(h.Env.LeftButton())}, consumed, 0, true, nil
+	case "commandkey":
+		// commandkey is FUN_00416C20, value 20060. It takes no arguments. Its
+		// handler zeroes the consumed count and returns FUN_0042EB80(), which is
+		// GetKeyState(0x11) < 0: the sign bit of the returned SHORT, so the result
+		// is true while a Control key is down (VK_CONTROL, either side, per the
+		// Win32 generic key; that API rule is not decoded from the binary). The
+		// dispatcher checks "(" before the handler and ")" after it, so the key is
+		// read before hostClose. The result is a type-2 boolean with status 0. A
+		// nil ControlDown reports up; that is a port default, not a native path.
+		if !hostOpen(call) {
+			return Record{}, 0, ScriptStatusMalformed, true, nil
+		}
+		down := h.Env.ControlDown != nil && h.Env.ControlDown()
+		consumed, status := hostClose(call)
+		if status != 0 {
+			return Record{}, 0, status, true, nil
+		}
+		return Record{Kind: 2, Data: boolWord(down)}, consumed, 0, true, nil
 	case "calcturn":
 		record, consumed, status, err := h.calcTurn(call)
 		return record, consumed, status, true, err
