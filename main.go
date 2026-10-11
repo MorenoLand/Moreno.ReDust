@@ -2266,6 +2266,7 @@ func run() error {
 		return nil
 	}
 	scriptHost.Env.PuppetFile = workspace.OpenPuppetFile
+	scriptHost.Env.FileExists = workspace.HasAsset
 	scriptHost.Env.Program = scriptProgram
 	scriptHost.Env.Shop = func(name string) (string, uint32, bool) {
 		// INVEN.PRP is the inventory shop the NEW.FLT boot opens for the

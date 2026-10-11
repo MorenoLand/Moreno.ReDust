@@ -51,16 +51,18 @@ const (
 // FlagAccessors is the verified set, transcribed from live Ghidra decompilation:
 //
 //	menuvisible 16037 FUN_00414F20  type 2  *(int *)(out + 1) = DAT_00459680
-//	keyaborts   16045 FUN_00414F50  type 2  *(int *)(out + 1) = DAT_00459996
+//	keyaborts   16045 FUN_00414F50  type 2  value = MOVSX of the word DAT_00459996
 //	optionkey   20058 FUN_00416BC0  type 2  value = (int)FUN_0042EB70()
 //	wavevolume  16033 FUN_00415BF0  type 4  value = (int)FUN_00434970()
 //	framerate   16022 FUN_00416540  type 4  value = DAT_004599CE
 //
-// The two boolean readers copy a raw global with no normalisation, exactly as
-// `propvisible` does, so a slot holding 7 yields a boolean 7.
+// menuvisible copies a raw global with no normalisation, exactly as `propvisible`
+// does, so a slot holding 7 yields a boolean 7. keyaborts is different: the
+// assembly of FUN_00414F50 is `MOVSX ECX, word ptr [0x459996]`, a 16-bit word
+// sign-extended, which the decompile hides behind a plain global read.
 var FlagAccessors = []FlagAccessor{
 	{16037, "menuvisible", "FUN_00414F20", ValueTypeBool, SourceGlobal32, 0},
-	{16045, "keyaborts", "FUN_00414F50", ValueTypeBool, SourceGlobal32, 0},
+	{16045, "keyaborts", "FUN_00414F50", ValueTypeBool, SourceGlobalShort, 16},
 	{20058, "optionkey", "FUN_00416BC0", ValueTypeBool, SourceQuery, 16},
 	{16033, "wavevolume", "FUN_00415BF0", ValueTypeNumeric, SourceQuery, 16},
 	{16022, "framerate", "FUN_00416540", ValueTypeNumeric, SourceGlobal32, 0},

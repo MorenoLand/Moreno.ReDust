@@ -177,6 +177,20 @@ func (h *GameHost) puppetCommand(name string, call *ScriptCall) (consumed int, s
 		return nil
 	}
 	switch name {
+	case "puppetsubtitle":
+		// FUN_00408750 evaluates one argument (FUN_004220A0), converts it to a string
+		// (FUN_00421FC0, 0x0E for anything else) and then draws it through
+		// FUN_0040A6F0. The drawing is not ported: its layout rectangle and the
+		// surface it writes into are not transcribed, so the frame is validated and
+		// the draw is reported as a gap rather than approximated.
+		arg, _, status, err := builtinArgument(call)
+		if err != nil || status != 0 {
+			return 0, status, true, err
+		}
+		if arg.Kind != 3 {
+			return 0, ScriptStatusWrongType, true, nil
+		}
+		return 0, 0, true, fmt.Errorf("%w: puppetsubtitle draws through FUN_0040A6F0, whose layout is not transcribed", ErrHostOpcodeUnimplemented)
 	case "openpuppetfile":
 		args, consumed, status, err := call.Args()
 		if err != nil || status != 0 {

@@ -55,6 +55,11 @@ type GameHostEnv struct {
 	// Presenter shows conversations; PuppetFile reads a PUP's script table.
 	Presenter  PuppetPresenter
 	PuppetFile func(file string) (assets.PuppetFile, error)
+	// FileExists reports whether a script file name is present in the asset
+	// root. findfile answers from it: the reference probes eight prefixed
+	// candidates on disk, and the port has one asset root in their place. Nil
+	// makes findfile a gap.
+	FileExists func(name string) bool
 	// Program loads a script resource from a container.
 	Program func(file string, resource uint32) (*Program, error)
 	// Shop resolves an open shop's script (FUN_00421520).
@@ -218,6 +223,9 @@ type GameHost struct {
 	// PuppetParams are puppetparam's eight 16-bit slots (DAT_0045999C..AA).
 	PuppetParams [8]int16
 	PuppetBase   string
+	// KeyAborts is DAT_00459996, the keyaborts flag. keyaborts(bool) stores the
+	// low word of its argument and keyaborts() reads it back sign-extended.
+	KeyAborts int16
 	// Props is the prop table scripts read and write; the game keeps its own
 	// copies of owner and degree in step around script runs.
 	Props      *ScriptProps
@@ -568,6 +576,10 @@ func (h *GameHost) command(call *ScriptCall) (int, uint16, error) {
 		}
 		h.stopJobs(args[0].Text)
 		return consumed, 0, nil
+	case "debugger":
+		return debuggerCommand(call)
+	case "keyaborts":
+		return h.keyAbortsCommand(call)
 	case "halttheme":
 		_, consumed, status, err := call.Args()
 		if err != nil || status != 0 {
@@ -903,6 +915,10 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 			}
 			return number(32000, consumed)
 		}
+	case "keyaborts":
+		return h.keyAbortsValue(call)
+	case "findfile":
+		return h.findFileValue(call)
 	case "countactors":
 		_, consumed, status, err := call.Args()
 		if err != nil || status != 0 {

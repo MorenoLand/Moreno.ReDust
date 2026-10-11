@@ -41,6 +41,20 @@ func (w Workspace) OpenAsset(name string) (AssetFile, int64, error) {
 	return w.open(relative)
 }
 
+// HasAsset reports whether a script file name resolves to a file in the
+// workspace's asset root. findfile asks this: the reference probes the file
+// system under its path prefixes, and the port's replacement for that probe is
+// the workspace lookup. A name the asset root cannot address (absolute, parent
+// relative or on an unknown volume) is reported as absent.
+func (w Workspace) HasAsset(name string) bool {
+	file, _, err := w.OpenAsset(name)
+	if err != nil {
+		return false
+	}
+	file.Close()
+	return true
+}
+
 func (w Workspace) OpenContainer(name string) (*Container, error) {
 	file, size, err := w.OpenAsset(name)
 	if err != nil {
