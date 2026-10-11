@@ -313,10 +313,18 @@ func opcodeName(call *ScriptCall) string {
 	return CommandHandlerName(call.Program.Records[call.Start].Kind)
 }
 
+// stageIsOpen is the open-stage gate, DAT_00459A00, that the stage statements and
+// readers test first. A nil StageOpen hook reports closed, the convention
+// stagevisible already uses: a host that does not wire the stage cannot show one.
+func (h *GameHost) stageIsOpen() bool {
+	return h.Env.StageOpen != nil && h.Env.StageOpen()
+}
+
 // openFlats is the open stage's flat count. The bool is false when no stage is
-// open, which FUN_00411FC0 and FUN_00412010 test before anything else.
+// open, which FUN_00411FC0 and FUN_00412010 test before anything else. The gate is
+// checked here as well as in the hook, so a closed stage never reports its flats.
 func (h *GameHost) openFlats() (int, bool) {
-	if h.Env.FlatCount == nil || h.Env.FlatName == nil {
+	if !h.stageIsOpen() || h.Env.FlatCount == nil || h.Env.FlatName == nil {
 		return 0, false
 	}
 	return h.Env.FlatCount()

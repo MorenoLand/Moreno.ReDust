@@ -414,6 +414,14 @@ func (h *GameHost) puppetCommand(name string, call *ScriptCall) (consumed int, s
 		}
 		return consumed, 0, true, nil
 	case "gotoflat":
+		// FUN_00411AD0: the dispatcher's "(" check, then the stage guard (0x0B)
+		// before the argument is evaluated.
+		if call.Kind(call.Start+1) != opOpen {
+			return 0, ScriptStatusMalformed, true, nil
+		}
+		if !h.stageIsOpen() {
+			return 0, StatusNoActiveStage, true, nil
+		}
 		args, consumed, status, err := call.Args()
 		if err != nil || status != 0 {
 			return 0, status, true, err
@@ -493,9 +501,14 @@ func (h *GameHost) puppetCommand(name string, call *ScriptCall) (consumed int, s
 		return consumed, 0, true, h.wait(present.MovieDone)
 	case "sendtostage":
 		// sendtostage(message(args)): one argument, the message, run against
-		// the open stage's script (FUN_00413210).
+		// the open stage's script (FUN_00413210 into FUN_00413230, whose first test
+		// is DAT_00459A00 and returns 0x0B). The frame label is "Stage Script: ",
+		// the pool string FUN_00413230 passes.
 		if call.Kind(call.Start+1) != opOpen {
 			return 0, ScriptStatusMalformed, true, nil
+		}
+		if !h.stageIsOpen() {
+			return 0, StatusNoActiveStage, true, nil
 		}
 		if h.Env.StageScript == nil {
 			return 0, 0, true, fmt.Errorf("%w: sendtostage has no stage script", ErrHostOpcodeUnimplemented)
@@ -505,7 +518,7 @@ func (h *GameHost) puppetCommand(name string, call *ScriptCall) (consumed int, s
 			return 0, 0, true, err
 		}
 		message := call.Start + 2
-		chain := []ScriptFrame{{Program: program, Me: "stage", Target: "stage", Label: "Stage Message: ", Last: true}}
+		chain := []ScriptFrame{{Program: program, Me: "stage", Target: "stage", Label: PoolLabelStageScript, Last: true}}
 		used, status, err := call.Interpreter.callCode(chain, 0, call.Chain, call.FrameIndex, call.Locals, call.Program, message, nil)
 		if err != nil || status != 0 {
 			return 0, status, true, err
@@ -711,14 +724,22 @@ func (h *GameHost) puppetValue(name string, call *ScriptCall) (Record, int, uint
 		}
 		return Record{Kind: 4, Data: uint32(int32(h.PuppetParams[args[0].Int-1]))}, consumed, 0, true, nil
 	case "currentflat":
+		// FUN_004125C0 has no 0x0B guard. With no stage open it copies the pool
+		// string at DAT_0045D368, "none", into the result. Its status is whatever
+		// FUN_00421F60 returns, which the no-stage path does not pin down (unverified,
+		// reported as 0 here).
 		_, consumed, status, err := call.Args()
 		if err != nil || status != 0 {
 			return Record{}, 0, status, true, err
 		}
-		if h.Env.CurrentFlat == nil {
-			return Record{}, 0, 0, true, fmt.Errorf("currentflat has no flat source")
+		name := PoolNameNone
+		if h.stageIsOpen() {
+			if h.Env.CurrentFlat == nil {
+				return Record{}, 0, 0, true, fmt.Errorf("currentflat has no flat source")
+			}
+			name = h.Env.CurrentFlat()
 		}
-		record, status, err := call.Interpreter.Record(ScriptValue{Kind: 3, Text: h.Env.CurrentFlat()})
+		record, status, err := call.Interpreter.Record(ScriptValue{Kind: 3, Text: name})
 		return record, consumed, status, true, err
 	case "sendtocastfx":
 		// sendtocastfx(cast, message(args)): the cast message's return value.
@@ -738,9 +759,13 @@ func (h *GameHost) puppetValue(name string, call *ScriptCall) (Record, int, uint
 		}
 		return result, consumed, 0, true, nil
 	case "sendtostagefx":
-		// sendtostagefx(message(args)): the stage message's return value.
+		// sendtostagefx(message(args)): the stage message's return value. It is
+		// 20094, FUN_00413230, so the 0x0B stage guard applies after the "(" check.
 		if call.Kind(call.Start+1) != opOpen {
 			return Record{}, 0, ScriptStatusMalformed, true, nil
+		}
+		if !h.stageIsOpen() {
+			return Record{}, 0, StatusNoActiveStage, true, nil
 		}
 		if h.Env.StageScript == nil {
 			return Record{}, 0, 0, true, fmt.Errorf("%w: sendtostagefx has no stage script", ErrHostOpcodeUnimplemented)
@@ -750,7 +775,7 @@ func (h *GameHost) puppetValue(name string, call *ScriptCall) (Record, int, uint
 			return Record{}, 0, 0, true, err
 		}
 		message := call.Start + 2
-		chain := []ScriptFrame{{Program: program, Me: "stage", Target: "stage", Label: "Stage Message: ", Last: true}}
+		chain := []ScriptFrame{{Program: program, Me: "stage", Target: "stage", Label: PoolLabelStageScript, Last: true}}
 		var result Record
 		used, status, err := call.Interpreter.callCode(chain, 0, call.Chain, call.FrameIndex, call.Locals, call.Program, message, &result)
 		if err != nil || status != 0 {

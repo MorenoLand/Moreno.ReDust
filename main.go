@@ -709,6 +709,8 @@ func run() error {
 		scriptPrograms[key] = &program
 		return &program, nil
 	}
+	// stageOpen is the open-stage gate, DAT_00459A00: the port has a stage.
+	stageOpen := func() bool { return stage != nil }
 	// castTable is the cast table countcasts and indextocast read, in
 	// opencastfile order. BOOTFILE r1 opens gang.cst (record 200) and then
 	// extra.cst (record 205) on the straight-line boot path. The port has no
@@ -716,7 +718,7 @@ func run() error {
 	castTable := []string{gangCast.ScriptName, extraCast.ScriptName}
 	scriptHost := &scripts.GameHost{Actors: scriptActors, Props: scripts.NewScriptProps(), Loops: &nativeLoops, Random: &nativeRandom, Shops: []string{"house", "inven"}, Env: scripts.GameHostEnv{
 		CurrentSet: func() string { return activeSetName },
-		StageOpen:  func() bool { return stage != nil },
+		StageOpen:  stageOpen,
 		Managed:    func(name string) bool { return scriptManaged[strings.ToLower(name)] },
 		SetSize: func() (int16, int16, bool) {
 			if activeSet == nil {
@@ -747,7 +749,12 @@ func run() error {
 			}
 			return false
 		},
-		FlatButtons: func(flat string) ([]scripts.SceneButton, bool, error) { return flatButtons(stage, flat) },
+		FlatButtons: func(flat string) ([]scripts.SceneButton, bool, error) {
+			if !stageOpen() {
+				return nil, false, nil
+			}
+			return flatButtons(stage, flat)
+		},
 		CastScript: func(name string) (*scripts.Program, bool, error) {
 			for _, cast := range []assets.Cast{gangCast, extraCast} {
 				if strings.EqualFold(cast.ScriptName, name) {
@@ -2446,7 +2453,12 @@ func run() error {
 		vector, _ := render.NativeDirectionVector(heading, length)
 		return vector[0], vector[1]
 	}
+	// currentflat reads the flat record at DAT_00459A08. With no stage open the
+	// scripts layer answers "none" before it calls this, so "" is only a guard.
 	scriptHost.Env.CurrentFlat = func() string {
+		if !stageOpen() || currentScene < 0 || currentScene >= len(stage.Scenes) {
+			return ""
+		}
 		return strings.ToLower(string(stage.Scenes[currentScene].Name[1:]))
 	}
 	scriptHost.Env.SceneCount = func() (int, bool) {
@@ -2467,14 +2479,24 @@ func run() error {
 	}
 	// The open stage is NEW.FLT, which BOOTFILE opens with openstagefile("new.flt").
 	// Stages that other sets open are not modelled yet.
-	scriptHost.Env.FlatCount = func() (int, bool) { return len(stage.Scenes), true }
+	// Every flat reader answers as a closed stage does (FUN_00411FC0, FUN_00412010,
+	// FUN_00413590) when no stage is open: no count, no name, no index.
+	scriptHost.Env.FlatCount = func() (int, bool) {
+		if !stageOpen() {
+			return 0, false
+		}
+		return len(stage.Scenes), true
+	}
 	scriptHost.Env.FlatName = func(index int) (string, bool) {
-		if index < 0 || index >= len(stage.Scenes) {
+		if !stageOpen() || index < 0 || index >= len(stage.Scenes) {
 			return "", false
 		}
 		return string(stage.Scenes[index].Name[1:]), true
 	}
 	scriptHost.Env.FlatIndex = func(name string) (int, bool) {
+		if !stageOpen() {
+			return 0, false
+		}
 		for index := range stage.Scenes {
 			if strings.EqualFold(string(stage.Scenes[index].Name[1:]), name) {
 				return index, true
@@ -2483,10 +2505,16 @@ func run() error {
 		return 0, false
 	}
 	scriptHost.Env.FlatButtonCount = func(flat int) (int, error) {
+		if !stageOpen() {
+			return 0, nil
+		}
 		handlers, err := stage.SceneHandlers(flat)
 		return len(handlers), err
 	}
 	scriptHost.Env.FlatButtonName = func(flat, index int) (string, error) {
+		if !stageOpen() {
+			return "", nil
+		}
 		handlers, err := stage.SceneHandlers(flat)
 		if err != nil {
 			return "", err
@@ -2521,14 +2549,14 @@ func run() error {
 		return &program, nil
 	}
 	scriptHost.Env.FlatScript = func(index int) (*scripts.Program, bool, error) {
-		if stage != mainStage || index < 0 || index >= len(stage.Scenes) {
+		if !stageOpen() || stage != mainStage || index < 0 || index >= len(stage.Scenes) {
 			return nil, false, nil
 		}
 		program, err := flatResourceProgram(stage.Scenes[index].Fields[0])
 		return program, err == nil, err
 	}
 	scriptHost.Env.FlatButtonScript = func(flat, index int) (*scripts.Program, bool, error) {
-		if stage != mainStage {
+		if !stageOpen() || stage != mainStage {
 			return nil, false, nil
 		}
 		handlers, err := stage.SceneHandlers(flat)
