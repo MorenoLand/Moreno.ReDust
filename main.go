@@ -745,7 +745,6 @@ func run() error {
 			}
 			return false
 		},
-		StageOpen:   func() bool { return stage != nil },
 		FlatButtons: func(flat string) ([]scripts.SceneButton, bool, error) { return flatButtons(stage, flat) },
 		CastScript: func(name string) (*scripts.Program, bool, error) {
 			for _, cast := range []assets.Cast{gangCast, extraCast} {

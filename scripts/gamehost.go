@@ -22,9 +22,6 @@ type GameHostEnv struct {
 	// pointer rectangle DAT_00442340..46, which FUN_004057D0 builds when the set
 	// opens. A nil hook means no set is open.
 	SetRect func() (Rect, bool)
-	// StageOpen reports an open stage, the DAT_00459A00 gate that stagevisible
-	// tests. nil reads as no stage open.
-	StageOpen func() bool
 	// ResolveStar is FUN_0041B850: a named location in a set.
 	ResolveStar func(set, star string) ([3]int16, bool)
 	// Player and Camera are DAT_00459A6C and DAT_00459A78.
