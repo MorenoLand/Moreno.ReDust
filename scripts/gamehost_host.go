@@ -164,6 +164,35 @@ func (h *GameHost) hostValue(name string, call *ScriptCall) (Record, int, uint16
 			return Record{}, 0, status, true, nil
 		}
 		return Record{Kind: 2, Data: boolWord(down)}, consumed, 0, true, nil
+	case "optionkey":
+		// optionkey is FUN_00416BC0, value 20058. Its handler zeroes the consumed
+		// count and returns (int)FUN_0042EB70(). FUN_0042EB70 is `XOR AX,AX; RET`
+		// in one block with no branch (cached export), so every path returns 0 and
+		// the result is a type-2 boolean that is always false. No key is read. The
+		// dispatcher checks "(" before the handler and ")" after it, as for commandkey.
+		if !hostOpen(call) {
+			return Record{}, 0, ScriptStatusMalformed, true, nil
+		}
+		consumed, status := hostClose(call)
+		if status != 0 {
+			return Record{}, 0, status, true, nil
+		}
+		return Record{Kind: 2, Data: boolWord(false)}, consumed, 0, true, nil
+	case "shiftkey":
+		// shiftkey is FUN_00416BF0, value 20059. Its callee FUN_0042EBA0 returns
+		// GetKeyState(0x10) < 0 (VK_SHIFT, the same rule as FUN_0042EB80 for
+		// commandkey). The handler writes that as a type-2 boolean with status 0,
+		// and the key is read before the dispatcher's close check. A nil ShiftKey
+		// reports up; that is a port default, not a native path.
+		if !hostOpen(call) {
+			return Record{}, 0, ScriptStatusMalformed, true, nil
+		}
+		down := h.Env.ShiftKey != nil && h.Env.ShiftKey()
+		consumed, status := hostClose(call)
+		if status != 0 {
+			return Record{}, 0, status, true, nil
+		}
+		return Record{Kind: 2, Data: boolWord(down)}, consumed, 0, true, nil
 	case "calcturn":
 		record, consumed, status, err := h.calcTurn(call)
 		return record, consumed, status, true, err

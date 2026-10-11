@@ -44,8 +44,10 @@ type GameHostEnv struct {
 	// Frame is the frame() counter and FrameRate the boot framerate.
 	Frame     func() int32
 	FrameRate func() int32
-	OptionKey func() bool
-	ShiftKey  func() bool
+	// ShiftKey reports whether a Shift key is down, the state FUN_0042EBA0 reads
+	// as GetKeyState(VK_SHIFT) < 0 for shiftkey. optionkey has no hook: its native
+	// callee always returns 0.
+	ShiftKey func() bool
 	// LeftButton reports whether the left mouse button is down, the state
 	// FUN_0042C7C0 reads as GetKeyState(VK_LBUTTON) < 0 after its pump. Nil makes
 	// button a gap.
@@ -1487,16 +1489,6 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 			return Record{}, 0, status, err
 		}
 		return text(CurrentSetName(h.currentSet() != "", h.currentSet()), consumed)
-	case "optionkey", "shiftkey":
-		_, consumed, status, err := call.Args()
-		if err != nil || status != 0 {
-			return Record{}, 0, status, err
-		}
-		key := h.Env.OptionKey
-		if name == "shiftkey" {
-			key = h.Env.ShiftKey
-		}
-		return boolean(key != nil && key(), consumed)
 	case "pointinbutton":
 		return h.pointInButton(call)
 	case "pointinprop":

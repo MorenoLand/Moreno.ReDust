@@ -833,7 +833,6 @@ func run() error {
 		// second), not the 60 Hz tick counter.
 		Frame:     func() int32 { return int32(nativePumpCount) },
 		FrameRate: func() int32 { return 3 },
-		OptionKey: func() bool { return ebiten.IsKeyPressed(ebiten.KeyAlt) },
 		ShiftKey:  func() bool { return ebiten.IsKeyPressed(ebiten.KeyShift) },
 		ControlDown: func() bool {
 			return ebiten.IsKeyPressed(ebiten.KeyControlLeft) || ebiten.IsKeyPressed(ebiten.KeyControlRight)
