@@ -151,40 +151,6 @@ func (h *GameHost) propArgs(call *ScriptCall, count int) (*PropRecord, []ScriptV
 	return h.Props.Get(args[0].Text), args, consumed, 0, nil
 }
 
-// propNamedArgs reads the arguments of a prop statement or value and runs the
-// checks the native readers run, in the native order. FUN_00417100 (propxy's
-// statement), FUN_004171C0 (propxyz) and FUN_00417070 (the value form) read count
-// arguments and return 0x1C for a missing comma. The port also returns 0x1C for
-// fewer arguments than count, as pointinprop does. Then the name must be a string
-// (0x0E, FUN_00421FC0) and in the prop table (0x0A, FUN_004213C0). The caller
-// checks the other arguments after that, so an unknown name reports 0x0A whatever
-// the other arguments are. Unlike propArgs, it does not create a record for a name
-// the table does not hold.
-//
-// extra reports more arguments than count. The native dispatcher (FUN_00424890,
-// FUN_004137B0) runs the handler first and returns 2 only when the handler
-// succeeds and the token after the count arguments is not the closing paren, so
-// the caller does its work and then returns 2.
-func (h *GameHost) propNamedArgs(call *ScriptCall, count int) (args []ScriptValue, consumed int, extra bool, status uint16, err error) {
-	args, consumed, status, err = call.ArgsSeparated(ScriptStatusMissingComma)
-	if err != nil || status != 0 {
-		return nil, 0, false, status, err
-	}
-	if len(args) < count {
-		return nil, 0, false, ScriptStatusMissingComma, nil
-	}
-	if args[0].Kind != 3 {
-		return nil, 0, false, ScriptStatusWrongType, nil
-	}
-	if h.Props == nil {
-		return nil, 0, false, 0, fmt.Errorf("props are unavailable")
-	}
-	if !h.Props.Known(args[0].Text) {
-		return nil, 0, false, 0x0a, nil
-	}
-	return args[:count], consumed, len(args) > count, 0, nil
-}
-
 // propReadArgs reads the count arguments of a prop statement or value the way the
 // native readers do: FUN_00417070 for two (propset, propstar and the value forms of
 // propxy and propxyz), FUN_00417100 for three (propxy) and FUN_004171C0 for four
@@ -383,9 +349,22 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 		}
 		return consumed, 0, true, nil
 	case "propxy":
-		args, consumed, extra, status, err := h.propNamedArgs(call, 3)
+		// FUN_0041FDF0. FUN_00417100 reads three arguments, so propxy() is 0x0E. The name
+		// must be a string (0x0E) and in the prop table (0x0A, no record created), then
+		// the two coordinates must be numbers (0x0E). Extra arguments run all of that and
+		// return 2.
+		args, consumed, extra, status, err := h.propReadArgs(call, 3)
 		if err != nil || status != 0 {
 			return 0, status, true, err
+		}
+		if h.Props == nil {
+			return 0, 0, true, fmt.Errorf("props are unavailable")
+		}
+		if args[0].Kind != 3 {
+			return 0, ScriptStatusWrongType, true, nil
+		}
+		if !h.Props.Known(args[0].Text) {
+			return 0, StatusNameNotFound, true, nil
 		}
 		for _, arg := range args[1:] {
 			if arg.Kind != 4 {
@@ -471,9 +450,22 @@ func (h *GameHost) propValue(name string, call *ScriptCall) (Record, int, uint16
 		number := map[string]int32{"propdeg": int32(prop.Degree), "propvalue": prop.Value, "propscale": prop.Scale, "propzclip": prop.ZClip, "propspeed": prop.Speed}[name]
 		return Record{Kind: 4, Data: uint32(number)}, consumed, 0, true, nil
 	case "propxy":
-		args, consumed, extra, status, err := h.propNamedArgs(call, 2)
+		// FUN_0041FEE0. FUN_00417070 reads the name and the selector, so a call with no
+		// arguments is 0x0E. The name must be a string (0x0E) and in the prop table
+		// (0x0A, no record created), and the selector must be a number (0x0E).
+		args, consumed, extra, status, err := h.propReadArgs(call, 2)
 		if err != nil || status != 0 {
 			return Record{}, 0, status, true, err
+		}
+		if h.Props == nil {
+			return Record{}, 0, 0, true, fmt.Errorf("props are unavailable")
+		}
+		if args[0].Kind != 3 {
+			return Record{}, 0, ScriptStatusWrongType, true, nil
+		}
+		prop, found := h.Props.Lookup(args[0].Text)
+		if !found {
+			return Record{}, 0, StatusNameNotFound, true, nil
 		}
 		if args[1].Kind != 4 {
 			return Record{}, 0, ScriptStatusWrongType, true, nil
@@ -482,7 +474,6 @@ func (h *GameHost) propValue(name string, call *ScriptCall) (Record, int, uint16
 		// low half) and word 11 is x (the high half), so the packed value is x<<16|y.
 		// Propxy (proptable.go, FUN_0041FEE0) applies the selector: 1 and 2 are the
 		// sign-extended halves, 3 is the whole dword, and anything else is 0x0E.
-		prop, _ := h.Props.Lookup(args[0].Text)
 		packed := uint32(uint16(int16(prop.Y))) | uint32(uint16(int16(prop.X)))<<16
 		value, _, err := Propxy(packed, args[1].Int)
 		if err != nil {
