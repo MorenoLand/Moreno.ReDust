@@ -1,5 +1,7 @@
 package scripts
 
+import "fmt"
+
 // nativeArgs reads count comma separated value arguments the way the native
 // readers do: FUN_00417070 for two, FUN_00417100 for three and FUN_004171C0 for
 // four. Each argument is one expression, evaluated by FUN_004220A0 and decoded
@@ -98,6 +100,59 @@ func (h *GameHost) calcTurn(call *ScriptCall) (Record, int, uint16, error) {
 		return Record{}, 0, ScriptStatusMalformed, nil
 	}
 	return Record{Kind: 4, Data: uint32(int32(turn))}, end + 1 - call.Start, 0, nil
+}
+
+// starXYZ is starxyz, FUN_00414FB0, value 20073. FUN_00417070 reads a name and a
+// selector. The name must be a string (0x0E), and FUN_0041B850 then searches the
+// open set's coordinate table for it, primary name or alias in row order. With no
+// set open (DAT_00459A24 clear) or no row with the name, the status is 0x0A. The
+// selector must be a number (0x0E): 1, 2 and 3 give x, y and z as numbers, and 4
+// gives the packed point (x in the high word, y in the low). Any other selector is
+// 0x0E. The lookup goes through the ResolveStar hook for the open set. Whether the
+// hook's table is the native DAT_00459A44 table is recorded in the evidence ledger
+// as partly verified.
+func (h *GameHost) starXYZ(call *ScriptCall) (Record, int, uint16, error) {
+	if !hostOpen(call) {
+		return Record{}, 0, ScriptStatusMalformed, nil
+	}
+	args, end, status, err := nativeArgs(call, 2)
+	if err != nil || status != 0 {
+		return Record{}, 0, status, err
+	}
+	if args[0].Kind != 3 {
+		return Record{}, 0, ScriptStatusWrongType, nil
+	}
+	if h.Env.ResolveStar == nil {
+		return Record{}, 0, 0, fmt.Errorf("%w: starxyz has no star table", ErrHostOpcodeUnimplemented)
+	}
+	var position [3]int16
+	found := false
+	if _, open := h.setRect(); open {
+		position, found = h.Env.ResolveStar(h.currentSet(), args[0].Text)
+	}
+	if !found {
+		return Record{}, 0, StatusNameNotFound, nil
+	}
+	if args[1].Kind != 4 {
+		return Record{}, 0, ScriptStatusWrongType, nil
+	}
+	var value int32
+	switch args[1].Int {
+	case 1:
+		value = int32(position[0])
+	case 2:
+		value = int32(position[1])
+	case 3:
+		value = int32(position[2])
+	case 4:
+		value = packPoint(position)
+	default:
+		return Record{}, 0, ScriptStatusWrongType, nil
+	}
+	if call.Kind(end) != opClose {
+		return Record{}, 0, ScriptStatusMalformed, nil
+	}
+	return Record{Kind: 4, Data: uint32(value)}, end + 1 - call.Start, 0, nil
 }
 
 // typeName is type, FUN_00415AC0, value 20050. FUN_004220A0 evaluates one
