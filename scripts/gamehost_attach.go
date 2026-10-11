@@ -80,11 +80,57 @@ func (h *GameHost) attachTargetFound(statement, name string) (bool, error) {
 	return false, nil
 }
 
+// buttonScriptCommand is FUN_00412970, buttonscript(flat, button). The stage
+// guard comes first, so no open stage is 0x0B before any argument is read. Then
+// both arguments are read (0x1C for a missing comma, 0x0E for an empty one), the
+// flat name must be a string (0x0E) and name a flat of the open stage (0x0A), and
+// the button name must be a string (0x0E) and name a row of that flat's button
+// table (0x0A). The native then builds "Button Script: " plus the button row's own
+// name in the scratch, the same no-effect write as the name statements above.
+// The button table is FUN_00413630 over the flat row's dword 2, which the port
+// reads through flatButtonIndex.
+func (h *GameHost) buttonScriptCommand(call *ScriptCall) (int, uint16, error) {
+	if h.Env.StageOpen == nil {
+		return 0, 0, fmt.Errorf("buttonscript has no stage state")
+	}
+	if !h.Env.StageOpen() {
+		return 0, StatusNoActiveStage, nil
+	}
+	args, consumed, extra, status, err := h.propReadArgs(call, 2)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	if h.Env.FlatIndex == nil || h.Env.FlatButtonCount == nil || h.Env.FlatButtonName == nil {
+		return 0, 0, fmt.Errorf("buttonscript has no flat or button table")
+	}
+	if args[0].Kind != 3 {
+		return 0, ScriptStatusWrongType, nil
+	}
+	flat, found := h.Env.FlatIndex(args[0].Text)
+	if !found {
+		return 0, StatusNameNotFound, nil
+	}
+	if args[1].Kind != 3 {
+		return 0, ScriptStatusWrongType, nil
+	}
+	_, found, err = h.flatButtonIndex(flat, args[1].Text)
+	if err != nil {
+		return 0, 0, err
+	}
+	if !found {
+		return 0, StatusNameNotFound, nil
+	}
+	if extra {
+		return consumed, ScriptStatusMalformed, nil
+	}
+	return consumed, 0, nil
+}
+
 // scriptAttachCommand handles the script-attach statements. handled is false
 // for opcodes it does not own.
 func (h *GameHost) scriptAttachCommand(name string, call *ScriptCall) (consumed int, status uint16, handled bool, err error) {
 	switch name {
-	case "actorscript", "castscript", "propscript", "shopscript", "puppetscript":
+	case "actorscript", "castscript", "propscript", "shopscript", "puppetscript", "buttonscript":
 	default:
 		return 0, 0, false, nil
 	}
@@ -92,6 +138,10 @@ func (h *GameHost) scriptAttachCommand(name string, call *ScriptCall) (consumed 
 	// missing one is status 2 ahead of every guard below.
 	if call.Kind(call.Start+1) != opOpen {
 		return 0, ScriptStatusMalformed, true, nil
+	}
+	if name == "buttonscript" {
+		consumed, status, err = h.buttonScriptCommand(call)
+		return consumed, status, true, err
 	}
 	// FUN_00408AD0 tests DAT_00459A92, the open-puppet flag, before it reads its
 	// argument. With no puppet open the status is 0x2D whatever the argument is.
