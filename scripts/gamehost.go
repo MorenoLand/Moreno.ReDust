@@ -80,6 +80,10 @@ type GameHostEnv struct {
 	PropInstance func(source, name string) (status uint16, added bool)
 	// PropDegree is a prop's degree (propdeg).
 	PropDegree func(name string) (int16, bool)
+	// PropViewListed reports whether a view is in the view list of the definition
+	// behind a prop, and whether that definition is known. propview returns 0x0A
+	// for a view that is not listed (FUN_00421D00, called from FUN_0041F130).
+	PropViewListed func(prop, view string) (listed, known bool)
 	// Ticks is the native time-unit clock delay and the fades wait on.
 	Ticks func() uint32
 	// PlayerHeading is DAT_00459A6A; Vector is FUN_00406B10/FUN_00406B40.

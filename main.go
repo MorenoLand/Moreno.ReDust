@@ -2405,6 +2405,19 @@ func run() error {
 		definition, found := propArchive.Definition(name)
 		return "DATA/HOUSE.PRP", definition.ScriptResource, "house", found
 	}
+	// propview (FUN_0041F130) checks the view against the view list of the
+	// record's definition block. An instance shares its source's block, so the
+	// alias is resolved as PropScript resolves it.
+	scriptHost.Env.PropViewListed = func(prop, view string) (bool, bool) {
+		name := strings.ToLower(prop)
+		if original, aliased := propInstances[name]; aliased {
+			name = original
+		}
+		if listed, known := inventoryArchive.ViewListed(name, view); known {
+			return listed, true
+		}
+		return propArchive.ViewListed(name, view)
+	}
 	// FUN_004204D0: opening a shop file sends each of its props openprop().
 	for _, archive := range []*assets.PropArchive{propArchive, inventoryArchive} {
 		for _, name := range archive.ListNames() {

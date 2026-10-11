@@ -306,6 +306,12 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 			return 0, status, true, nil
 		}
 		prop := h.Props.Get(args[0].Text)
+		// FUN_00421D00 searches the prop's view list; FUN_0041F130 returns 0x0A when the view is not in it.
+		if h.Env.PropViewListed != nil {
+			if listed, known := h.Env.PropViewListed(args[0].Text, args[1].Text); known && !listed {
+				return 0, 0x0a, true, nil
+			}
+		}
 		prop.View = args[1].Text
 		prop.Frame = 0
 		if extra {

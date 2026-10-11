@@ -25,12 +25,13 @@ const (
 	PropNameOffset = 0x4E
 	// PropRecordCopyDwords is the 0x27 DWORDs copied out on a match.
 	PropRecordCopyDwords = 0x27
-	// PropRecordTailBytes is the size of the record's tail that propview returns
-	// as a string. Ghidra reserves 34 bytes for it, which together with the
-	// record's own size fixes it as the final 34 bytes of the record.
-	PropRecordTailBytes = 34
-	// PropRecordTailOffset is where that tail begins within a record.
-	PropRecordTailOffset = PropRecordSize - PropRecordTailBytes
+	// PropViewOffset is where the view name, a Pascal string, sits within a
+	// record: byte 126. FUN_0041F230 passes ESP+0x86 to FUN_00421F60 with the
+	// record at ESP+0x08; FUN_0041F130 copies the view to ESP+0x8E with the
+	// record at ESP+0x10; FUN_00420370 copies the definition's +0x6E string to
+	// the same byte. The view is at most 15 characters, so it ends before the
+	// record does.
+	PropViewOffset = 0x7E
 )
 
 // PropNameTable is the id-keyed and name-keyed prop table. Unlike the flat and
@@ -155,20 +156,19 @@ func PropVisible(record []byte) (ValueResult, error) {
 }
 
 // PropViewText reproduces propview 16025, FUN_0041F230, which fetches the prop
-// and returns the tail of its record as a string register:
+// and returns its view name as a string register:
 //
 //	evaluate name; string register; fetch prop;
-//	FUN_00421F60(&record[PropRecordTailOffset], out);
+//	FUN_00421F60(&record[PropViewOffset], out);
 //
-// Ghidra reserves 34 bytes for the source, which with the 158-byte record size
-// fixes it as the record's final 34 bytes. The name sits at byte 78, so this
-// tail is a distinct region from it.
+// The view is the Pascal string at byte 126. It is not the record's last 34
+// bytes, which would start at 124 and read the field before it.
 func PropViewText(record []byte) ([]byte, error) {
-	if len(record) < PropRecordTailOffset {
-		return nil, fmt.Errorf("prop record is %d bytes, too short for a tail at +%#x",
-			len(record), PropRecordTailOffset)
+	if len(record) <= PropViewOffset {
+		return nil, fmt.Errorf("prop record is %d bytes, too short for a view at +%#x",
+			len(record), PropViewOffset)
 	}
-	return PascalCopy(record[PropRecordTailOffset:]), nil
+	return PascalCopy(record[PropViewOffset:]), nil
 }
 
 // SetVisible reproduces setvisible 16007, FUN_0041AF90, in full:

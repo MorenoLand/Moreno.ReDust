@@ -43,6 +43,7 @@ type PropDefinition struct {
 	ScriptResource uint32
 	Name           string
 	views          map[string]uint32
+	viewNames      []string
 }
 
 type PropView struct {
@@ -169,15 +170,17 @@ func parsePropDefinition(resource uint32, data []byte, resourceCount uint32) (Pr
 		if descriptor >= resourceCount {
 			return PropDefinition{}, fmt.Errorf("view %d references descriptor %d outside %d entries", index, descriptor, resourceCount)
 		}
-		viewName, err := propName(row[propViewNameOffset:])
+		exactName, err := pascalField(row[propViewNameOffset:])
 		if err != nil {
 			return PropDefinition{}, fmt.Errorf("view %d name: %w", index, err)
 		}
+		viewName := strings.TrimSpace(exactName)
 		key := asciiUpper(viewName)
 		if _, exists := definition.views[key]; exists {
 			return PropDefinition{}, fmt.Errorf("definition %q has duplicate view %q", name, viewName)
 		}
 		definition.views[key] = descriptor
+		definition.viewNames = append(definition.viewNames, exactName)
 	}
 	return definition, nil
 }
@@ -185,6 +188,35 @@ func parsePropDefinition(resource uint32, data []byte, resourceCount uint32) (Pr
 func (a *PropArchive) Definition(name string) (PropDefinition, bool) {
 	definition, found := a.definitions[asciiUpper(name)]
 	return definition, found
+}
+
+// HasView reports whether a view name is in this definition's view list. That is
+// the test FUN_00421D00 makes for propview: it compares each row's whole Pascal
+// name with the argument, lengths first, and folds only A to Z (FUN_0042E5B0
+// through the table at 0x0045DDF0). Names are not trimmed here, unlike the views
+// map that View uses.
+func (d PropDefinition) HasView(view string) bool {
+	folded := asciiUpper(view)
+	for _, name := range d.viewNames {
+		if asciiUpper(name) == folded {
+			return true
+		}
+	}
+	return false
+}
+
+// ViewListed reports whether a view is in the view list of the definition that
+// the named prop reads. known is false when the archive has no definition with
+// that name, so the caller can tell a missing list from a missing view.
+func (a *PropArchive) ViewListed(prop, view string) (listed, known bool) {
+	if a == nil {
+		return false, false
+	}
+	definition, found := a.Definition(prop)
+	if !found {
+		return false, false
+	}
+	return definition.HasView(view), true
 }
 
 func (a *PropArchive) View(propName, viewName string) (PropView, error) {
@@ -389,10 +421,20 @@ func readPropResource(cache *ResourceCache, index uint32) ([]byte, error) {
 }
 
 func propName(field []byte) (string, error) {
+	exact, err := pascalField(field)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(exact), nil
+}
+
+// pascalField returns a Pascal string's characters from a fixed field, without
+// trimming. The view list compares names this way, so a trailing space counts.
+func pascalField(field []byte) (string, error) {
 	if len(field) == 0 || int(field[0])+1 > len(field) {
 		return "", fmt.Errorf("Pascal prop name length exceeds its %d-byte field", len(field))
 	}
-	return strings.TrimSpace(string(field[1 : 1+int(field[0])])), nil
+	return string(field[1 : 1+int(field[0])]), nil
 }
 
 // ListNames lists the definition names in the order the shop's list rows give
