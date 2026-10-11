@@ -13,24 +13,31 @@ const NativeQ14Scale = 1 << 14
 // projectWorldActor already uses. It is read out of the binary, not fitted.
 const NativeActorFocalLength = 0x136
 
+// nativeTrigStep is pi' = 3.14159018, the half-turn constant that generates the reference's
+// TRIG1 and TRIG2 tables. It is not pi (3.14159265). The generator is not identified, so this
+// is a fit: with round-half-up, a step in roughly [3.14159014, 3.14159023] reproduces all 512
+// stored entries (scanned at 2e-10 steps), and pi itself does not.
+const nativeTrigStep = 3.14159018
+
 // NativeQ14Trig returns sin and cos of a bearing on the 256-unit circle, in Q14.
 //
-// The circle is FUN_00411420's: bearing 0 is +y, 64 is +x, 128 is -y and 192 is -x, with
-// the diagonals at 32, 96, 160 and 224. The reference reads DAT_004423B4 for the sine table
-// and DAT_0044224C for the cosine, each 256 entries indexed by the bearing masked to a byte,
-// but FUN_004055E0 allocates those at startup rather than storing them in the image, so they
-// are computed here instead of transcribed.
+// The reference stores the two tables as RCDATA resources, TRIG1 (sine) and TRIG2 (cosine),
+// each 256 int16 entries indexed by the bearing masked to a byte. FUN_004055E0 loads them at
+// startup, and FUN_00406570 copies them into the sine and cosine slots that FUN_004064B0
+// reads. The table is computed here rather than transcribed: entry k is round-half-up of
+// sin and cos at k * pi' / 128 radians, which reproduces all 512 reference entries.
+//
+// Bearing 0 is +x, 64 is +y, 128 is -x and 192 is -y.
 func NativeQ14Trig(bearing int16) (int32, int32) {
-	// 256 units to a full turn, so each unit is 2 * (2*pi) / 256 radians.
-	theta := float64(int(bearing)&0xff) * (2 * math.Pi) / 256.0
-	return q14FromUnit(math.Sin(theta)), q14FromUnit(math.Cos(theta))
+	theta := float64(int(bearing)&0xff) * nativeTrigStep / 128
+	return q14RoundHalfUp(math.Sin(theta)), q14RoundHalfUp(math.Cos(theta))
 }
 
-// q14FromUnit converts a fraction to Q14. The conversion truncates toward zero, which is
-// what the reference's signed shift does: a value of -0.9999 must yield -16383 and not
-// -16384, or the fixed-point division would round away from zero where C rounds toward it.
-func q14FromUnit(value float64) int32 {
-	return int32(value * NativeQ14Scale)
+// q14RoundHalfUp converts a fraction to Q14, rounding half up: floor(value * 2^14 + 0.5). The
+// reference's table entries are rounded this way. Truncation disagrees with them in 118 sine
+// and 114 cosine entries.
+func q14RoundHalfUp(value float64) int32 {
+	return int32(math.Floor(value*NativeQ14Scale + 0.5))
 }
 
 // q14Shift is the reference's Q14 reduction: shift right by 14 after adding back the low 14
@@ -55,12 +62,13 @@ type NativeProjection struct {
 }
 
 // NativeProjectQ14 is a transcription of FUN_004064B0, the reference's world-to-screen
-// projection. Verified against the binary:
+// projection. Verified against the binary, where DAT_00442348 is the sine table and
+// DAT_00442330 the cosine, both copied by FUN_00406570 from TRIG1 and TRIG2:
 //
 //	iVar4 = object.x - DAT_00459A78;                       // camera x
 //	iVar2 = object.y - DAT_00459A7A;                       // camera y
-//	iVar3 = iVar2 * DAT_00442330 - iVar4 * DAT_00442348;    // dy*sin - dx*cos, lateral
-//	iVar2 = iVar2 * DAT_00442348 + iVar4 * DAT_00442330;    // dy*cos + dx*sin, depth
+//	iVar3 = iVar2 * DAT_00442330 - iVar4 * DAT_00442348;    // dy*cos - dx*sin, lateral
+//	iVar2 = iVar2 * DAT_00442348 + iVar4 * DAT_00442330;    // dy*sin + dx*cos, depth
 //	both reduced by the sign-preserving (v + (v >> 31 & 0x3fff)) >> 14
 //	if (depth < 1) return;                                 // behind, no screen point
 //	screenX = (lateral * DAT_00459A58) / depth + DAT_00459A5C;
@@ -79,8 +87,8 @@ func NativeProjectQ14(
 	deltaX := int32(objectX - cameraX)
 	deltaY := int32(objectY - cameraY)
 
-	lateralQ14 := deltaY*sin - deltaX*cos
-	depthQ14 := deltaY*cos + deltaX*sin
+	lateralQ14 := deltaY*cos - deltaX*sin
+	depthQ14 := deltaY*sin + deltaX*cos
 	depth := int(q14Shift(depthQ14))
 
 	if depth < 1 {
