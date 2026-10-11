@@ -171,6 +171,13 @@ type GameHostEnv struct {
 	// (FUN_00412110). FlatButtonName is a button's name, row +0x10 (FUN_00412210).
 	FlatButtonCount func(flat int) (int, error)
 	FlatButtonName  func(flat, index int) (string, error)
+	// FlatScript is the program of the flat at index, its record's script
+	// resource (dword 0 of the record, read by FUN_00412EE0). FlatButtonScript is
+	// the program of a button row, the row's script resource at +0x0C (FUN_00412A90).
+	// Both report ok false when the port cannot run that script, which leaves the
+	// flat message to Fallback (see gamehost_flats.go).
+	FlatScript       func(flat int) (program *Program, ok bool, err error)
+	FlatButtonScript func(flat, index int) (program *Program, ok bool, err error)
 	// SceneCount is the open set's scene count (dword at +0x1C0C, FUN_0041B4F0). The
 	// bool is false when no set is open.
 	SceneCount func() (int, bool)
@@ -659,6 +666,10 @@ func (h *GameHost) command(call *ScriptCall) (int, uint16, error) {
 		return h.sendToActor(call)
 	case "sendtoscene":
 		return h.sendToScene(call)
+	case "sendtoflat":
+		return h.sendToFlat(call)
+	case "sendtobutton":
+		return h.sendToButton(call)
 	case "sendtocast":
 		if target, _, skipped, status, err := call.SendParts(); err == nil && status == 0 && h.Env.CastManaged != nil && !h.Env.CastManaged(target.Text) {
 			return skipped, 0, nil

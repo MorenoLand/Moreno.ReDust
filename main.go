@@ -2388,6 +2388,54 @@ func run() error {
 		}
 		return string(handlers[index].Name[1:]), nil
 	}
+	// The flat and button scripts are NEW.FLT resources, served by the initial
+	// stage's own cache. Their stage frame is NEW.FLT's script (StageScript), so
+	// only NEW.FLT runs here; any other open stage reports not runnable and keeps
+	// the fallback.
+	flatPrograms := map[uint32]*scripts.Program{}
+	flatResourceProgram := func(resource uint32) (*scripts.Program, error) {
+		if program, found := flatPrograms[resource]; found {
+			return program, nil
+		}
+		lease, err := mainStage.AcquireResource(resource)
+		if err != nil {
+			return nil, err
+		}
+		data, err := lease.Bytes()
+		if closeErr := lease.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return nil, err
+		}
+		program, err := scripts.ParseProgram(data)
+		if err != nil {
+			return nil, fmt.Errorf("parse NEW.FLT resource %d: %w", resource, err)
+		}
+		flatPrograms[resource] = &program
+		return &program, nil
+	}
+	scriptHost.Env.FlatScript = func(index int) (*scripts.Program, bool, error) {
+		if stage != mainStage || index < 0 || index >= len(stage.Scenes) {
+			return nil, false, nil
+		}
+		program, err := flatResourceProgram(stage.Scenes[index].Fields[0])
+		return program, err == nil, err
+	}
+	scriptHost.Env.FlatButtonScript = func(flat, index int) (*scripts.Program, bool, error) {
+		if stage != mainStage {
+			return nil, false, nil
+		}
+		handlers, err := stage.SceneHandlers(flat)
+		if err != nil {
+			return nil, false, err
+		}
+		if index < 0 || index >= len(handlers) {
+			return nil, false, nil
+		}
+		program, err := flatResourceProgram(handlers[index].ScriptResource)
+		return program, err == nil, err
+	}
 	scriptHost.Env.Fallback = &mainScriptFallback{tiphat: func() error {
 		return startAvatarTiphat(nil)
 	}, death: func() error {
