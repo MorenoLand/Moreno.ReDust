@@ -18,6 +18,10 @@ var ErrHostOpcodeUnimplemented = errors.New("script opcode is not implemented by
 type GameHostEnv struct {
 	// CurrentSet is DAT_00459A82, the open set's name; "" when none is open.
 	CurrentSet func() string
+	// SetRect reports whether a set is open (DAT_00459A24) and returns the set's
+	// pointer rectangle DAT_00442340..46, which FUN_004057D0 builds when the set
+	// opens. A nil hook means no set is open.
+	SetRect func() (Rect, bool)
 	// ResolveStar is FUN_0041B850: a named location in a set.
 	ResolveStar func(set, star string) ([3]int16, bool)
 	// Player and Camera are DAT_00459A6C and DAT_00459A78.
@@ -196,6 +200,18 @@ type GameHost struct {
 	task       *ScriptTask
 	puppet     *puppetSession
 	passWanted bool
+	// setVisible is DAT_00459A26, the flag setvisible writes and pointinset gates
+	// on. FUN_004195F0 sets it to 1 when a set opens, which OpenSet mirrors. The
+	// zero value matches the native zero held before any set has opened.
+	setVisible bool
+}
+
+// setRect reads the set gate and the pointer rectangle through the host hook.
+func (h *GameHost) setRect() (Rect, bool) {
+	if h.Env.SetRect == nil {
+		return Rect{}, false
+	}
+	return h.Env.SetRect()
 }
 
 func (h *GameHost) managed(name string) bool {
@@ -788,6 +804,24 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 		return record, consumed, status, err
 	}
 	switch name {
+	case "pointinset":
+		// FUN_0041B330: the argument must be numeric (0x0E) and gives no result
+		// otherwise. The result is a type-2 boolean, false unless a set is open
+		// (DAT_00459A24) and DAT_00459A26 is set, and otherwise the hit test of
+		// the packed point on the set's pointer rectangle.
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		if len(args) != 1 {
+			return Record{}, 0, ScriptStatusWrongType, nil
+		}
+		rect, open := h.setRect()
+		result, status := PointInSetValue(args[0].Kind, uint32(args[0].Int), SetState{Active: open, Visible: h.setVisible}, rect)
+		if status != 0 {
+			return Record{}, 0, status, nil
+		}
+		return result.Record(), consumed, 0, nil
 	case "actorset", "actorstar", "actorpose", "actorowner", "actordeg", "actorvisible", "actorvalue", "actorscale", "actorspeed", "actordist":
 		actor, _, consumed, status, err := h.actorArgs(call, 1)
 		if err != nil || status != 0 {
@@ -1510,6 +1544,8 @@ func (h *GameHost) Deliver(in *Interpreter, event ActorEvent) (uint16, error) {
 // OpenSet is FUN_0040D9A0, run when a set opens (FUN_00419520): every placed
 // actor whose set is the newly current one is moved to its star's location.
 func (h *GameHost) OpenSet() {
+	// FUN_004195F0 sets DAT_00459A26 to 1 as the set opens.
+	h.setVisible = true
 	current := h.currentSet()
 	for _, key := range h.Actors.Names() {
 		actor := h.Actors.actors[key]

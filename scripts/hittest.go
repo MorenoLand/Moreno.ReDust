@@ -7,18 +7,20 @@ import "fmt"
 // `pointinset` 20041 and `pointinprop` 20040. All four functions below are
 // decompiled from DF386.EXE and each is small enough to convert exactly.
 
-// Point is the engine's 2D point, a packed pair of 16-bit coordinates. Verified
-// from FUN_0042E340, which reads the x coordinate as a signed word at offset 0
-// and the y coordinate as a signed word at offset 2, giving a four-byte struct
-// with no padding.
+// Point is the engine's 2D point, a packed dword of two signed 16-bit
+// coordinates. The high word is x and the low word is y: pointx (FUN_00415CB0)
+// reads the high word as x and pointy (FUN_00415D10) the low word as y, each
+// sign-extended, and FUN_0042E340 splits the point the same way.
 type Point struct {
 	X int16
 	Y int16
 }
 
 // Rect is the engine's rectangle, four signed 16-bit edges. FUN_0042E340 takes
-// one as a pointer to four consecutive shorts, so there is no struct tag in the
-// binary and the field order is left, top, right, bottom.
+// one as a pointer to four consecutive shorts, rect[0..3], and the verified order
+// is Top, Left, Bottom, Right: rect[0] is the top, rect[1] the left, rect[2] the
+// bottom and rect[3] the right. The Go fields are named by meaning, so their
+// declaration order does not matter.
 type Rect struct {
 	Left   int16
 	Top    int16
@@ -27,12 +29,13 @@ type Rect struct {
 }
 
 // ContainsPoint reproduces FUN_0042E340, the hit test the pointinset and
-// pointinprop builtins resolve to. It is a half-open axis-aligned box test:
+// pointinprop builtins resolve to. It is a half-open axis-aligned box test, in
+// the native's order of checks:
 //
-//	if (point.y < rect.top)     return false
-//	if (rect.bottom <= point.y)  return false
-//	if (point.x < rect.left)     return false
-//	return point.x < rect.right
+//	if (point.x < rect.left)    return false    // high word against rect[1]
+//	if (rect.right <= point.x)  return false    // high word against rect[3]
+//	if (point.y < rect.top)     return false    // low word against rect[0]
+//	return point.y < rect.bottom                // low word against rect[2]
 //
 // The bounds are deliberately asymmetric: the left and top edges are inclusive
 // and the right and bottom edges are exclusive. The point exactly on the right or
@@ -40,16 +43,16 @@ type Rect struct {
 // non-overlapping. Rewriting this as an inclusive test would make two props
 // sharing an edge both claim a click.
 func ContainsPoint(point Point, rect Rect) bool {
-	if point.Y < rect.Top {
-		return false
-	}
-	if rect.Bottom <= point.Y {
-		return false
-	}
 	if point.X < rect.Left {
 		return false
 	}
-	return point.X < rect.Right
+	if rect.Right <= point.X {
+		return false
+	}
+	if point.Y < rect.Top {
+		return false
+	}
+	return point.Y < rect.Bottom
 }
 
 // The view state offsets read by FUN_0042C820, the function behind the `mouse`
@@ -215,58 +218,69 @@ func LookupByID(data []byte, count StageObjectCount, id int32) (index int, row [
 	return 0, nil, StatusNameNotFound, nil
 }
 
-// The pointer rectangles behind pointinset 20041 and pointinstage 20042.
+// The pointer rectangle behind pointinset 20041, and the stage view behind
+// pointinstage 20042.
 //
-// FUN_004057D0 rebuilds the set's pointer rectangle DAT_00442340..46 each time a
-// set opens (callers FUN_004195F0 and FUN_00423F20), from the four words
-// DAT_00459A50..A56 that FUN_004195F0 loads from the set metadata:
+// FUN_004195F0 loads four words from the set metadata into the set block
+// DAT_00459A50..A56 when a set opens. FUN_004057D0 then builds the pointer
+// rectangle DAT_00442340..46 from them, in the verified rect order Top, Left,
+// Bottom, Right (see Rect):
 //
-//	DAT_00442340 (left)   = DAT_00459A56  = metadata +0x16
-//	DAT_00442342 (top)    = DAT_00459A54  = metadata +0x14
-//	DAT_00442344 (right)  = left + DAT_00459A52  (width  = metadata +0x2C)
-//	DAT_00442346 (bottom) = top  + DAT_00459A50  (height = metadata +0x2A)
+//	DAT_00442340 (Top)    = DAT_00459A56 = metadata +0x16
+//	DAT_00442342 (Left)   = DAT_00459A54 = metadata +0x14
+//	DAT_00442344 (Bottom) = Top  + DAT_00459A52  (height = metadata +0x2C)
+//	DAT_00442346 (Right)  = Left + DAT_00459A50  (width  = metadata +0x2A)
 //
-// The stage view rectangle DAT_00459700..07 is written only by FUN_0041C6E0 at
-// init, as (0, 0, 0x180, 0x200), so the stage is 384 wide and 512 high.
+// So the width is DAT_00459A50 and the height DAT_00459A52. The shipped set
+// metadata fits the 512 by 384 stage only with that assignment.
+//
+// The stage view rectangle DAT_00459700..07 is set by FUN_0041C6E0 at init as
+// (Top 0, Left 0, Bottom 0x180, Right 0x200), so the stage is 512 wide and 384 high.
 
 // Limits and diagnostic codes FUN_004057D0 checks for a set's pointer rectangle.
-// A diagnostic is reported through FUN_0042C470, which shows a message box; the
+// Both limit checks are signed comparisons (INT_SLESS in the decompile). A
+// diagnostic is reported through FUN_0042C470, which shows a message box; the
 // rectangle is still installed, since the rebuild has no early return.
 const (
-	// SetPointerMaxHeight is the largest height FUN_004057D0 accepts, 0x200.
-	SetPointerMaxHeight int16 = 0x200
-	// SetPointerMaxWidth is the largest width FUN_004057D0 accepts, 0x180.
-	SetPointerMaxWidth int16 = 0x180
-	// SetPointerHeightDiag is raised when height > 0x200.
-	SetPointerHeightDiag uint16 = 0x13EC
-	// SetPointerWidthDiag is raised when width > 0x180.
-	SetPointerWidthDiag uint16 = 0x13ED
+	// SetPointerMaxWidth is the largest width FUN_004057D0 accepts, 0x200, which
+	// it tests on DAT_00459A50 (metadata +0x2A).
+	SetPointerMaxWidth int16 = 0x200
+	// SetPointerMaxHeight is the largest height FUN_004057D0 accepts, 0x180, which
+	// it tests on DAT_00459A52 (metadata +0x2C).
+	SetPointerMaxHeight int16 = 0x180
+	// SetPointerWidthDiag is raised when width > 0x200.
+	SetPointerWidthDiag uint16 = 0x13EC
+	// SetPointerHeightDiag is raised when height > 0x180.
+	SetPointerHeightDiag uint16 = 0x13ED
 	// SetPointerOutsideStageDiag is raised when the pointer rectangle is not
 	// inside the stage view rectangle.
 	SetPointerOutsideStageDiag uint16 = 0x13EE
 )
 
-// StageViewRect is DAT_00459700..07, the stage view rectangle FUN_0041C6E0 sets.
-var StageViewRect = Rect{Left: 0, Top: 0, Right: 0x180, Bottom: 0x200}
+// StageViewRect is DAT_00459700..07, the stage view rectangle FUN_0041C6E0 sets:
+// Top 0, Left 0, Bottom 0x180 (384) and Right 0x200 (512).
+var StageViewRect = Rect{Top: 0, Left: 0, Bottom: 0x180, Right: 0x200}
 
-// SetPointerRect builds the set's pointer rectangle from the four metadata words,
-// with the 16-bit wrap the native stores use.
-func SetPointerRect(left, top, width, height int16) Rect {
-	return Rect{Left: left, Top: top, Right: left + width, Bottom: top + height}
+// SetPointerRect builds the set's pointer rectangle from its four metadata inputs
+// (top +0x16, left +0x14, width +0x2A, height +0x2C), with the same 16-bit wrap
+// the native stores use.
+func SetPointerRect(top, left, width, height int16) Rect {
+	return Rect{Top: top, Left: left, Bottom: top + height, Right: left + width}
 }
 
 // CheckSetPointerRect returns the diagnostics FUN_004057D0 raises for a set's
-// pointer rectangle, in the order it raises them. The containment test is the
-// native's: FUN_0042E380 takes the bounding union of the set rectangle and the
-// stage view, and FUN_0042E2F0 requires that union to equal the stage view.
-// That is the same as the set rectangle lying inside the stage view.
+// pointer rectangle, in the order it raises them: width over 0x200 (0x13EC),
+// height over 0x180 (0x13ED), then containment (0x13EE). The containment test is
+// the native's: FUN_0042E380 takes the bounding union of the set rectangle and the
+// stage view, and FUN_0042E2F0 requires that union to equal the stage view. That
+// is the same as the set rectangle lying inside the stage view.
 func CheckSetPointerRect(width, height int16, rect Rect) []uint16 {
 	var codes []uint16
-	if height > SetPointerMaxHeight {
-		codes = append(codes, SetPointerHeightDiag)
-	}
 	if width > SetPointerMaxWidth {
 		codes = append(codes, SetPointerWidthDiag)
+	}
+	if height > SetPointerMaxHeight {
+		codes = append(codes, SetPointerHeightDiag)
 	}
 	if unionRect(rect, StageViewRect) != StageViewRect {
 		codes = append(codes, SetPointerOutsideStageDiag)
@@ -274,36 +288,38 @@ func CheckSetPointerRect(width, height int16, rect Rect) []uint16 {
 	return codes
 }
 
-// unionRect reproduces FUN_0042E380 on two rectangles: the left and top edges
-// take the smaller value and the right and bottom edges the larger.
+// unionRect reproduces FUN_0042E380 on two rectangles: the top and left edges
+// take the smaller value and the bottom and right edges the larger.
 func unionRect(a, b Rect) Rect {
 	out := b
-	if a.Left < b.Left {
-		out.Left = a.Left
-	}
 	if a.Top < b.Top {
 		out.Top = a.Top
 	}
-	if b.Right < a.Right {
-		out.Right = a.Right
+	if a.Left < b.Left {
+		out.Left = a.Left
 	}
 	if b.Bottom < a.Bottom {
 		out.Bottom = a.Bottom
 	}
+	if b.Right < a.Right {
+		out.Right = a.Right
+	}
 	return out
 }
 
-// PointFromPacked splits a packed 32-bit point the way FUN_0042E340 reads it: the
-// low word is compared with the left and right edges and the high word with the
-// top and bottom edges.
+// PointFromPacked splits a packed 32-bit point the way the point builtins read
+// it: the high word is x (pointx, FUN_00415CB0) and the low word is y (pointy,
+// FUN_00415D10). FUN_0042E340 compares the high word with the left and right
+// edges and the low word with the top and bottom edges.
 func PointFromPacked(packed uint32) Point {
-	return Point{X: int16(uint16(packed)), Y: int16(uint16(packed >> 16))}
+	return Point{X: int16(uint16(packed >> 16)), Y: int16(uint16(packed))}
 }
 
 // PointInSetValue reproduces pointinset 20041, FUN_0041B330, once its argument
 // has been evaluated. An argument that is not numeric (type 4) gives status 0x0E
 // with no result. Otherwise the result is a type-2 boolean. The box test runs only
-// when DAT_00459A24 and DAT_00459A26 are both set, and is false otherwise.
+// when DAT_00459A24 and DAT_00459A26 are both set, against the set's pointer
+// rectangle, and is false otherwise.
 func PointInSetValue(argType uint16, packed uint32, state SetState, rect Rect) (ValueResult, uint16) {
 	if argType != ValueTypeNumeric {
 		return ValueResult{}, StatusWrongOperandType

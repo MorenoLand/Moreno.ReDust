@@ -2124,6 +2124,13 @@ func run() error {
 	scriptHost.Env.SoundVolume = func(name string, level int) { tracks.SetVolume(name, level) }
 	scriptHost.Env.ActionFrame = func(n int) (bool, bool) { return scriptActionFrameOne, n == 1 }
 	scriptHost.Env.Busy = func() bool { return scriptEngineBusy != nil && scriptEngineBusy() }
+	scriptHost.Env.SetRect = func() (scripts.Rect, bool) {
+		if activeSet == nil {
+			return scripts.Rect{}, false
+		}
+		top, left, width, height := activeSet.PointerExtent()
+		return scripts.SetPointerRect(top, left, width, height), true
+	}
 	scriptHost.Env.OpenSetFile = func(name string) error {
 		frame, err := switchSpecialSet(name, "", "")
 		if err != nil {

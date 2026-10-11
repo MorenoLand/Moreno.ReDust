@@ -397,7 +397,24 @@ func (h *GameHost) puppetCommand(name string, call *ScriptCall) (consumed int, s
 			return 0, 0, true, err
 		}
 		return consumed, 0, true, present.GotoFlat(args[0].Text)
-	case "setvisible", "puppetvisible":
+	case "setvisible":
+		// FUN_0041AC70: with no set open (DAT_00459A24 == 0) the status is 0x28,
+		// before the argument is evaluated. Otherwise a type-2 argument is stored
+		// in DAT_00459A26, the flag pointinset gates on. FUN_004055C0(1) also runs,
+		// which only raises a redraw level (DAT_00442324) and is not modelled.
+		if _, open := h.setRect(); !open {
+			return 0, 0x28, true, nil
+		}
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return 0, status, true, err
+		}
+		if len(args) != 1 || args[0].Kind != 2 {
+			return 0, ScriptStatusWrongType, true, nil
+		}
+		h.setVisible = uint16(args[0].Int) != 0
+		return consumed, 0, true, nil
+	case "puppetvisible":
 		// The layer switch happens through gotoflat/blacktoscreen; the flag
 		// itself has no separate effect in the port.
 		args, consumed, status, err := call.Args()
