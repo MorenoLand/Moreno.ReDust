@@ -2329,12 +2329,13 @@ func run() error {
 			if err != nil {
 				return 0, fmt.Errorf("open stage %s: %w", resolved, err)
 			}
+			// FUN_00411900 refuses a stage whose playfield is not 512 by 384.
+			if err := scripts.CheckStageHeaderGeometry(loaded.Width, loaded.Height); err != nil {
+				_ = loaded.Close()
+				return 0, fmt.Errorf("stage %s: %w", resolved, err)
+			}
 			openedStages[resolved] = loaded
 			next = loaded
-		}
-		// FUN_00411900 refuses a stage whose playfield is not 512 by 384.
-		if err := scripts.CheckStageHeaderGeometry(next.Width, next.Height); err != nil {
-			return 0, fmt.Errorf("stage %s: %w", resolved, err)
 		}
 		// The gate, the stage and the flat block (FUN_00411900), then flat 0
 		// (FUN_00413430(0)): the flat switch loads flat 0's picture and sets the

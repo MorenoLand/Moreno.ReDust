@@ -184,11 +184,14 @@ func (h *GameHost) openStageCommand(call *ScriptCall) (int, uint16, error) {
 	if call.Kind(call.Start+1) != opOpen {
 		return 0, ScriptStatusMalformed, nil
 	}
-	if !h.openStageWired() {
+	if h.Env.StageOpen == nil {
 		return 0, 0, h.gap(call)
 	}
 	if status := OpenStageFileBlocked(ScriptContext{StageOpen: h.stageIsOpen()}); status != 0 {
 		return 0, status, nil
+	}
+	if !h.openStageWired() {
+		return 0, 0, h.gap(call)
 	}
 	record, used, status, err := call.Eval(call.Start + 2)
 	if err != nil || status != 0 {
