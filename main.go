@@ -40,6 +40,14 @@ func loadPropFrame(archive *assets.PropArchive, propName, viewName string, frame
 	return render.DecodePuppetFrame(data)
 }
 
+// drawStringFrame draws one drawstring call on the frame that is on screen, the
+// frame GameHostEnv.DrawString receives. The native draws the text on the
+// context DC at the MoveToEx point, which is the baseline-left point the decoded
+// TextDraw carries.
+func drawStringFrame(frame render.IndexedFrame, draw scripts.TextDraw) (render.IndexedFrame, error) {
+	return render.DrawSubstituteText(frame, draw.Text, image.Pt(draw.X, draw.Y), draw.Bold, draw.Height)
+}
+
 // nativeMoviePath resolves a movie name a script gives playmovie against the
 // movies directory BOOTFILE sets with path(3, "dust:movies:").
 func nativeMoviePath(name string) string {
@@ -2302,6 +2310,17 @@ func run() error {
 			}
 			return false
 		},
+	}
+	// drawstring draws onto the frame on screen and makes the result the current
+	// frame, as the presenter's statements do. The stage picture is the same frame,
+	// so a later restore from it keeps the text, and a later frame change replaces it.
+	scriptHost.Env.DrawString = func(draw scripts.TextDraw) error {
+		frame, err := drawStringFrame(currentFrame, draw)
+		if err != nil {
+			return fmt.Errorf("draw drawstring text: %w", err)
+		}
+		currentFrame, stageFrame, convDirty = frame, frame, true
+		return nil
 	}
 	scriptHost.Env.Sync = publishScriptGlobals
 	scriptHost.Env.HaltTheme = func() {
