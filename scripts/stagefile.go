@@ -171,8 +171,8 @@ type StageSearch struct {
 	Candidates int
 	// PrefixOf returns the prefix candidate to prepend for a given 1-based
 	// index. ok=false skips that slot, so it is not searched and the other slots
-	// keep their order. The reference builds each candidate with FUN_00417820;
-	// StageSearchPrefix is the verified table of those prefixes.
+	// keep their order. The reference builds each candidate with FUN_00417820,
+	// which copies the live context page; Interpreter.StagePrefix is that read.
 	PrefixOf func(index int) (prefix string, ok bool)
 	// Exists reports whether a fully qualified candidate names an existing
 	// entry, and whether that entry is a regular file. A hit on a directory or
@@ -227,11 +227,11 @@ func ResolveStageFile(name string, search StageSearch) (StageResolution, uint16,
 		fmt.Errorf("stage name %q matched none of the %d candidate prefixes", name, candidates)
 }
 
-// ResolveStageFileInPrefixes runs ResolveStageFile over the verified prefix table,
-// so the caller supplies only the existence check. The candidates are tried in
-// slot order, and a slot whose text is not verified is skipped (StageSearchPrefix).
-func ResolveStageFileInPrefixes(name string, exists func(candidate string) (isRegularFile bool, found bool)) (StageResolution, uint16, error) {
-	return ResolveStageFile(name, StageSearch{PrefixOf: StageSearchPrefix, Exists: exists})
+// ResolveStageFileInPrefixes runs ResolveStageFile over the path pages. The caller
+// supplies the prefix reader (Interpreter.StagePrefix, which reads the live pages)
+// and the existence check. The candidates are tried in slot order, 1 through 8.
+func ResolveStageFileInPrefixes(name string, prefixOf func(index int) (string, bool), exists func(candidate string) (isRegularFile bool, found bool)) (StageResolution, uint16, error) {
+	return ResolveStageFile(name, StageSearch{PrefixOf: prefixOf, Exists: exists})
 }
 
 // Stage header geometry, verified from FUN_00411900, the routine that installs

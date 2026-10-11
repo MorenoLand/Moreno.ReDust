@@ -118,8 +118,8 @@ func DecodeGameProgress(data []byte) (GameProgress, error) {
 		return GameProgress{}, fmt.Errorf("decode game progress: %w", err)
 	}
 	if len(state.ScriptContextPages) == 0 {
-		// A save from before the pages were saved: the engine-start pages.
-		state.ScriptContextPages = scripts.StartupContextPageTexts()
+		// A save from before the pages were saved: the boot state, the nearest record.
+		state.ScriptContextPages = scripts.BootContextPageTexts()
 	}
 	if err := ValidateGameProgress(state); err != nil {
 		return GameProgress{}, err

@@ -1022,6 +1022,11 @@ func run() error {
 		scriptHost.Props.AddToTable(name)
 	}
 	scriptInterpreter := scripts.NewInterpreter(scriptHost)
+	// The port never runs BOOTFILE's boot(), whose path statements set pages 1..5 and
+	// 8. The stage search reads those pages live, so they are set here.
+	if err := scriptInterpreter.SetBootContextPages(); err != nil {
+		return err
+	}
 	scriptHost.Env.SceneMove = func(code int) { pendingMovement = assets.SceneMove(code) }
 	scriptHost.Env.Instanced = func(source, name string) {
 		from, to := strings.ToLower(source), strings.ToLower(name)
@@ -2311,14 +2316,15 @@ func run() error {
 	}
 	// openstagefile's install. The name is resolved as FUN_004178C0 does it: the
 	// validation and the search are scripts.ResolveStageFileInPrefixes, which tries
-	// the verified prefixes of the path table in slot order. Slot 6 is not verified
-	// (location scripts write it) and is skipped. Each candidate is reduced to its
+	// slots 1 through 8 in order. Each slot's prefix is read from the interpreter's
+	// live path pages when the search reaches it (FUN_00417820), so a path(6, ...)
+	// set by a location script is searched too. Each candidate is reduced to its
 	// asset path first, so a stage reached through two prefixes is one object. A
 	// stage already in openedStages is reused, as the cache reuses a checked-in
 	// object, so a closed NEW.FLT reopens as the same stage.
 	scriptHost.Env.OpenStage = func(name string) (uint16, error) {
 		var resolved string
-		resolution, status, err := scripts.ResolveStageFileInPrefixes(name, func(candidate string) (bool, bool) {
+		resolution, status, err := scripts.ResolveStageFileInPrefixes(name, scriptInterpreter.StagePrefix, func(candidate string) (bool, bool) {
 			asset, err := assets.ResolveAssetName(candidate)
 			if err != nil {
 				return false, false
@@ -2448,10 +2454,10 @@ func run() error {
 		return nil
 	}
 	scriptHost.Env.PuppetFile = workspace.OpenPuppetFile
-	// findfile searches the same verified prefixes as openstagefile (FUN_00415780),
-	// slot by slot, and each candidate is looked up in the asset root.
+	// findfile searches the same slots as openstagefile (FUN_00415780), reading the
+	// live path pages slot by slot, and each candidate is looked up in the asset root.
 	scriptHost.Env.FileExists = func(name string) bool {
-		return scripts.FindFileInStagePrefixes(name, func(candidate string) bool {
+		return scripts.FindFileInStagePrefixes(name, scriptInterpreter.StagePrefix, func(candidate string) bool {
 			return workspace.HasAsset(strings.ToUpper(candidate))
 		})
 	}

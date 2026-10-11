@@ -145,52 +145,37 @@ func PathValue(table *PathPrefixTable, argument Record, registers *StringRegiste
 	return record, status, nil
 }
 
-// StageSearchPrefix returns the prefix text the stage-file search (FUN_004178C0)
-// and findfile (FUN_00415780) put in front of a name at slot index, for the slots
-// whose text is verified. Both search slots 1 through 8 in order and stop at the
-// first candidate that exists, so this order is the native order.
+// StagePrefix returns the prefix the stage-file search (FUN_004178C0) and findfile
+// (FUN_00415780) put in front of a name for slot index. Both loop over slots 1
+// through 8 in order and call FUN_00417820(i) on each pass, and FUN_00417820 copies
+// the Pascal text of context page i (DAT_00443C28 + i*0x100). The native keeps no
+// fixed table of prefixes, so the text is read from the live pages when the search
+// runs. A path(n, ...) statement that ran before the open is therefore what the
+// search uses for slot n, slot 6 included.
 //
-// The text of slots 1, 2, 3, 4, 5 and 8 is written by boot(), in BOOTFILE
-// resource 1, with path statements. Slot 1 is path(1, path(1) @ "local:"), so it
-// reads "appl:local:" because slot 1 is "appl:" at engine start. Slot 7 is "appl:"
-// because no script in the shipped assets writes it; the engine-start value is
-// kept. The native volumes are the executable's directory for "appl:" and the
-// drive labelled DUST for "dust:"; the port maps both to its asset root
-// (assets.ResolveAssetName), which is a port model and not a verified equivalence.
-//
-// Slot 6 is not verified and returns ok=false, so it is skipped. Location scripts
-// write it with path(6, ...) to a different folder each time (salgames, kid,
-// fight, crack, target, drugs, scorp, yunnibox and checkers), so it has no single
-// value at the time of an open. A name that exists only in one of those folders
-// is therefore not found until slot 6 is modelled as state. Slot 0 is never
-// searched.
-func StageSearchPrefix(index int) (string, bool) {
-	if index < PathPrefixFirst || index > PathPrefixLast {
+// ok is false only when the index is outside 1..8 or the interpreter has no pages,
+// which the reference reports as FUN_0042C470(0, 0x1459). An empty page gives an
+// empty prefix, and the reference searches that too, so it is not skipped. Slot 0 is
+// never searched.
+func (in *Interpreter) StagePrefix(index int) (string, bool) {
+	if in == nil || in.ContextPages == nil || !PathPrefixRange(index) {
 		return "", false
 	}
-	prefix := verifiedStageSearchPrefixes[index]
-	return prefix, prefix != ""
-}
-
-// verifiedStageSearchPrefixes holds the verified prefix text by slot. An empty
-// entry is an unverified slot, which the search skips.
-var verifiedStageSearchPrefixes = [PathPrefixSlots]string{
-	1: "appl:local:",
-	2: "dust:data:",
-	3: "dust:movies:",
-	4: "dust:puppets:",
-	5: "dust:under:",
-	7: "appl:",
-	8: "dust:inven:",
+	page, err := in.ContextPages.Restore(index)
+	if err != nil {
+		return "", false
+	}
+	return string(page[1:]), true
 }
 
 // FindFileInStagePrefixes is findfile's existence search, FUN_00415780. It appends
-// the name to each verified prefix in slot order and answers true at the first
-// candidate that exists. The name is not validated first, unlike openstagefile, so
-// a name the stage validator would refuse is still searched.
-func FindFileInStagePrefixes(name string, exists func(candidate string) bool) bool {
+// the name to the prefix of each slot in order, reading each prefix with prefixOf,
+// and answers true at the first candidate that exists. The name is not validated
+// first, unlike openstagefile, so a name the stage validator would refuse is still
+// searched.
+func FindFileInStagePrefixes(name string, prefixOf func(index int) (string, bool), exists func(candidate string) bool) bool {
 	for index := PathPrefixFirst; index <= PathPrefixLast; index++ {
-		prefix, ok := StageSearchPrefix(index)
+		prefix, ok := prefixOf(index)
 		if !ok {
 			continue
 		}
@@ -326,14 +311,56 @@ func startupContextPages() *ScriptContextPages {
 	return pages
 }
 
-// StartupContextPageTexts is the save form of the engine-start pages: nine
-// copies of "appl:". A save that carries no pages loads these.
-func StartupContextPageTexts() [][]byte {
-	texts := make([][]byte, NativeScriptContextCount)
-	for index := range texts {
-		texts[index] = append([]byte(nil), nativeStartupPrefix[1:]...)
+// bootPathStatements are the path statements BOOTFILE's boot() runs before its
+// first openstagefile, verified from the BOOTFILE dump (ledger, 2026-10-11). The
+// port does not run boot() (main.go), so SetBootContextPages stores their values
+// directly. Page 1 is path(1, path(1) @ "local:"), and path(1) is "appl:" at engine
+// start, so it reads "appl:local:". boot() writes no page 6 or 7, so those stay
+// "appl:" from the engine start.
+var bootPathStatements = [...]struct {
+	page int
+	text string
+}{
+	{1, "appl:local:"},
+	{2, "dust:data:"},
+	{3, "dust:movies:"},
+	{4, "dust:puppets:"},
+	{5, "dust:under:"},
+	{8, "dust:inven:"},
+}
+
+// applyBootPathStatements stores the boot() path values into pages.
+func applyBootPathStatements(pages *ScriptContextPages) error {
+	for _, statement := range bootPathStatements {
+		pascal := append([]byte{byte(len(statement.text))}, statement.text...)
+		if err := pages.Store(statement.page, pascal); err != nil {
+			return err
+		}
 	}
-	return texts
+	return nil
+}
+
+// SetBootContextPages puts the interpreter's pages into the state boot() leaves
+// them in, so the stage search finds the folders BOOTFILE names. It replaces what
+// the port would otherwise lack, since it never runs boot(). The engine-start
+// pages from NewInterpreter are the state before boot().
+func (in *Interpreter) SetBootContextPages() error {
+	if in.ContextPages == nil {
+		return fmt.Errorf("script context pages are unavailable")
+	}
+	return applyBootPathStatements(in.ContextPages)
+}
+
+// BootContextPageTexts is the save form of the boot state: the engine-start pages
+// with boot()'s path values applied. A save that carries no pages loads these. Such
+// a save predates the pages being saved, and the boot values are the nearest record
+// of them. Slots 6 and 7 are "appl:" here, which is an inference: the old save does
+// not say what a location script left in slot 6.
+func BootContextPageTexts() [][]byte {
+	pages := startupContextPages()
+	// The statements are fixed and within 1..8, so storing them cannot fail.
+	_ = applyBootPathStatements(pages)
+	return pages.Texts()
 }
 
 // Texts returns the text of each page, pages 0 through 8, without its length

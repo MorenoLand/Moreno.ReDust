@@ -107,10 +107,10 @@ func EncodeRTD(progress GameProgress, ctx RTDContext) ([]byte, error) {
 	prefix := make([]byte, rtdPrefixSize+len(ctx.OpenFiles)*NativeSaveManagerRecordSize)
 	putPascal(prefix[0:0x100], ctx.GameName)
 	// The interpreter's pages, page 0 through 8 at +0x100 (FUN_00422DE0 calls
-	// FUN_00417820 for each). A progress with no pages writes the engine-start pages.
+	// FUN_00417820 for each). A progress with no pages writes the boot state.
 	texts := progress.ScriptContextPages
 	if len(texts) == 0 {
-		texts = scripts.StartupContextPageTexts()
+		texts = scripts.BootContextPageTexts()
 	}
 	pages, err := scripts.ContextPagesFromTexts(texts)
 	if err != nil {
