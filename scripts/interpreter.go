@@ -213,6 +213,11 @@ type Interpreter struct {
 	Strings     *StringRegisters
 	Expressions *ExpressionState
 	Host        ScriptHost
+
+	// ContextPages is the nine 256-byte script context pages (DAT_00443C28) that
+	// the path builtin reads and writes. NewInterpreter fills them as the engine
+	// start does (FUN_00418580).
+	ContextPages *ScriptContextPages
 	// EscapeInterrupt, when non-nil and true, makes each statement boundary
 	// check for the escape key (DAT_00459996 and FUN_0042EB50).
 	EscapeInterrupt func() bool
@@ -234,7 +239,7 @@ type Interpreter struct {
 // NewInterpreter builds an interpreter with fresh global state.
 func NewInterpreter(host ScriptHost) *Interpreter {
 	strings := &StringRegisters{}
-	in := &Interpreter{Global: NewVariableTable(), Strings: strings, Host: host}
+	in := &Interpreter{Global: NewVariableTable(), Strings: strings, Host: host, ContextPages: startupContextPages()}
 	in.Expressions = &ExpressionState{
 		Strings:           strings,
 		AvailableBytes:    func() int32 { return 0x10000 },
@@ -283,11 +288,12 @@ type scriptContext struct {
 func (in *Interpreter) evaluate(chain []ScriptFrame, frame int, locals *VariableTable, program *Program, index int) (Record, int, uint16, error) {
 	context := &scriptContext{in: in, chain: chain, frame: frame}
 	parser := ExpressionValueParser{
-		Context: context,
-		Local:   locals,
-		Global:  in.Global,
-		State:   in.Expressions,
-		Strings: in.Strings,
+		Context:      context,
+		Local:        locals,
+		Global:       in.Global,
+		State:        in.Expressions,
+		Strings:      in.Strings,
+		ContextPages: in.ContextPages,
 		Services: ExpressionAtomServices{
 			ReadContextPascal: readFrameContextPascal,
 			CallBlock:         in.callBlockValue,
@@ -842,11 +848,12 @@ func (in *Interpreter) execute(chain []ScriptFrame, frame int, locals *VariableT
 
 func (in *Interpreter) parserFor(chain []ScriptFrame, frame int, locals *VariableTable) *ExpressionValueParser {
 	return &ExpressionValueParser{
-		Context: &scriptContext{in: in, chain: chain, frame: frame},
-		Local:   locals,
-		Global:  in.Global,
-		State:   in.Expressions,
-		Strings: in.Strings,
+		Context:      &scriptContext{in: in, chain: chain, frame: frame},
+		Local:        locals,
+		Global:       in.Global,
+		State:        in.Expressions,
+		Strings:      in.Strings,
+		ContextPages: in.ContextPages,
 		Services: ExpressionAtomServices{
 			ReadContextPascal: readFrameContextPascal,
 			CallBlock:         in.callBlockValue,

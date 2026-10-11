@@ -253,3 +253,75 @@ func (p PropBlock) PropScreenRect() (Rect, error) {
 		Bottom: int16(uint16(top) + uint16(height)),
 	}, nil
 }
+
+// nativeStartupPrefix is the Pascal string FUN_00427B60 writes at engine start:
+// length 5, then "appl:" from 0x0045DAB0.
+var nativeStartupPrefix = []byte{5, 'a', 'p', 'p', 'l', ':'}
+
+// startupContextPages is the state FUN_00418580 leaves: the table is allocated
+// (GlobalAlloc, 0x900 bytes) and FUN_00417870 stores the startup prefix in every
+// page, page 0 included. Nothing in the reference resets the pages afterwards;
+// the statement form and the save restore are the only writers.
+func startupContextPages() *ScriptContextPages {
+	pages := new(ScriptContextPages)
+	for index := range pages {
+		copy(pages[index][:], nativeStartupPrefix)
+	}
+	return pages
+}
+
+// pathStatement is the statement form of path, opcode 16009 in the secondary
+// command switch of FUN_00424890, which is FUN_00425BD0:
+//
+//	FUN_00417070 evaluates two arguments with a comma between them (0x1C without
+//	it). Argument 1 must be a number (0x0E), its value must be 1..8 (status 10),
+//	and argument 2 must be a string (0x0E; FUN_00421FC0 converts it to a Pascal
+//	string and releases its register). FUN_00417870 then stores that string in
+//	context page argument 1.
+//
+// The dispatcher requires ")" after the handler and returns status 2 without it.
+// That check runs after the store, so a call with a malformed tail has already
+// written its page, as the reference does.
+func (h *GameHost) pathStatement(call *ScriptCall) (int, uint16, error) {
+	if !hostOpen(call) {
+		return 0, ScriptStatusMalformed, nil
+	}
+	index, consumed, status, err := call.Eval(call.Start + 2)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	comma := call.Start + 2 + consumed
+	if call.Kind(comma) != opComma {
+		return 0, ScriptStatusMissingComma, nil
+	}
+	text, consumedText, status, err := call.Eval(comma + 1)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	closing := comma + 1 + consumedText
+	if index.Kind != 4 {
+		return 0, ScriptStatusWrongType, nil
+	}
+	page := int32(index.Data)
+	if page < 1 || page > 8 {
+		return 0, 10, nil
+	}
+	if text.Kind != 3 {
+		return 0, ScriptStatusWrongType, nil
+	}
+	value, status, err := call.Interpreter.Value(text)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	if call.Interpreter.ContextPages == nil {
+		return 0, 0, fmt.Errorf("path has no script context pages")
+	}
+	pascal := append([]byte{byte(len(value.Text))}, value.Text...)
+	if err := call.Interpreter.ContextPages.Store(int(page), pascal); err != nil {
+		return 0, 0, err
+	}
+	if call.Kind(closing) != opClose {
+		return 0, ScriptStatusMalformed, nil
+	}
+	return closing + 1 - call.Start, 0, nil
+}

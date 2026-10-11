@@ -53,6 +53,17 @@ func (h *GameHost) hostCommand(name string, call *ScriptCall) (int, uint16, bool
 		}
 		consumed, status := hostClose(call)
 		return consumed, status, true, nil
+	case "exportclut":
+		// FUN_004279A0 is `return 0` (XOR AX,AX; RET): no arguments, no effect,
+		// status 0. The command dispatcher never writes the consumed count on this
+		// path, so the close check reads an uninitialised slot. The port applies
+		// the zero-argument rule the other no-argument builtins use, which is not
+		// verified for this opcode. No shipped script calls exportclut.
+		if !hostOpen(call) {
+			return 0, ScriptStatusMalformed, true, nil
+		}
+		consumed, status := hostClose(call)
+		return consumed, status, true, nil
 	}
 	return 0, 0, false, nil
 }

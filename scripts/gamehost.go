@@ -355,6 +355,8 @@ func (h *GameHost) Command(call *ScriptCall) (int, uint16, error) {
 func (h *GameHost) command(call *ScriptCall) (int, uint16, error) {
 	name := opcodeName(call)
 	switch name {
+	case "path":
+		return h.pathStatement(call)
 	case "notedialog":
 		return h.noteDialog(call)
 	case "actorvisible":
