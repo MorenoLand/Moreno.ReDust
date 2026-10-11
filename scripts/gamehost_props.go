@@ -195,6 +195,29 @@ func (h *GameHost) propReadArgs(call *ScriptCall, count int) ([]ScriptValue, int
 	return args, position - call.Start, true, 0, nil
 }
 
+// propStatementArgs reads a prop setter's two arguments and checks the name the
+// native way: the readers run first (0x1C for a missing comma, 0x0E for an empty
+// argument), then the name must be a string (0x0E) and in the prop table (0x0A).
+// Unlike Get it creates no record, so an unknown name leaves the store as it was.
+// The caller checks its value and stores, and reports extra arguments as 2 after the
+// store, since FUN_00424890 runs the handler before it checks the closing paren.
+func (h *GameHost) propStatementArgs(call *ScriptCall) ([]ScriptValue, int, bool, uint16, error) {
+	args, consumed, extra, status, err := h.propReadArgs(call, 2)
+	if err != nil || status != 0 {
+		return nil, 0, false, status, err
+	}
+	if h.Props == nil {
+		return nil, 0, false, 0, fmt.Errorf("props are unavailable")
+	}
+	if args[0].Kind != 3 {
+		return nil, 0, false, ScriptStatusWrongType, nil
+	}
+	if !h.Props.Known(args[0].Text) {
+		return nil, 0, false, StatusNameNotFound, nil
+	}
+	return args, consumed, extra, 0, nil
+}
+
 // propCommand handles the prop setters. handled is false for other opcodes.
 func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, status uint16, handled bool, err error) {
 	switch name {
@@ -245,7 +268,27 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 			return consumed, ScriptStatusMalformed, true, nil
 		}
 		return consumed, 0, true, nil
-	case "propowner", "propview":
+	case "propowner":
+		// FUN_0041EB30. The readers run first, then the name (0x0E, and 0x0A with no record
+		// created), then the value must be a string (0x0E) of at most 15 bytes (0x1A). The
+		// owner is copied into the record, which FUN_004214A0 stores. Extra arguments run
+		// all of that and then return 2.
+		args, consumed, extra, status, err := h.propStatementArgs(call)
+		if err != nil || status != 0 {
+			return 0, status, true, err
+		}
+		if args[1].Kind != 3 {
+			return 0, ScriptStatusWrongType, true, nil
+		}
+		if status := nativeName(args[1].Text); status != 0 {
+			return 0, status, true, nil
+		}
+		h.Props.Get(args[0].Text).Owner = args[1].Text
+		if extra {
+			return consumed, ScriptStatusMalformed, true, nil
+		}
+		return consumed, 0, true, nil
+	case "propview":
 		prop, args, consumed, status, err := h.propArgs(call, 2)
 		if err != nil || status != 0 {
 			return 0, status, true, err
@@ -256,12 +299,7 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 		if status := nativeName(args[1].Text); status != 0 {
 			return 0, status, true, nil
 		}
-		switch name {
-		case "propowner":
-			prop.Owner = args[1].Text
-		case "propview":
-			prop.View = args[1].Text
-		}
+		prop.View = args[1].Text
 		return consumed, 0, true, nil
 	case "makeball":
 		consumed, status, err := h.makeBall(call)
