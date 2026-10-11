@@ -54,6 +54,10 @@ type GameProgress struct {
 	// sit in the 0x21E-byte globals block the native serializer writes. Slot 7
 	// is the SUBTITLES option.
 	PuppetParams *[8]int16 `json:"puppetParams,omitempty"`
+	// ScriptContextPages holds the nine script context pages (pages 0 through 8)
+	// as their Pascal text, which path() reads. Saves from before the pages were
+	// saved carry none, and DecodeGameProgress gives them the engine-start pages.
+	ScriptContextPages [][]byte `json:"scriptContextPages,omitempty"`
 }
 
 func GameProgressPath(directory, gameName string) (string, error) {
@@ -87,6 +91,11 @@ func ValidateGameProgress(state GameProgress) error {
 			return fmt.Errorf("game save Trotter walk: %w", err)
 		}
 	}
+	if len(state.ScriptContextPages) != 0 {
+		if _, err := scripts.ContextPagesFromTexts(state.ScriptContextPages); err != nil {
+			return fmt.Errorf("game save script pages: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -107,6 +116,10 @@ func DecodeGameProgress(data []byte) (GameProgress, error) {
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&state); err != nil {
 		return GameProgress{}, fmt.Errorf("decode game progress: %w", err)
+	}
+	if len(state.ScriptContextPages) == 0 {
+		// A save from before the pages were saved: the engine-start pages.
+		state.ScriptContextPages = scripts.StartupContextPageTexts()
 	}
 	if err := ValidateGameProgress(state); err != nil {
 		return GameProgress{}, err

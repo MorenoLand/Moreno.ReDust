@@ -43,6 +43,9 @@ import (
 //
 // Everything else lives in resource 99, which is ReDust's own: the magic
 // "REDUSTSV", a version dword, a length dword and the JSON of GameProgress.
+// The script context pages are written to resource 0 at +0x100 in the native
+// layout, but the load reads them from the JSON copy, so resource 0's pages are
+// not read back by ReDust.
 const (
 	// RTDStateResource is the ReDust-private resource that holds the game
 	// state. The native count is 100, so index 99 is the last valid slot.
@@ -103,7 +106,13 @@ func EncodeRTD(progress GameProgress, ctx RTDContext) ([]byte, error) {
 	}
 	prefix := make([]byte, rtdPrefixSize+len(ctx.OpenFiles)*NativeSaveManagerRecordSize)
 	putPascal(prefix[0:0x100], ctx.GameName)
-	pages, err := scripts.NewScriptContextPages([]byte{0})
+	// The interpreter's pages, page 0 through 8 at +0x100 (FUN_00422DE0 calls
+	// FUN_00417820 for each). A progress with no pages writes the engine-start pages.
+	texts := progress.ScriptContextPages
+	if len(texts) == 0 {
+		texts = scripts.StartupContextPageTexts()
+	}
+	pages, err := scripts.ContextPagesFromTexts(texts)
 	if err != nil {
 		return nil, err
 	}

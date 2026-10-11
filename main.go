@@ -3188,10 +3188,19 @@ func run() error {
 		}
 		params := scriptHost.PuppetParams
 		progress.PuppetParams = &params
+		if texts, err := scriptInterpreter.SnapshotContextPages(); err != nil {
+			log.Printf("save: script context pages unavailable: %v", err)
+		} else {
+			progress.ScriptContextPages = texts
+		}
 		return progress
 	}
 	initialProgress := captureGameProgress()
 	initialProgress.ScriptLoops = nil
+	// A new game keeps the pages the boot script set. The native writes the
+	// pages only at engine start, in path and in the load (FUN_00417870 callers),
+	// so the initial progress carries none and applying it leaves them alone.
+	initialProgress.ScriptContextPages = nil
 	// saveGameProgress is savegame(gameName) (FUN_00422C80 -> FUN_00422DE0):
 	// it writes the .rtd container named fileName under the saves directory.
 	saveGameProgress := func(gameName, fileName string) error {
@@ -3483,6 +3492,11 @@ func run() error {
 		currentScene, inventoryMenuActive = 0, false
 		publishBone()
 		startAvatarNoFace(scripts.NativeFrameUnits(native.NativeTickMilliseconds()))
+		// The pages come after the set and actor scripts above, which may run
+		// path, so the save's pages are what path() reads from here on.
+		if err := scriptInterpreter.RestoreContextPages(progress.ScriptContextPages); err != nil {
+			return err
+		}
 		if err := refreshWorldScene(); err != nil {
 			return err
 		}

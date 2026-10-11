@@ -270,6 +270,77 @@ func startupContextPages() *ScriptContextPages {
 	return pages
 }
 
+// StartupContextPageTexts is the save form of the engine-start pages: nine
+// copies of "appl:". A save that carries no pages loads these.
+func StartupContextPageTexts() [][]byte {
+	texts := make([][]byte, NativeScriptContextCount)
+	for index := range texts {
+		texts[index] = append([]byte(nil), nativeStartupPrefix[1:]...)
+	}
+	return texts
+}
+
+// Texts returns the text of each page, pages 0 through 8, without its length
+// byte. A save stores these bytes unchanged: script text is Mac Roman, which
+// JSON strings would not keep.
+func (pages ScriptContextPages) Texts() [][]byte {
+	texts := make([][]byte, len(pages))
+	for index := range pages {
+		length := int(pages[index][0])
+		texts[index] = append([]byte(nil), pages[index][1:1+length]...)
+	}
+	return texts
+}
+
+// ContextPagesFromTexts builds the pages from saved texts. A save holds exactly
+// one text per page, and each must fit a Pascal string, so a malformed save is
+// rejected rather than read as something else.
+func ContextPagesFromTexts(texts [][]byte) (ScriptContextPages, error) {
+	var pages ScriptContextPages
+	if len(texts) != NativeScriptContextCount {
+		return pages, fmt.Errorf("script context pages have %d texts, want %d", len(texts), NativeScriptContextCount)
+	}
+	for index, text := range texts {
+		if len(text) > 255 {
+			return pages, fmt.Errorf("script context page %d is %d bytes, longer than a Pascal string", index, len(text))
+		}
+		if err := pages.Store(index, append([]byte{byte(len(text))}, text...)); err != nil {
+			return pages, err
+		}
+	}
+	return pages, nil
+}
+
+// SnapshotContextPages returns the text of each script context page, for saves.
+func (in *Interpreter) SnapshotContextPages() ([][]byte, error) {
+	if in.ContextPages == nil {
+		return nil, fmt.Errorf("script context pages are unavailable")
+	}
+	return in.ContextPages.Texts(), nil
+}
+
+// RestoreContextPages puts a save's pages back the way the native load does.
+// FUN_00423F20 replaces pages 1 through 8 from resource 0 and leaves page 0
+// alone, since only the engine start writes page 0, so this does the same. Nil
+// texts change nothing: a new game passes none, and the native writes pages 1
+// through 8 only in path and in the load.
+func (in *Interpreter) RestoreContextPages(texts [][]byte) error {
+	if len(texts) == 0 {
+		return nil
+	}
+	pages, err := ContextPagesFromTexts(texts)
+	if err != nil {
+		return err
+	}
+	if in.ContextPages == nil {
+		in.ContextPages = startupContextPages()
+	}
+	for index := 1; index < NativeScriptContextCount; index++ {
+		in.ContextPages[index] = pages[index]
+	}
+	return nil
+}
+
 // pathStatement is the statement form of path, opcode 16009 in the secondary
 // command switch of FUN_00424890, which is FUN_00425BD0:
 //
