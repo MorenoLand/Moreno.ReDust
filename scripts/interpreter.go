@@ -144,6 +144,13 @@ func (c *ScriptCall) Eval(index int) (Record, int, uint16, error) {
 // argument. It returns the arguments and the records consumed including the
 // opcode itself.
 func (c *ScriptCall) Args() ([]ScriptValue, int, uint16, error) {
+	return c.ArgsSeparated(ScriptStatusMalformed)
+}
+
+// ArgsSeparated is Args with the status for a comma missing between two
+// arguments given by the caller. The native readers of the prop arguments,
+// FUN_00417100 and FUN_00417070, return 0x1C there, where Args returns Malformed.
+func (c *ScriptCall) ArgsSeparated(missingComma uint16) ([]ScriptValue, int, uint16, error) {
 	position := c.Start + 1
 	if c.Kind(position) != opOpen {
 		return nil, 0, ScriptStatusMalformed, nil
@@ -170,7 +177,7 @@ func (c *ScriptCall) Args() ([]ScriptValue, int, uint16, error) {
 		case opClose:
 			return values, position + 1 - c.Start, 0, nil
 		default:
-			return nil, 0, ScriptStatusMalformed, nil
+			return nil, 0, missingComma, nil
 		}
 	}
 }

@@ -961,9 +961,9 @@ func run() error {
 			// Word 9 is set by propset, propstar and propxyz and cleared by propxy.
 			Projected: prop.Projected,
 			// Words 10 and 11: the anchor's low word is y and its high word is x. The
-			// port's X and Y are taken as those words: the value form propxy reads word
-			// 11 for selector 1 and word 10 for selector 2 (FUN_0041FEE0), but which
-			// argument of the propxy statement lands in each word is not verified.
+			// propxy statement stores its second argument in word 11 and its third in
+			// word 10 (FUN_0041FDF0), so X and Y are those arguments. The value form
+			// reads word 11 for selector 1 and word 10 for selector 2 (FUN_0041FEE0).
 			Anchor: uint32(uint16(int16(prop.Y))) | uint32(uint16(int16(prop.X)))<<16,
 			// Word 20 is -1 on every record that is not projected: FUN_00420370 starts
 			// it at -1, and propxy (FUN_0041FDF0) resets a non-negative value to -1.
