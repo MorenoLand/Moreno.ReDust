@@ -162,6 +162,25 @@ func (t *VariableTable) Remove(name []byte, cache *Record) (uint16, error) {
 	return 0, nil
 }
 
+// Count is the number of live globals, the count word of the native block
+// (DAT_004596F8, FUN_00415A80).
+func (t *VariableTable) Count() int {
+	if t == nil {
+		return 0
+	}
+	return len(t.slots)
+}
+
+// Name is the 0-based global's Pascal name, at slot +0x10 (FUN_00426E90). The
+// bool is false when the index is outside the table.
+func (t *VariableTable) Name(index int) ([]byte, bool) {
+	if t == nil || index < 0 || index >= len(t.slots) {
+		return nil, false
+	}
+	slot := &t.slots[index]
+	return append([]byte(nil), slot[16:17+int(slot[16])]...), true
+}
+
 func ResolveVariableList(program *Program, start int, table *VariableTable) (int32, uint16, error) {
 	if program == nil || start < 0 || start >= len(program.Records) {
 		return -1, 0, fmt.Errorf("variable-list start index %d is out of range", start)

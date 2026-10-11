@@ -927,6 +927,33 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 			return Record{}, 0, 0, err
 		}
 		return text(name, consumed)
+	case "countglobals":
+		_, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		var globals *VariableTable
+		if call.Interpreter != nil {
+			globals = call.Interpreter.Global
+		}
+		return number(int32(globals.Count()), consumed)
+	case "indextoglobal":
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		if len(args) != 1 || args[0].Kind != 4 {
+			return Record{}, 0, ScriptStatusWrongType, nil
+		}
+		var globals *VariableTable
+		if call.Interpreter != nil {
+			globals = call.Interpreter.Global
+		}
+		pascal, ok := globals.Name(int(args[0].Int) - 1)
+		if !ok {
+			return Record{}, 0, 0x0a, nil
+		}
+		return text(string(pascal[1:]), consumed)
 	case "countshops":
 		_, consumed, status, err := call.Args()
 		if err != nil || status != 0 {
