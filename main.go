@@ -589,7 +589,7 @@ func run() error {
 	// it is assigned once the script host exists.
 	var scriptWorldProps func() []render.WorldPropSprite
 	// scriptFrameSteps is the pump's walk over the script props, assigned with them.
-	var scriptFrameSteps func(point [3]int16) ([]render.WorldPropSprite, bool)
+	var scriptFrameSteps func() ([]render.WorldPropSprite, bool, error)
 	worldPropSprites := func() []render.WorldPropSprite {
 		sprites := []render.WorldPropSprite{boneWorldProp}
 		if scriptWorldProps != nil {
@@ -984,15 +984,18 @@ func run() error {
 		}
 		return sprites
 	}
-	// scriptFrameSteps lists the script props whose sequence cursor the pump steps, and
-	// whether the world shows one of them. FUN_00406BF0(1) passes every record of the
-	// prop table to FUN_00421820 (FUN_004216F0), which returns at once for a record whose
-	// visible flag (word 0) is zero. A visible path A record (word 9 == 0) then reaches
-	// FUN_00421B70 with no further gate, so its set and owner do not matter. A path B
-	// record (word 9 != 0) steps only past the world's gates: the open set, unowned, and
-	// the depth test. The set and owner gates are the port's own; the native path B has
-	// no owner test.
-	scriptFrameSteps = func(point [3]int16) ([]render.WorldPropSprite, bool) {
+	// scriptFrameSteps is FUN_004216F0 with p != 0, the frame pump's walk over the prop
+	// table. It returns the script props whose sequence cursor the pump steps, and whether
+	// the world shows one of them. FUN_00406BF0(1) passes every record to FUN_00421820,
+	// which returns at once for a record whose visible flag (word 0) is zero.
+	//
+	// A path A record (word 9 == 0) reaches FUN_00421B70 after the visible flag alone, so
+	// its set and owner do not matter. A path B record (word 9 != 0) goes through
+	// ProjectedPumpStep: the open set, the owner equal to the open set's name, the depth and
+	// far clip, then the cursor step. The clip decides whether word 20 takes the depth. The
+	// walk passes the table entry itself, so that write stays on the prop. The shown flag
+	// keeps the port's world-draw gate (the active set, unowned).
+	scriptFrameSteps = func() ([]render.WorldPropSprite, bool, error) {
 		var steps []render.WorldPropSprite
 		shown := false
 		for _, name := range scriptHost.Props.Names() {
@@ -1007,14 +1010,31 @@ func run() error {
 			if err != nil {
 				continue
 			}
-			inWorld := strings.EqualFold(prop.Set, activeSetName) && !propOwnedOutOfWorld(name, prop)
-			if prop.Projected && (!inWorld || !render.WorldPropReachesFrame(point, sprite)) {
+			if prop.Projected {
+				record, found, err := scriptHost.Env.PropPoint(name)
+				if err != nil {
+					return nil, false, err
+				}
+				if !found {
+					continue
+				}
+				result, err := scriptHost.ProjectedPumpStep(record)
+				if err != nil {
+					return nil, false, err
+				}
+				if result.Listed {
+					prop.Walker = result.Word20
+				}
+				if result.Stepped {
+					steps = append(steps, sprite)
+				}
 				continue
 			}
+			inWorld := strings.EqualFold(prop.Set, activeSetName) && !propOwnedOutOfWorld(name, prop)
 			steps = append(steps, sprite)
 			shown = shown || inWorld
 		}
-		return steps, shown
+		return steps, shown, nil
 	}
 	// pointinprop reads the same prop store the draw reads, by name through the
 	// prop table (FUN_004213C0). The frame is the one FUN_00421B70 selects at the
@@ -1058,12 +1078,17 @@ func run() error {
 		}
 		// FrameAt is FUN_00421B70 at the record's cursor for any angle. Path B asks for its
 		// own angle, so the frame is selected per call and a missing view or variant is nil.
+		// A view whose header matches with no variant at the angle returns
+		// assets.ErrPropFrameNoVariant, because FUN_00421B70 still steps the cursor then.
 		record.FrameAt = func(angle int16) (*scripts.PropFrame, error) {
 			if prop.View == "" {
 				return nil, nil
 			}
 			info, err := archive.FrameInfo(key, prop.View, int(prop.Frame), angle)
 			if err != nil {
+				if errors.Is(err, assets.ErrPropFrameNoVariant) {
+					return nil, err
+				}
 				return nil, nil
 			}
 			data, err := archive.Resource(info.Resource)
@@ -3165,7 +3190,11 @@ func run() error {
 		var frameSteps []render.WorldPropSprite
 		if pumpDue && scriptFrameSteps != nil {
 			var shown bool
-			frameSteps, shown = scriptFrameSteps(worldPoint)
+			var err error
+			frameSteps, shown, err = scriptFrameSteps()
+			if err != nil {
+				return false, fmt.Errorf("frame pump: %w", err)
+			}
 			if shown && currentScene == 0 {
 				displayChanged = true
 			}

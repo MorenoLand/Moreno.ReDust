@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"redust/assets"
 	"redust/render"
 )
 
@@ -54,8 +55,8 @@ var (
 // FUN_00421820 also stores the depth in record word 20 (path B, after the clip) and steps
 // the frame cursor (FUN_00421B70, before the clip). Both writes land on the copy that
 // FUN_004213C0 returns, which FUN_0041FA40 discards. So pointinprop leaves the prop store
-// as it found it, and this port reads the store without writing it. The frame pump's
-// writes to the table entry are a separate gap, not part of this statement.
+// as it found it, and this port reads the store without writing it. The frame pump passes
+// the table entry itself, so its writes persist; ProjectedPumpStep runs them.
 func (h *GameHost) projectedPropHit(prop PropPointRecord, point uint32) (bool, error) {
 	cull, inList, err := h.projectedPropCull(prop)
 	if err != nil || !inList {
@@ -69,11 +70,51 @@ func (h *GameHost) projectedPropHit(prop PropPointRecord, point uint32) (bool, e
 	return propFrameHitScaled(cull.frame.Data, cull.anchor, propRecordFlip, cull.scaleWord, point)
 }
 
+// ProjectedPumpResult is FUN_00421820 on one projected table entry, as the frame pump
+// (FUN_004216F0 with p != 0) calls it.
+type ProjectedPumpResult struct {
+	// Stepped is true when FUN_00421B70 runs: the open set, the owner, the depth and the
+	// far clip pass, and a header matches the view. The cursor steps once, before the clip,
+	// so a record whose clip fails still steps.
+	Stepped bool
+	// Listed is true when the clip passes too. FUN_00421820 then stores Word20 in record
+	// word 20 (MOV word ptr [ESI+0x28],CX at 0x421A23) and returns 1.
+	Listed bool
+	// Word20 is the depth FUN_00421820 stores in word 20 when Listed.
+	Word20 int16
+}
+
+// ProjectedPumpStep is path B of FUN_00421820 as the frame pump runs it on a projected
+// record (word 9 non-zero), after the visible flag (word 0) test. The steps are the ones
+// projectedPropCull keeps, in the reference's order: the set gate, the owner test against
+// DAT_00459A82, the depth and far clip, then FUN_00421B70 (Stepped), then the clip (Listed).
+//
+// The frame pump passes the table entry itself, so the word 20 write and the cursor step
+// reach the prop. The caller applies Word20 to the entry when Listed, and steps the cursor
+// after the draw, with the frame it selected before the step.
+func (h *GameHost) ProjectedPumpStep(prop PropPointRecord) (ProjectedPumpResult, error) {
+	// FUN_00421820 returns 0 at once for a record whose visible flag (word 0) is zero.
+	if !prop.Visible {
+		return ProjectedPumpResult{}, nil
+	}
+	cull, listed, err := h.projectedPropCull(prop)
+	if err != nil {
+		return ProjectedPumpResult{}, err
+	}
+	if !listed {
+		return ProjectedPumpResult{Stepped: cull.stepped}, nil
+	}
+	return ProjectedPumpResult{Stepped: true, Listed: true, Word20: cull.depth}, nil
+}
+
 // projectedPropCull is the cull of path B: every test FUN_00421820 makes before it keeps a
 // projected record on the world walk's list, whatever the point. It is the same sequence
 // projectedPropHit runs, and the walk reads its depth as the sort key and its clipped box
 // as the region it tests. ok is false when the record is not on the list.
 type projectedPropCull struct {
+	// stepped is true when FUN_00421B70 ran, which steps the record's cursor. It is set
+	// after the owner, depth and far clip tests, and before the clip.
+	stepped bool
 	// depth is FUN_004064B0's depth, which path B stores at entry +0x0C.
 	depth int16
 	// rect is the projected box clipped to the set's pointer rectangle.
@@ -118,7 +159,14 @@ func (h *GameHost) projectedPropCull(prop PropPointRecord) (projectedPropCull, b
 	if gate > 0x600 {
 		return projectedPropCull{}, false, nil
 	}
+	// FUN_00421B70 runs here, before the clip, and steps the cursor whenever a header matches
+	// the view. A header with no variant at this angle is reported as ErrPropFrameNoVariant:
+	// the cursor steps, and FUN_00421820 returns 0 before the scale and the clip.
+	cull := projectedPropCull{stepped: true, depth: depth, gate: gate}
 	frame, err := prop.FrameAt(angle)
+	if errors.Is(err, assets.ErrPropFrameNoVariant) {
+		return cull, false, nil
+	}
 	if err != nil {
 		return projectedPropCull{}, false, err
 	}
@@ -141,11 +189,12 @@ func (h *GameHost) projectedPropCull(prop PropPointRecord) (projectedPropCull, b
 	box := Rect{Top: top, Left: left, Bottom: top + scaledY, Right: left + scaledX}
 	clipped, inside := ClipRect(camera.Pointer, box)
 	if !inside {
-		return projectedPropCull{}, false, nil
+		return cull, false, nil
 	}
 	anchor := uint32(uint16(anchorY)) | uint32(uint16(anchorX))<<16
 	scaleWord := int32(uint32(uint16(scaledY)) | uint32(uint16(scaledX))<<16)
-	return projectedPropCull{depth: depth, rect: clipped, anchor: anchor, scaleWord: scaleWord, gate: gate, frame: frame}, true, nil
+	cull.rect, cull.anchor, cull.scaleWord, cull.frame = clipped, anchor, scaleWord, frame
+	return cull, true, nil
 }
 
 // propFrameHitScaled is FUN_004396F0, the scaled walker that path B's pointinprop uses.

@@ -54,9 +54,20 @@ type PropRecord struct {
 	// Walker is record word 20. A negative value runs the unscaled walker and a
 	// non-negative one the scaled walker (see PropPointRecord.Walker). The constructor
 	// FUN_00420370 stores -1 (0xFFFF), and propis3d (FUN_0041FFD0) stores -1 when its
-	// argument is zero and the word is non-negative. Nothing in the port stores a
-	// non-negative value, so the port's propxy does not repeat FUN_0041FDF0's reset.
+	// argument is zero and the word is non-negative. The frame pump stores the depth
+	// here on path B (ProjectedPumpStep), and propxy resets a non-negative word to -1.
 	Walker int16
+}
+
+// clearProjected is the word 9 store of propxy (FUN_0041FDF0), with the word 20 reset that
+// the same function makes. The asm stores 0 to word 9, then compares word 20 with zero and
+// stores 0xFFFF when it is not negative (MOV word ptr [ESP+0x40],0xFFFF after JL on the
+// record copy at +0x28).
+func (p *PropRecord) clearProjected() {
+	p.Projected = false
+	if p.Walker >= 0 {
+		p.Walker = -1
+	}
 }
 
 // UnmarshalJSON reads a saved record. A save written before Walker was stored has no
@@ -525,11 +536,12 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 		// the record is stored after that (FUN_004214A0). The statement stores the low
 		// 16-bit word of each number (MOV word ptr): argument 2 goes to word 11 (x, the
 		// high word of the anchor) and argument 3 to word 10 (y, the low word), and word
-		// 9 is cleared (FUN_0041FDF0). The live position, words 13 to 15, is not written.
+		// 9 is cleared, and a non-negative word 20 becomes -1 (FUN_0041FDF0). The live
+		// position, words 13 to 15, is not written.
 		h.Props.StopBall(args[0].Text)
 		prop := h.Props.Get(args[0].Text)
 		prop.AnchorX, prop.AnchorY = int32(int16(args[1].Int)), int32(int16(args[2].Int))
-		prop.Projected = false
+		prop.clearProjected()
 		if extra {
 			return consumed, ScriptStatusMalformed, true, nil
 		}

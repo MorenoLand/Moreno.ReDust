@@ -119,38 +119,6 @@ func HitTestFlatProps(props []ProjectedFlatProp, point image.Point) (string, boo
 	return "", false
 }
 
-// WorldPropReachesFrame reports whether a set prop reaches the frame selection
-// that steps its sequence cursor. FUN_00421820's path B runs its depth test before
-// FUN_00421B70 selects the frame: the depth must be at least 0x20 and the far clip
-// at most 0x600, and a prop that fails either is not stepped. The depth here is the
-// same model projectWorldProp uses, which is not yet verified against FUN_004064B0.
-func WorldPropReachesFrame(point [3]int16, prop WorldPropSprite) bool {
-	depth, farClip := worldPropDepth(point, prop)
-	return depth >= 0x20 && farClip <= 0x600
-}
-
-// worldPropDepth is the depth ahead of the camera and the far clip of a set prop,
-// computed as projectWorldProp computes them.
-func worldPropDepth(point [3]int16, prop WorldPropSprite) (depth, farClip int) {
-	forwardX, forwardY := 0, -1
-	switch point[2] {
-	case assets.SetDirectionSouth:
-		forwardY = 1
-	case assets.SetDirectionEast:
-		forwardX, forwardY = 1, 0
-	case assets.SetDirectionWest:
-		forwardX, forwardY = -1, 0
-	}
-	camera := NativeActorCameraPosition(point)
-	deltaX, deltaY := int(prop.Position[0])-camera[0], int(prop.Position[1])-camera[1]
-	depth = deltaX*forwardX + deltaY*forwardY
-	farClip = depth - int(prop.ZClip) + 0x80
-	if farClip < 0 {
-		farClip = 0
-	}
-	return depth, farClip
-}
-
 func projectWorldProp(background IndexedFrame, point [3]int16, activeSet string, prop WorldPropSprite) (ProjectedWorldActor, bool, error) {
 	if !prop.Visible || !strings.EqualFold(prop.Set, activeSet) {
 		return ProjectedWorldActor{}, false, nil
