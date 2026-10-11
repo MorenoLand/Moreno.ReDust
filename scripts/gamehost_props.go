@@ -1,6 +1,7 @@
 package scripts
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -33,11 +34,32 @@ type PropRecord struct {
 
 	// Projected is record word 9 being non-zero, which selects path B of the
 	// projection (FUN_00421820). propset (FUN_0041E9E0), propstar (FUN_0041EF60) and
-	// propxyz (FUN_0041FBD0) each store 1 there, and propxy (FUN_0041FDF0) stores 0.
+	// propxyz (FUN_0041FBD0) each store 1 there, propxy (FUN_0041FDF0) stores 0, and
+	// propis3d (FUN_0041FFD0) stores the low word of its boolean argument.
 	// The port's new records start at 0, which is path A. The shop record constructor
 	// FUN_00420370 can set word 9 to 1 when the record's set is the open set and its
 	// star resolves (FUN_0041B850 not traced); the port does not build those records.
 	Projected bool
+
+	// Walker is record word 20. A negative value runs the unscaled walker and a
+	// non-negative one the scaled walker (see PropPointRecord.Walker). The constructor
+	// FUN_00420370 stores -1 (0xFFFF), and propis3d (FUN_0041FFD0) stores -1 when its
+	// argument is zero and the word is non-negative. Nothing in the port stores a
+	// non-negative value, so the port's propxy does not repeat FUN_0041FDF0's reset.
+	Walker int16
+}
+
+// UnmarshalJSON reads a saved record. A save written before Walker was stored has no
+// such key, so the record starts at the constructor's -1 instead of zero, which would
+// select the scaled walker.
+func (r *PropRecord) UnmarshalJSON(data []byte) error {
+	type stored PropRecord
+	record := stored{Walker: -1}
+	if err := json.Unmarshal(data, &record); err != nil {
+		return err
+	}
+	*r = PropRecord(record)
+	return nil
 }
 
 // ScriptProps holds the props scripts have touched, keyed case-insensitively.
@@ -79,7 +101,7 @@ func (t *ScriptProps) Lookup(name string) (*PropRecord, bool) {
 		if prop, ok := t.props[strings.ToLower(name)]; ok {
 			return prop, true
 		}
-		return &PropRecord{Name: name, Owner: "none", Scale: 1000}, true
+		return &PropRecord{Name: name, Owner: "none", Scale: 1000, Walker: -1}, true
 	}
 	return nil, false
 }
@@ -109,7 +131,7 @@ func (t *ScriptProps) Get(name string) *PropRecord {
 	if prop, ok := t.props[key]; ok {
 		return prop
 	}
-	prop := &PropRecord{Name: name, Owner: "none", Scale: 1000}
+	prop := &PropRecord{Name: name, Owner: "none", Scale: 1000, Walker: -1}
 	t.props[key] = prop
 	return prop
 }
@@ -477,6 +499,41 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 			return consumed, ScriptStatusMalformed, true, nil
 		}
 		return consumed, 0, true, nil
+	case "propis3d":
+		// FUN_0041FFD0, the propis3d statement. FUN_00417070 reads the name and the
+		// boolean (0x1C for a missing comma). The name must be a string (0x0E) and in the
+		// prop table (0x0A, no record created), and the second argument must be a boolean
+		// (0x0E, checked after the lookup). Its low word is stored in word 9 (Projected)
+		// with no test of its value. When that word is zero and the walker (word 20) is
+		// non-negative, the walker becomes -1. The record is then stored back, and no ball
+		// is stopped (the native callees are FUN_00417070, FUN_00421FC0, FUN_004213C0 and
+		// FUN_004214A0). Extra arguments run all of that and return 2.
+		args, consumed, extra, status, err := h.propReadArgs(call, 2)
+		if err != nil || status != 0 {
+			return 0, status, true, err
+		}
+		if h.Props == nil {
+			return 0, 0, true, fmt.Errorf("props are unavailable")
+		}
+		if args[0].Kind != 3 {
+			return 0, ScriptStatusWrongType, true, nil
+		}
+		if !h.Props.Known(args[0].Text) {
+			return 0, StatusNameNotFound, true, nil
+		}
+		if args[1].Kind != 2 {
+			return 0, ScriptStatusWrongType, true, nil
+		}
+		low := uint16(args[1].Int)
+		prop := h.Props.Get(args[0].Text)
+		prop.Projected = low != 0
+		if low == 0 && prop.Walker >= 0 {
+			prop.Walker = -1
+		}
+		if extra {
+			return consumed, ScriptStatusMalformed, true, nil
+		}
+		return consumed, 0, true, nil
 	case "propinstance":
 		// FUN_0041E840: propinstance(source, name) appends a copy of the source
 		// prop under a new name of at most 15 characters, unless that name is
@@ -542,6 +599,30 @@ func (h *GameHost) propValue(name string, call *ScriptCall) (Record, int, uint16
 		}
 		number := map[string]int32{"propdeg": int32(prop.Degree), "propvalue": prop.Value, "propscale": prop.Scale, "propzclip": prop.ZClip, "propspeed": prop.Speed}[name]
 		return Record{Kind: 4, Data: uint32(number)}, consumed, 0, true, nil
+	case "propis3d":
+		// FUN_00420080, the propis3d value. FUN_004220A0 reads the one name expression,
+		// so a call with no argument is 0x0E. The name must be a string (0x0E) and in the
+		// prop table (0x0A, no record created). The result is a type-2 boolean of word 9
+		// (Projected), sign-extended by FUN_00420080's MOVSX. Extra arguments compute the
+		// result and then return 2.
+		args, consumed, extra, status, err := h.propReadArgs(call, 1)
+		if err != nil || status != 0 {
+			return Record{}, 0, status, true, err
+		}
+		if h.Props == nil {
+			return Record{}, 0, 0, true, fmt.Errorf("props are unavailable")
+		}
+		if args[0].Kind != 3 {
+			return Record{}, 0, ScriptStatusWrongType, true, nil
+		}
+		prop, found := h.Props.Lookup(args[0].Text)
+		if !found {
+			return Record{}, 0, StatusNameNotFound, true, nil
+		}
+		if extra {
+			return Record{}, 0, ScriptStatusMalformed, true, nil
+		}
+		return Record{Kind: 2, Data: boolWord(prop.Projected)}, consumed, 0, true, nil
 	case "propxy":
 		// FUN_0041FEE0. FUN_00417070 reads the name and the selector, so a call with no
 		// arguments is 0x0E. The name must be a string (0x0E) and in the prop table

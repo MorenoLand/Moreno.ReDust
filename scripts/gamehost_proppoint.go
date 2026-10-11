@@ -194,7 +194,7 @@ func (h *GameHost) pointInProp(call *ScriptCall) (Record, int, uint16, error) {
 // the reference does. Past that, its two set gates are verified to give false, which
 // is returned. With the set open, the path B projection is not verified, so it is a
 // documented gap rather than a value. No port record has word 9 set unless propset,
-// propstar or propxyz placed it, and the set gate covers those as well.
+// propstar, propxyz or propis3d placed it, and the set gate covers those as well.
 func (h *GameHost) propPointHit(prop PropPointRecord, point uint32) (bool, error) {
 	if !prop.Visible {
 		return false, nil

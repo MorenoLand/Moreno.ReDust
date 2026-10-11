@@ -960,16 +960,17 @@ func run() error {
 		}
 		record := scripts.PropPointRecord{
 			Visible: prop.Visible,
-			// Word 9 is set by propset, propstar and propxyz and cleared by propxy.
+			// Word 9 is set by propset, propstar and propxyz, cleared by propxy, and stored by
+			// propis3d.
 			Projected: prop.Projected,
 			// Words 10 and 11: the anchor's low word is y and its high word is x. The
 			// propxy statement stores its second argument in word 11 and its third in
 			// word 10 (FUN_0041FDF0), so X and Y are those arguments. The value form
 			// reads word 11 for selector 1 and word 10 for selector 2 (FUN_0041FEE0).
 			Anchor: uint32(uint16(int16(prop.Y))) | uint32(uint16(int16(prop.X)))<<16,
-			// Word 20 is -1 on every record that is not projected: FUN_00420370 starts
-			// it at -1, and propxy (FUN_0041FDF0) resets a non-negative value to -1.
-			Walker: -1,
+			// Word 20 is stored on the record. FUN_00420370 starts it at -1, and propxy
+			// (FUN_0041FDF0) and propis3d (FUN_0041FFD0) store -1 over a non-negative value.
+			Walker: prop.Walker,
 		}
 		if prop.View == "" {
 			return record, true, nil
