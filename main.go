@@ -3524,6 +3524,8 @@ func run() error {
 		}
 		params := scriptHost.PuppetParams
 		progress.PuppetParams = &params
+		keyAborts := scriptHost.KeyAborts
+		progress.KeyAborts = &keyAborts
 		if texts, err := scriptInterpreter.SnapshotContextPages(); err != nil {
 			log.Printf("save: script context pages unavailable: %v", err)
 		} else {
@@ -3537,6 +3539,8 @@ func run() error {
 	// pages only at engine start, in path and in the load (FUN_00417870 callers),
 	// so the initial progress carries none and applying it leaves them alone.
 	initialProgress.ScriptContextPages = nil
+	// The keyaborts flag is a script's runtime state, so a new game leaves it alone too.
+	initialProgress.KeyAborts = nil
 	// saveGameProgress is savegame(gameName) (FUN_00422C80 -> FUN_00422DE0):
 	// it writes the .rtd container named fileName under the saves directory.
 	saveGameProgress := func(gameName, fileName string) error {
@@ -3561,6 +3565,9 @@ func run() error {
 		gameDay, gameClock, phase, gamePhase, playercash = progress.Day, progress.Clock, int(progress.Phase), progress.GamePhase, progress.PlayerCash
 		if progress.PuppetParams != nil {
 			scriptHost.PuppetParams = *progress.PuppetParams
+		}
+		if progress.KeyAborts != nil {
+			scriptHost.KeyAborts = *progress.KeyAborts
 		}
 		cloneStringMapTo(inventoryOwners, progress.InventoryOwners)
 		cloneBoolMapTo(inventoryHidden, progress.InventoryHidden)

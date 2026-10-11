@@ -58,6 +58,10 @@ type GameProgress struct {
 	// as their Pascal text, which path() reads. Saves from before the pages were
 	// saved carry none, and DecodeGameProgress gives them the engine-start pages.
 	ScriptContextPages [][]byte `json:"scriptContextPages,omitempty"`
+	// KeyAborts is the keyaborts flag (DAT_00459996). A .rtd keeps it in resource 1
+	// at +0xF6, and the pages and puppet parameters above in their native blocks, so
+	// the .rtd state record leaves all three out. Saves from before it carry none.
+	KeyAborts *int16 `json:"keyAborts,omitempty"`
 }
 
 func GameProgressPath(directory, gameName string) (string, error) {

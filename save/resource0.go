@@ -15,6 +15,10 @@ const resource0MetadataOffset = 0xa00
 const resource0EntryOffset = 0xa0c
 const resource0EntrySize = 0x800
 
+// resource0ManagerCountOffset is the dword FUN_00424690 reads as the number of
+// manager records. It sits just past the palette (0xA0C + 0x800).
+const resource0ManagerCountOffset = 0x120c
+
 type Resource0 struct {
 	data []byte
 }
@@ -92,4 +96,24 @@ func (r Resource0) RestoreContextPages(current *scripts.ScriptContextPages) erro
 	}
 	copy(data[0x100:], r.data[resource0ContextOffset+0x100:resource0ContextOffset+resource0ContextSize])
 	return current.UnmarshalBinary(data)
+}
+
+// ManagerNames returns the file name of each manager record at +0x1210, in the count
+// the dword at +0x120C gives. A count that does not fit the block is refused.
+func (r Resource0) ManagerNames() ([]string, error) {
+	if len(r.data) < resource0PrefixSize {
+		return nil, fmt.Errorf("save resource 0 has %d bytes, want at least %#x", len(r.data), resource0PrefixSize)
+	}
+	count := binary.LittleEndian.Uint32(r.data[resource0ManagerCountOffset : resource0ManagerCountOffset+4])
+	available := (len(r.data) - resource0PrefixSize) / NativeSaveManagerRecordSize
+	if uint64(count) > uint64(available) {
+		return nil, fmt.Errorf("save resource 0 names %d manager records but holds %d", count, available)
+	}
+	names := make([]string, 0, count)
+	for index := 0; index < int(count); index++ {
+		offset := resource0PrefixSize + index*NativeSaveManagerRecordSize
+		// The first four bytes are the node pointer; the Pascal name follows.
+		names = append(names, readPascal(r.data[offset+4:offset+NativeSaveManagerRecordSize]))
+	}
+	return names, nil
 }
