@@ -2293,6 +2293,7 @@ func run() error {
 			return scriptPlayMovie(name)
 		},
 		movie: func() bool { return scriptMovieFinished && !scriptEngineBusy() },
+		waiting: func() bool { return playback.WaitingForInput() },
 		pick: func() error {
 			scriptInventorySeen, convDirty = false, true
 			if currentScene != 2 {
@@ -6002,6 +6003,7 @@ type scriptPresenter struct {
 	picked   func() bool
 	play     func(name string) error
 	movie    func() bool
+	waiting  func() bool
 }
 
 // scriptScreenPalette adapts the live screen palette and the open set's palette
@@ -6026,6 +6028,7 @@ func (p *scriptPresenter) Cursor(name string) error                    { return 
 func (p *scriptPresenter) GotoFlat(name string) error                  { return p.gotoFlat(name) }
 func (p *scriptPresenter) PlayMovie(name string) error                 { return p.play(name) }
 func (p *scriptPresenter) MovieDone() bool                             { return p.movie() }
+func (p *scriptPresenter) MovieWaiting() bool                          { return p.waiting() }
 func (p *scriptPresenter) PickInventory() error                        { return p.pick() }
 func (p *scriptPresenter) Picked() bool                                { return p.picked() }
 

@@ -34,6 +34,9 @@ type PuppetPresenter interface {
 	// and the engine is idle again.
 	PlayMovie(name string) error
 	MovieDone() bool
+	// MovieWaiting reports whether the movie is waiting for input on a frame
+	// with input regions, the state in which FUN_00403E20's wait runs.
+	MovieWaiting() bool
 	// GotoFlat switches the displayed flat ("avatar" is the inventory
 	// screen, "mainpanel" the world panel).
 	GotoFlat(name string) error
@@ -498,7 +501,24 @@ func (h *GameHost) puppetCommand(name string, call *ScriptCall) (consumed int, s
 		if err := present.PlayMovie(args[0].Text); err != nil {
 			return 0, 0, true, err
 		}
-		return consumed, 0, true, h.wait(present.MovieDone)
+		// FUN_00402CE0 clears the pending table once the movie file is open,
+		// before its first frame (FUN_0042C9A0 at 0x0040315F, which every path
+		// to the frame loop passes).
+		h.pending.reset()
+		return consumed, 0, true, h.wait(func() bool {
+			if present.MovieDone() {
+				// The page-end reset (FUN_0042C9A0 at 0x00403555) runs when the
+				// page finishes, on every normal return path.
+				h.pending.reset()
+				return true
+			}
+			// Each poll while the movie waits for input is one wait pass of
+			// FUN_00403E20 (FUN_004037A0 calls it on each region-loop pass).
+			if present.MovieWaiting() {
+				h.pending.selectorDrain()
+			}
+			return false
+		})
 	case "sendtostage":
 		// sendtostage(message(args)): one argument, the message, run against
 		// the open stage's script (FUN_00413210 into FUN_00413230, whose first test

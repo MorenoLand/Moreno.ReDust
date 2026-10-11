@@ -14,11 +14,13 @@ package scripts
 //
 // Ported consumers: puppetevent (FUN_00409F90) clears the table on entry and
 // removes one mask-0x0E record per poll (FUN_0040A2E0), and opening a set
-// (FUN_004195F0) clears it. Not ported: the movie selector wait FUN_004037A0,
-// whose mask-0x1E removal is FUN_00403E20; the resets inside FUN_00402CE0
-// (playmovie) and FUN_00423F20 (opengame); and the kind 0x2A activation record,
-// whose flag is the stale word at FUN_00429160's [ESP+0xC] (see the ledger,
-// 2026-10-11).
+// (FUN_004195F0) clears it. playmovie (FUN_00402CE0) clears it at the start
+// of each movie page and at the end of the page, and the movie selector wait
+// (FUN_00403E20, mask 0x1E) drains the records that wait can see. Not ported:
+// the selector's region tests, whose click is the press (kind 1), since the
+// port's movie click is the mouse-down event rather than a table record;
+// FUN_00423F20 (opengame); and the kind 0x2A activation record, whose flag is
+// the stale word at FUN_00429160's [ESP+0xC] (see the ledger, 2026-10-11).
 
 const (
 	// pendingCapacity is the most records the table holds before FUN_00429160
@@ -30,6 +32,12 @@ const (
 	pendingButtonUpFlag = 0x4
 	// pendingStilldownMask is the mask FUN_0042C7E0 passes to FUN_0042C940.
 	pendingStilldownMask = 0x4
+	// pendingSelectorMask is the mask FUN_00403E20 passes to FUN_0042C890: the
+	// flags of kinds 1 to 4 (0x2, 0x4, 0x8 and 0x10).
+	pendingSelectorMask = 0x1E
+	// pendingPressKind is the kind FUN_00429160 writes for WM_LBUTTONDOWN and
+	// WM_RBUTTONDOWN (switch case 1, flag 0x2). The selector returns it.
+	pendingPressKind = 0x1
 )
 
 // pendingRecord is one 18-byte table entry, with the fields the stilldown path
@@ -95,6 +103,29 @@ func (t *pendingTable) reset() {
 // ported. The puppet presenter, not this table, interprets the event.
 func (t *pendingTable) puppetPoll() {
 	t.remove(0x0E)
+}
+
+// selectorDrain is the removal FUN_00403E20 makes while a movie waits for input
+// (FUN_004037A0 calls it on each pass of its region loop). The native loop
+// blocks until a mask-0x1E record exists. It returns on a press (kind 1), which
+// the selector tests against the frame's regions, and otherwise hands the record
+// to FUN_00403EC0 and waits for the next one. FUN_00403F50 does nothing for
+// kind 2, the only kind the port enqueues (NoteMouse), so for those records the
+// effect is their removal. The port never enqueues a press or a key record, so
+// the press return and the key branch of FUN_00403F50 are not reached here.
+// Draining until no mask-0x1E record is left matches the native wait, which
+// consumes each record as it arrives. It reports the press record, if one was
+// removed.
+func (t *pendingTable) selectorDrain() (pendingRecord, bool) {
+	for {
+		record, found := t.remove(pendingSelectorMask)
+		if !found {
+			return pendingRecord{}, false
+		}
+		if record.Kind == pendingPressKind {
+			return record, true
+		}
+	}
 }
 
 // stilldown is FUN_00415E90 through FUN_0042C7E0. A pending flag-4 record makes
