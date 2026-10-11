@@ -185,10 +185,94 @@ func (h *GameHost) propNamedArgs(call *ScriptCall, count int) (args []ScriptValu
 	return args[:count], consumed, len(args) > count, 0, nil
 }
 
+// propReadArgs reads the count arguments of a prop statement or value the way the
+// native readers do: FUN_00417070 for two (propset, propstar and the value forms of
+// propxy and propxyz), FUN_00417100 for three (propxy) and FUN_004171C0 for four
+// (propxyz). Each argument is evaluated in turn. A comma must follow each argument but
+// the last, and it is checked before the next argument is read: 0x1C when it is
+// missing. An argument that starts with a closing paren or a comma has no expression,
+// so FUN_004220A0 reaches FUN_00422040 and returns 0x0E. That makes propxy() 0x0E.
+//
+// Nothing after the count-th argument is read here. The native dispatcher checks it
+// after the handler has run (FUN_00424890, FUN_004137B0), so extra reports that the
+// next token is not the closing paren, and the caller runs its work and then returns 2.
+func (h *GameHost) propReadArgs(call *ScriptCall, count int) ([]ScriptValue, int, bool, uint16, error) {
+	if call.Kind(call.Start+1) != opOpen {
+		return nil, 0, false, ScriptStatusMalformed, nil
+	}
+	var args []ScriptValue
+	position := call.Start + 2
+	for index := 0; index < count; index++ {
+		if index > 0 {
+			if call.Kind(position) != opComma {
+				return nil, 0, false, ScriptStatusMissingComma, nil
+			}
+			position++
+		}
+		if kind := call.Kind(position); kind == opClose || kind == opComma {
+			return nil, 0, false, ScriptStatusWrongType, nil
+		}
+		record, used, status, err := call.Eval(position)
+		if err != nil || status != 0 {
+			return nil, 0, false, status, err
+		}
+		value, status, err := call.Interpreter.Value(record)
+		if err != nil || status != 0 {
+			return nil, 0, false, status, err
+		}
+		args = append(args, value)
+		position += used
+	}
+	if call.Kind(position) == opClose {
+		return args, position + 1 - call.Start, false, 0, nil
+	}
+	return args, position - call.Start, true, 0, nil
+}
+
 // propCommand handles the prop setters. handled is false for other opcodes.
 func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, status uint16, handled bool, err error) {
 	switch name {
-	case "propowner", "propview", "propset", "propstar":
+	case "propset":
+		// FUN_0041E9E0. The reader parses both arguments first (0x1C), then the name must
+		// be a string (0x0E) and in the prop table (0x0A, which creates no record). The
+		// set must be a string (0x0E) of at most 15 bytes (0x1A). Then the ball stops,
+		// the set is stored, word 9 is set and the record is written back. Extra
+		// arguments run all of that and return 2.
+		args, consumed, extra, status, err := h.propReadArgs(call, 2)
+		if err != nil || status != 0 {
+			return 0, status, true, err
+		}
+		if h.Props == nil {
+			return 0, 0, true, fmt.Errorf("props are unavailable")
+		}
+		if args[0].Kind != 3 {
+			return 0, ScriptStatusWrongType, true, nil
+		}
+		if !h.Props.Known(args[0].Text) {
+			return 0, StatusNameNotFound, true, nil
+		}
+		if args[1].Kind != 3 {
+			return 0, ScriptStatusWrongType, true, nil
+		}
+		if status := nativeName(args[1].Text); status != 0 {
+			return 0, status, true, nil
+		}
+		h.Props.StopBall(args[0].Text)
+		prop := h.Props.Get(args[0].Text)
+		prop.Set = args[1].Text
+		prop.Projected = true
+		// The new set is compared with the open set (FUN_0042E5B0 against DAT_00459A82).
+		// On a match the record's star is resolved (FUN_0041B850) into words 13 to 15.
+		if strings.EqualFold(prop.Set, h.currentSet()) && h.Env.ResolveStar != nil {
+			if position, ok := h.Env.ResolveStar(prop.Set, prop.Star); ok {
+				prop.X, prop.Y, prop.Z = int32(position[0]), int32(position[1]), int32(position[2])
+			}
+		}
+		if extra {
+			return consumed, ScriptStatusMalformed, true, nil
+		}
+		return consumed, 0, true, nil
+	case "propowner", "propview", "propstar":
 		prop, args, consumed, status, err := h.propArgs(call, 2)
 		if err != nil || status != 0 {
 			return 0, status, true, err
@@ -204,12 +288,10 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 			prop.Owner = args[1].Text
 		case "propview":
 			prop.View = args[1].Text
-		case "propset":
-			prop.Set = args[1].Text
 		case "propstar":
 			prop.Star = args[1].Text
 		}
-		if name == "propset" || name == "propstar" {
+		if name == "propstar" {
 			prop.Projected = true
 			h.Props.StopBall(prop.Name)
 			if strings.EqualFold(prop.Set, h.currentSet()) && h.Env.ResolveStar != nil {
