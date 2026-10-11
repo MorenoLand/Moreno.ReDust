@@ -332,6 +332,17 @@ func (t *Tracks) stopChannel(index int) {
 // (FUN_00433300): the channel's player is still playing.
 func (c *soundChannel) busy() bool { return c.player.IsPlaying() }
 
+// SoundDone is sounddone (FUN_0040EE80 -> FUN_00434BE0): true when neither sound
+// channel holds a sound after the poll. It is true while the audio system is
+// down, as the native gate returns before it reads the channels.
+func (t *Tracks) SoundDone() bool {
+	if t.context == nil {
+		return true
+	}
+	t.pollChannels()
+	return t.channels[0].resource == 0 && t.channels[1].resource == 0
+}
+
 // CurrentSound is currentsound (FUN_0040F0F0 -> FUN_00434EF0): the name of the
 // sound the sound channels report. A busy channel is reported alone. When both
 // are busy, channel 1 is reported if channel 2's resource index is below
