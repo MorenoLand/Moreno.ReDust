@@ -386,14 +386,22 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 		}
 		return consumed, 0, true, nil
 	case "propvisible":
-		prop, args, consumed, status, err := h.propArgs(call, 2)
+		// FUN_0041F910. The readers run first, then the name (0x0E, and 0x0A with no record
+		// created), then the value must be a boolean (0x0E, kind 2). The native copies the low
+		// 16 bits of the value into the record's first word, then FUN_004214A0 stores the
+		// record. The port keeps that word as a bool, so it records whether those 16 bits are
+		// nonzero. Extra arguments run all of that and then return 2.
+		args, consumed, extra, status, err := h.propStatementArgs(call)
 		if err != nil || status != 0 {
 			return 0, status, true, err
 		}
 		if args[1].Kind != 2 {
 			return 0, ScriptStatusWrongType, true, nil
 		}
-		prop.Visible = args[1].Int != 0
+		h.Props.Get(args[0].Text).Visible = uint16(args[1].Int) != 0
+		if extra {
+			return consumed, ScriptStatusMalformed, true, nil
+		}
 		return consumed, 0, true, nil
 	case "propxyz":
 		// FUN_0041FBD0. FUN_004171C0 reads four arguments (0x1C for a missing comma). The
