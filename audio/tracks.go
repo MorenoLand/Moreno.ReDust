@@ -21,6 +21,18 @@ type OpenTrack struct {
 // writes 0x80 at record +0x31), so a sound that soundpan never set reads 128.
 const defaultPan = 128
 
+// soundChannel is one of the two sound channels, native channels 1 and 2 (the
+// record copies at DAT_004465A0 and DAT_00446608). A channel keeps the resource
+// index of the sound it was given (record +0x39), which FUN_00434B80 clears
+// once the device reports the channel done, and the sound's spelling (record
+// +0x45) and bank, which closetrackfile uses to stop the channel.
+type soundChannel struct {
+	resource uint32
+	name     string
+	bank     *SoundBank
+	player   *Player
+}
+
 // Tracks is the open track file list with the sound channels scripts drive:
 // one-shot sounds, looping sounds, per-sound volumes and pans and the voice
 // channel.
@@ -33,6 +45,8 @@ type Tracks struct {
 	pans      map[string]uint8
 	voice     *Player
 	voiceName string
+	// channels are the two sound channels bothsound plays on (native 1 and 2).
+	channels [2]soundChannel
 	// OnClose is told when a track is released, so a theme playing from it
 	// can be stopped.
 	OnClose func(track *OpenTrack)
@@ -101,6 +115,12 @@ func (t *Tracks) CloseTrack(name string) bool {
 			if track.Bank.Has(sound) {
 				_ = player.Close()
 				delete(t.loops, sound)
+			}
+		}
+		// FUN_00434C40 halts the sound channels whose sound came from the track.
+		for channel := range t.channels {
+			if t.channels[channel].bank == track.Bank {
+				t.stopChannel(channel)
 			}
 		}
 		_ = track.Bank.Close()
@@ -241,6 +261,77 @@ func (t *Tracks) Play(name string, voice bool) (found bool, err error) {
 	return true, nil
 }
 
+// PlaySound is bothsound. FUN_0040E830 searches the first sound table of each
+// open track (FUN_0040F210, found false is status 0x0A), then FUN_00435240
+// queues the sound on a sound channel. With the audio system down
+// (DAT_0045E068 clear) the search still runs and nothing is queued.
+func (t *Tracks) PlaySound(name string) (found bool, err error) {
+	track := t.lookupFirst(name)
+	if track == nil {
+		return false, nil
+	}
+	if t.context == nil {
+		return true, nil
+	}
+	t.pollChannels()
+	// FUN_00435240 takes channel 1 when its resource index is below channel 2's,
+	// and channel 2 otherwise.
+	index := 1
+	if t.channels[0].resource < t.channels[1].resource {
+		index = 0
+	}
+	// FUN_00433F00 stops what the channel was playing (FUN_00433B50) first.
+	t.stopChannel(index)
+	key := strings.ToLower(name)
+	t.channels[index] = soundChannel{resource: track.Bank.Resource(key), name: track.Bank.Spelling(key), bank: track.Bank}
+	// The record's loop word (+0x33) is copied with the sound. FUN_004341C0 turns
+	// it into the channel's repeat counter (DAT_00446510), which is not decoded,
+	// so the sound plays once here, as singlesound does.
+	player, err := track.Bank.PlayOne(t.context, key, t.Volume(name))
+	if err != nil {
+		return true, err
+	}
+	t.channels[index].player = player
+	return true, nil
+}
+
+// lookupFirst is FUN_0040F210's search: the first open track whose first sound
+// table holds the sound. The voice table is not searched.
+func (t *Tracks) lookupFirst(name string) *OpenTrack {
+	for _, track := range t.open {
+		if track.Bank.HasFirstTable(name) {
+			return track
+		}
+	}
+	return nil
+}
+
+// pollChannels is the clean-up FUN_00434B80 runs before the channels are read:
+// a channel whose device has finished loses its resource index, and the
+// finished player is released.
+func (t *Tracks) pollChannels() {
+	for index := range t.channels {
+		if t.channels[index].busy() {
+			continue
+		}
+		t.stopChannel(index)
+		t.channels[index] = soundChannel{}
+	}
+}
+
+// stopChannel halts a sound channel's player. The channel keeps its resource
+// index until the next poll, as the native record does.
+func (t *Tracks) stopChannel(index int) {
+	if player := t.channels[index].player; player != nil {
+		_ = player.Close()
+	}
+	t.channels[index].player = nil
+}
+
+// busy is the port's stand-in for the device's channel-busy predicate
+// (FUN_00433300): the channel's player is still playing.
+func (c *soundChannel) busy() bool { return c.player.IsPlaying() }
+
 // SoundLoop is the soundloop statement.
 func (t *Tracks) SoundLoop(name string, on bool) bool {
 	track := t.lookup(name)
@@ -289,6 +380,10 @@ func (t *Tracks) HaltSound() {
 	}
 	for _, track := range t.open {
 		track.Bank.haltPlayers()
+	}
+	// FUN_00434C90 with (1,1,0,0) halts the two sound channels.
+	for index := range t.channels {
+		t.stopChannel(index)
 	}
 }
 

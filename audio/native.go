@@ -29,7 +29,10 @@ type NativeSound struct {
 type SoundBank struct {
 	resources *assets.ResourceCache
 	sounds    map[string]nativeSoundEntry
-	players   []*Player
+	// firstTable holds the lower-case names in the first sound table, the
+	// count at metadata +0x18 (FUN_0040F210 searches only that table).
+	firstTable map[string]bool
+	players    []*Player
 }
 
 var nativeSoundDelta = [16]int8{0, 1, 2, 3, 4, 5, 6, 7, -8, -7, -6, -5, -4, -3, -2, -1}
@@ -63,11 +66,13 @@ func OpenSoundBank(workspace assets.Workspace, name string) (*SoundBank, error) 
 	if len(metadata) < nativeSoundTableOffset {
 		return nil, fmt.Errorf("sound bank metadata is shorter than its table header")
 	}
-	entryCount := int(binary.LittleEndian.Uint16(metadata[0x18:0x1a])) + int(binary.LittleEndian.Uint16(metadata[0x1a:0x1c]))
+	firstCount := int(binary.LittleEndian.Uint16(metadata[0x18:0x1a]))
+	entryCount := firstCount + int(binary.LittleEndian.Uint16(metadata[0x1a:0x1c]))
 	if entryCount > (len(metadata)-nativeSoundTableOffset)/nativeSoundRowSize || uint64(entryCount)+1 > uint64(header.CountB) {
 		return nil, fmt.Errorf("sound bank has %d sample entries outside its metadata or APPL table", entryCount)
 	}
 	sounds := make(map[string]nativeSoundEntry, entryCount)
+	firstTable := make(map[string]bool, firstCount)
 	for index := 0; index < entryCount; index++ {
 		row := nativeSoundTableOffset + index*nativeSoundRowSize
 		nameStart := row + 8
@@ -81,10 +86,43 @@ func OpenSoundBank(workspace assets.Workspace, name string) (*SoundBank, error) 
 			if _, exists := sounds[key]; !exists {
 				sounds[key] = nativeSoundEntry{resource: uint32(index + 1), name: pascalName}
 			}
+			// The first table is the first firstCount rows. Its rows come before
+			// the voice table's, so a name held there is found here first.
+			if index < firstCount {
+				firstTable[key] = true
+			}
 		}
 	}
 	failed = false
-	return &SoundBank{resources: resources, sounds: sounds}, nil
+	return &SoundBank{resources: resources, sounds: sounds, firstTable: firstTable}, nil
+}
+
+// HasFirstTable reports whether the bank's first sound table holds the sound.
+// FUN_0040F210 searches only that table; the voice table is not searched.
+func (b *SoundBank) HasFirstTable(name string) bool {
+	return b != nil && b.firstTable[strings.ToLower(name)]
+}
+
+// Resource is the resource index the sound's samples load from, the value that
+// FUN_00434A10 stores at a sound record's +0x39. It is 0 for an unknown name.
+func (b *SoundBank) Resource(name string) uint32 {
+	if b == nil {
+		return 0
+	}
+	return b.sounds[strings.ToLower(name)].resource
+}
+
+// Spelling is the sound's name as the bank spells it, the Pascal name copied
+// into a sound record at +0x45 (FUN_0042E6C0). It is "" for an unknown name.
+func (b *SoundBank) Spelling(name string) string {
+	if b == nil {
+		return ""
+	}
+	entry := b.sounds[strings.ToLower(name)]
+	if len(entry.name) == 0 {
+		return ""
+	}
+	return string(entry.name[1:])
 }
 
 // Has reports whether the bank holds a sound of that name.

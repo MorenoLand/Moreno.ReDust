@@ -52,6 +52,10 @@ type TrackHost interface {
 	// setter (FUN_004349A0): the application level 0..9 for the whole mix.
 	WaveVolume() int
 	SetWaveVolume(level int) error
+	// PlaySound is bothsound (FUN_0040E830 -> FUN_00435240): the sound is found in
+	// the open tracks' first tables (found false is status 0x0A) and queued on a
+	// sound channel. Nothing is queued while the audio system is down.
+	PlaySound(name string) (found bool, err error)
 }
 
 // soundCommand handles the track-file and sound-channel statements.
@@ -113,6 +117,9 @@ func (h *GameHost) soundCommand(name string, call *ScriptCall) (int, uint16, boo
 		}
 		h.Env.Tracks.SoundLoop(args[0].Text, args[1].Int != 0)
 		return consumed, 0, true, nil
+	case "bothsound":
+		consumed, status, err := h.bothSoundStatement(call)
+		return consumed, status, true, err
 	case "soundpan":
 		if h.Env.Tracks == nil {
 			return 0, 0, true, fmt.Errorf("%w: soundpan has no track files", ErrHostOpcodeUnimplemented)
@@ -364,6 +371,49 @@ func (h *GameHost) soundPanStatement(call *ScriptCall) (int, uint16, error) {
 		return 0, ScriptStatusWrongType, nil
 	}
 	h.Env.Tracks.SetPan(name.Text, int(level.Int))
+	position += consumed
+	if call.Kind(position) != opClose {
+		return 0, ScriptStatusMalformed, nil
+	}
+	return position + 1 - call.Start, 0, nil
+}
+
+// bothSoundStatement is bothsound(name), opcode 12025, the command side of
+// FUN_0040E830. The dispatcher requires "(" first. FUN_0040F210 then evaluates
+// one expression (FUN_004220A0), and a non-string name is 0x0E (FUN_00421FC0).
+// A ")" where the name belongs is also 0x0E, since FUN_00422040 rejects it.
+// Then the lookup runs (0x0A on a miss) and FUN_00435240 queues the sound. The
+// dispatcher requires ")" after that, so extra arguments play the sound and
+// return 2, as the native dispatcher does. Only the first argument is read.
+func (h *GameHost) bothSoundStatement(call *ScriptCall) (int, uint16, error) {
+	if call.Kind(call.Start+1) != opOpen {
+		return 0, ScriptStatusMalformed, nil
+	}
+	position := call.Start + 2
+	if call.Kind(position) == opClose {
+		return 0, ScriptStatusWrongType, nil
+	}
+	record, consumed, status, err := call.Eval(position)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	name, status, err := call.Interpreter.Value(record)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	if name.Kind != 3 {
+		return 0, ScriptStatusWrongType, nil
+	}
+	if h.Env.Tracks == nil {
+		return 0, 0, fmt.Errorf("%w: bothsound has no track files", ErrHostOpcodeUnimplemented)
+	}
+	found, err := h.Env.Tracks.PlaySound(name.Text)
+	if err != nil {
+		return 0, 0, err
+	}
+	if !found {
+		return 0, 0x0a, nil
+	}
 	position += consumed
 	if call.Kind(position) != opClose {
 		return 0, ScriptStatusMalformed, nil
