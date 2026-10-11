@@ -3,7 +3,6 @@
 package native
 
 import (
-	. "redust/scripts"
 	"time"
 )
 
