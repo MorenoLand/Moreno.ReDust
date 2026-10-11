@@ -332,6 +332,31 @@ func (t *Tracks) stopChannel(index int) {
 // (FUN_00433300): the channel's player is still playing.
 func (c *soundChannel) busy() bool { return c.player.IsPlaying() }
 
+// CurrentSound is currentsound (FUN_0040F0F0 -> FUN_00434EF0): the name of the
+// sound the sound channels report. A busy channel is reported alone. When both
+// are busy, channel 1 is reported if channel 2's resource index is below
+// channel 1's, and channel 2 otherwise. It returns "" when neither channel is
+// busy, and when the audio system is down. FUN_00434EF0 does not poll, so the
+// indices are read as they stand.
+func (t *Tracks) CurrentSound() string {
+	if t.context == nil {
+		return ""
+	}
+	busy1, busy2 := t.channels[0].busy(), t.channels[1].busy()
+	switch {
+	case busy1 && busy2:
+		if t.channels[1].resource < t.channels[0].resource {
+			return t.channels[0].name
+		}
+		return t.channels[1].name
+	case busy2:
+		return t.channels[1].name
+	case busy1:
+		return t.channels[0].name
+	}
+	return ""
+}
+
 // SoundLoop is the soundloop statement.
 func (t *Tracks) SoundLoop(name string, on bool) bool {
 	track := t.lookup(name)

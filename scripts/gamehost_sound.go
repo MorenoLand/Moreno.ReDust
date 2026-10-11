@@ -56,6 +56,9 @@ type TrackHost interface {
 	// the open tracks' first tables (found false is status 0x0A) and queued on a
 	// sound channel. Nothing is queued while the audio system is down.
 	PlaySound(name string) (found bool, err error)
+	// CurrentSound is currentsound (FUN_0040F0F0 -> FUN_00434EF0): the sound the
+	// sound channels report, "" when neither is busy or the audio is down.
+	CurrentSound() string
 }
 
 // soundCommand handles the track-file and sound-channel statements.
@@ -288,6 +291,22 @@ func (h *GameHost) soundValue(name string, call *ScriptCall) (Record, int, uint1
 		}
 		record, status, err := call.Interpreter.Record(ScriptValue{Kind: 3, Text: sound})
 		return record, consumed, status, true, err
+	case "currentsound":
+		// FUN_0040F0F0 takes no argument, so the dispatcher wants "( )" and
+		// answers 2 for anything else.
+		if call.Kind(call.Start+1) != opOpen || call.Kind(call.Start+2) != opClose {
+			return Record{}, 0, ScriptStatusMalformed, true, nil
+		}
+		if h.Env.Tracks == nil {
+			return Record{}, 0, 0, true, fmt.Errorf("%w: currentsound has no track files", ErrHostOpcodeUnimplemented)
+		}
+		name := h.Env.Tracks.CurrentSound()
+		if name == "" {
+			// FUN_00434EF0 falls back to the pool string at 0x0045D07C, "None".
+			name = "None"
+		}
+		record, status, err := call.Interpreter.Record(ScriptValue{Kind: 3, Text: name})
+		return record, 3, status, true, err
 	case "counttracks":
 		// FUN_0040F010 takes no argument, and FUN_004137b0 then requires the
 		// close record right after the open one; anything else is status 0x02.
