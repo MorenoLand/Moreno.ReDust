@@ -155,6 +155,9 @@ func (h *GameHost) hostValue(name string, call *ScriptCall) (Record, int, uint16
 	case "starxyz":
 		record, consumed, status, err := h.starXYZ(call)
 		return record, consumed, status, true, err
+	case "scenefloor":
+		record, consumed, status, err := h.sceneFloor(call)
+		return record, consumed, status, true, err
 	}
 	return Record{}, 0, 0, false, nil
 }

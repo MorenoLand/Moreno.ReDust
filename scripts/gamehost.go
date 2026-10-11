@@ -196,6 +196,11 @@ type GameHostEnv struct {
 	SceneCount func() (int, bool)
 	// SceneName is the open set's 0-based scene name (row +0x0C, FUN_0041B540).
 	SceneName func(index int) (string, bool)
+	// SceneFloor is the word at +0x0A of the open set's view row with the name, the
+	// row FUN_0041B7C0 copies (32-byte rows from +0x1C10, name at +0x0C). scenefloor
+	// returns it as a number. found is false when no view has the name. Nil makes
+	// scenefloor a gap.
+	SceneFloor func(name string) (word int16, found bool)
 	// Voice plays voicesound on the voice channel currentvoice reports.
 	Voice func(name string) error
 	// Tracks is the open track files and sound channels.

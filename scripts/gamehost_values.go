@@ -155,6 +155,39 @@ func (h *GameHost) starXYZ(call *ScriptCall) (Record, int, uint16, error) {
 	return Record{Kind: 4, Data: uint32(value)}, end + 1 - call.Start, 0, nil
 }
 
+// sceneFloor is scenefloor, FUN_0041B6B0, value 20022. FUN_0041B750 tests the open
+// set first (DAT_00459A24, status 0x28) and then evaluates one expression, which must
+// be a string (0x0E). FUN_0041B7C0 copies the open set's view row with that name
+// (32-byte rows from +0x1C10, name at +0x0C), and no row gives 0x0A. The result is
+// the row's word at +0x0A, sign extended, as a number. The word's meaning as a floor
+// index is not traced; the port reads it through the SceneFloor hook.
+func (h *GameHost) sceneFloor(call *ScriptCall) (Record, int, uint16, error) {
+	if !hostOpen(call) {
+		return Record{}, 0, ScriptStatusMalformed, nil
+	}
+	if _, open := h.setRect(); !open {
+		return Record{}, 0, StatusNoActiveSet, nil
+	}
+	args, end, status, err := nativeArgs(call, 1)
+	if err != nil || status != 0 {
+		return Record{}, 0, status, err
+	}
+	if args[0].Kind != 3 {
+		return Record{}, 0, ScriptStatusWrongType, nil
+	}
+	if h.Env.SceneFloor == nil {
+		return Record{}, 0, 0, fmt.Errorf("%w: scenefloor has no view table", ErrHostOpcodeUnimplemented)
+	}
+	word, found := h.Env.SceneFloor(args[0].Text)
+	if !found {
+		return Record{}, 0, StatusNameNotFound, nil
+	}
+	if call.Kind(end) != opClose {
+		return Record{}, 0, ScriptStatusMalformed, nil
+	}
+	return Record{Kind: 4, Data: uint32(int32(word))}, end + 1 - call.Start, 0, nil
+}
+
 // typeName is type, FUN_00415AC0, value 20050. FUN_004220A0 evaluates one
 // expression, and the name of its record kind is returned as a new string: 2 is
 // "logic" (DAT_0045D4EC), 3 is "text" (DAT_0045D4FC), 4 is "number" (DAT_0045D4F4),

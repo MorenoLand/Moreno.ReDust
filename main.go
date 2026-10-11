@@ -2244,6 +2244,13 @@ func run() error {
 		top, left, width, height := activeSet.PointerExtent()
 		return scripts.SetPointerRect(top, left, width, height), true
 	}
+	scriptHost.Env.SceneFloor = func(name string) (int16, bool) {
+		if activeSet == nil {
+			return 0, false
+		}
+		view, found := activeSet.FindView(name)
+		return int16(view.ReferenceIndex), found
+	}
 	scriptHost.Env.OpenSetFile = func(name string) error {
 		frame, err := switchSpecialSet(name, "", "")
 		if err != nil {
