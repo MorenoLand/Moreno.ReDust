@@ -166,7 +166,6 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("initialize work directory: %w", err)
 	}
-	workspace.ResourceCacheRegistry().SetMemoryStatus(scripts.HostMemoryStatus)
 	if *debug {
 		log.Printf("work=%s assets=%s", workspace.WorkDir, workspace.AssetRoot)
 	}
