@@ -146,6 +146,9 @@ func (h *GameHost) hostValue(name string, call *ScriptCall) (Record, int, uint16
 			return Record{}, 0, status, true, nil
 		}
 		return Record{Kind: 2, Data: boolWord(h.Env.LeftButton())}, consumed, 0, true, nil
+	case "calcturn":
+		record, consumed, status, err := h.calcTurn(call)
+		return record, consumed, status, true, err
 	}
 	return Record{}, 0, 0, false, nil
 }
