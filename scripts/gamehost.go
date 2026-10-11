@@ -46,6 +46,10 @@ type GameHostEnv struct {
 	FrameRate func() int32
 	OptionKey func() bool
 	ShiftKey  func() bool
+	// LeftButton reports whether the left mouse button is down, the state
+	// FUN_0042C7C0 reads as GetKeyState(VK_LBUTTON) < 0 after its pump. Nil makes
+	// button a gap.
+	LeftButton func() bool
 	// Heading is FUN_004113F0, the bearing from one point to another, in the
 	// convention the renderer draws headings with.
 	Heading func(from, to [3]int16) int16

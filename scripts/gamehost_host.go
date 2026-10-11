@@ -130,6 +130,22 @@ func (h *GameHost) hostValue(name string, call *ScriptCall) (Record, int, uint16
 			return Record{}, 0, status, true, nil
 		}
 		return Record{Kind: 4, Data: h.Env.Ticks()}, consumed, 0, true, nil
+	case "button":
+		// button is FUN_00415DF0, value 20005. FUN_0042C7C0 pumps the messages (not
+		// reproduced) and returns GetKeyState(VK_LBUTTON) < 0, so the result is a
+		// type-2 boolean that is true while the left button is down. The handler
+		// consumes no arguments, so the call is "(" and ")" only.
+		if !hostOpen(call) {
+			return Record{}, 0, ScriptStatusMalformed, true, nil
+		}
+		if h.Env.LeftButton == nil {
+			return Record{}, 0, 0, true, fmt.Errorf("%w: button has no mouse state", ErrHostOpcodeUnimplemented)
+		}
+		consumed, status := hostClose(call)
+		if status != 0 {
+			return Record{}, 0, status, true, nil
+		}
+		return Record{Kind: 2, Data: boolWord(h.Env.LeftButton())}, consumed, 0, true, nil
 	}
 	return Record{}, 0, 0, false, nil
 }
