@@ -188,6 +188,155 @@ func (h *GameHost) sceneFloor(call *ScriptCall) (Record, int, uint16, error) {
 	return Record{Kind: 4, Data: uint32(int32(word))}, end + 1 - call.Start, 0, nil
 }
 
+// pascalBuffer is a 256-byte Pascal string buffer, the layout putword edits in
+// place: DAT_00459AD0 holds the list and DAT_00459BD0 the separator. Byte 0 is the
+// length and bytes 1 to length are the text.
+type pascalBuffer [256]byte
+
+func newPascalBuffer(text string) pascalBuffer {
+	var buffer pascalBuffer
+	buffer[0] = byte(len(text))
+	copy(buffer[1:], text)
+	return buffer
+}
+
+func (b *pascalBuffer) text() string {
+	return string(b[1 : 1+int(b[0])])
+}
+
+// errPutWordGap reports an edit whose result would not fit the native's 255-byte
+// string. FUN_0042E660 stops the process with a fatal error (FUN_0042C470) when an
+// append overflows, and the insertion and replacement moves write past the buffer
+// without a check. Neither is reproduced, so the port reports a gap.
+var errPutWordGap = fmt.Errorf("%w: putword result exceeds 255 bytes", ErrHostOpcodeUnimplemented)
+
+// putWordEdit is the edit FUN_00416930 runs on the list. An empty separator inserts
+// the word before character index (1 to the length), or appends it at one past the
+// length; any other index gives the empty string. A non-empty separator is appended
+// to the list, and every position p from 1 to the old length plus one is tested for
+// a separator match (FUN_0042E610, ASCII case-insensitive). The index-th match ends
+// the word that started after the previous match, and that word is replaced by the
+// fourth argument. With no such match the result is the empty string. The fourth
+// argument is checked as a string (0x0E) where the native reaches its use, which is
+// before the index test for an empty separator and only at the match otherwise.
+func putWordEdit(list, separator string, index int, word ScriptValue) (string, uint16, error) {
+	a := newPascalBuffer(list)
+	b := newPascalBuffer(separator)
+	placed := false
+	if b[0] == 0 {
+		if word.Kind != 3 {
+			return "", ScriptStatusWrongType, nil
+		}
+		w := newPascalBuffer(word.Text)
+		lenA, lenW := int(a[0]), int(w[0])
+		switch {
+		case index < 1 || lenA < index:
+			if lenA-index == -1 {
+				if lenA+lenW > 255 {
+					return "", 0, errPutWordGap
+				}
+				copy(a[lenA+1:], w[1:1+lenW])
+				a[0] = byte(lenA + lenW)
+				placed = true
+			}
+		default:
+			if lenA+lenW > 255 {
+				return "", 0, errPutWordGap
+			}
+			count := lenA - index + 1
+			copy(a[index+lenW:index+lenW+count], a[index:index+count])
+			copy(a[index:index+lenW], w[1:1+lenW])
+			a[0] = byte(lenA + lenW)
+			placed = true
+		}
+	} else {
+		lenS := int(b[0])
+		origLen := int(a[0])
+		if origLen+lenS > 255 {
+			return "", 0, errPutWordGap
+		}
+		copy(a[origLen+1:origLen+1+lenS], b[1:1+lenS])
+		a[0] = byte(origLen + lenS)
+		start := 1
+		for p := 1; p <= origLen+1; p++ {
+			if !pascalMatchAt(&a, p, b[1:1+lenS]) {
+				continue
+			}
+			index--
+			if index >= 1 {
+				start = lenS + p
+				continue
+			}
+			// The word from start to p-1 is removed: the trailing separator is taken
+			// off, the tail from p moves down to start, and the length follows.
+			count := origLen - p + 1
+			if start+count > 256 {
+				return "", 0, errPutWordGap
+			}
+			copy(a[start:start+count], a[p:p+count])
+			a[0] = byte(origLen + start - p)
+			if word.Kind != 3 {
+				return "", ScriptStatusWrongType, nil
+			}
+			w := newPascalBuffer(word.Text)
+			lenW := int(w[0])
+			count = int(a[0]) - start + 1
+			if count < 0 || int(a[0])+lenW > 255 {
+				return "", 0, errPutWordGap
+			}
+			copy(a[start+lenW:start+lenW+count], a[start:start+count])
+			a[0] = byte(int(a[0]) + lenW)
+			copy(a[start:start+lenW], w[1:1+lenW])
+			placed = true
+			break
+		}
+	}
+	if !placed {
+		return "", 0, nil
+	}
+	return a.text(), 0, nil
+}
+
+// pascalMatchAt reports whether the bytes at position p of the buffer equal the
+// separator, comparing each byte with the ASCII case fold FUN_0042E610 uses.
+func pascalMatchAt(buffer *pascalBuffer, p int, separator []byte) bool {
+	for offset, c := range separator {
+		if lowerASCII(buffer[p+offset]) != lowerASCII(c) {
+			return false
+		}
+	}
+	return true
+}
+
+// putWord is putword, FUN_00416930, value 20057. FUN_004171C0 reads four arguments:
+// the list, the separator, the index and the word. The index must be a number and
+// the list and separator strings, each 0x0E otherwise, and the edit is run by
+// putWordEdit. The result is a new string with status 0.
+func (h *GameHost) putWord(call *ScriptCall) (Record, int, uint16, error) {
+	if !hostOpen(call) {
+		return Record{}, 0, ScriptStatusMalformed, nil
+	}
+	args, end, status, err := nativeArgs(call, 4)
+	if err != nil || status != 0 {
+		return Record{}, 0, status, err
+	}
+	if args[2].Kind != 4 || args[0].Kind != 3 || args[1].Kind != 3 {
+		return Record{}, 0, ScriptStatusWrongType, nil
+	}
+	text, status, err := putWordEdit(args[0].Text, args[1].Text, int(args[2].Int), args[3])
+	if err != nil || status != 0 {
+		return Record{}, 0, status, err
+	}
+	result, status, err := call.Interpreter.Record(ScriptValue{Kind: 3, Text: text})
+	if err != nil || status != 0 {
+		return Record{}, 0, status, err
+	}
+	if call.Kind(end) != opClose {
+		return Record{}, 0, ScriptStatusMalformed, nil
+	}
+	return result, end + 1 - call.Start, 0, nil
+}
+
 // typeName is type, FUN_00415AC0, value 20050. FUN_004220A0 evaluates one
 // expression, and the name of its record kind is returned as a new string: 2 is
 // "logic" (DAT_0045D4EC), 3 is "text" (DAT_0045D4FC), 4 is "number" (DAT_0045D4F4),
