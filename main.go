@@ -4269,6 +4269,25 @@ func run() error {
 		logf:    options.env.logf,
 	}
 	engine.TextInput = options.modal.HandleText
+	// notedialog and questiondialog open the modal box over the frame on screen. The
+	// script task waits in Answered until the player closes it, and the update loop
+	// resumes the task once the modal is no longer active.
+	scriptDialogDone, scriptDialogPressed := false, 0
+	scriptHost.Env.Dialogs = &scriptDialogs{
+		ask: func(caption, text string, buttons []string) error {
+			scriptDialogDone, scriptDialogPressed = false, 0
+			frame, _, err := options.modal.Script(options.env.frame(), caption, text, buttons, func(button int) (render.IndexedFrame, bool, error) {
+				scriptDialogDone, scriptDialogPressed = true, button
+				return options.env.frame(), true, nil
+			})
+			if err != nil {
+				return err
+			}
+			uiPending, uiHasPending = frame, true
+			return nil
+		},
+		answered: func() (int, bool) { return scriptDialogPressed, scriptDialogDone },
+	}
 	engine.SubtitlesEnabled = func() bool { return scriptHost.PuppetParams[6] != 0 }
 	runErr := runGame(initialFrame, func() (render.IndexedFrame, bool, error) {
 		if quitRequested && !*silent {
@@ -5392,6 +5411,18 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+// scriptDialogs adapts the modal box to the GameHost's dialog presenter.
+type scriptDialogs struct {
+	ask      func(caption, text string, buttons []string) error
+	answered func() (int, bool)
+}
+
+func (d *scriptDialogs) Ask(caption, text string, buttons []string) error {
+	return d.ask(caption, text, buttons)
+}
+
+func (d *scriptDialogs) Answered() (int, bool) { return d.answered() }
 
 // scriptPresenter adapts main's conversation closures to the GameHost.
 type scriptPresenter struct {

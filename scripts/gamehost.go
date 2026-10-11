@@ -184,6 +184,9 @@ type GameHostEnv struct {
 	Fallback ScriptHost
 	// Log receives diagnostics when non-nil.
 	Log func(format string, args ...any)
+	// Dialogs shows the boxes notedialog and questiondialog raise; the script
+	// waits in them until the player closes one.
+	Dialogs DialogPresenter
 }
 
 // GameHost executes script commands against the actor table, the loop
@@ -326,6 +329,8 @@ func (h *GameHost) Command(call *ScriptCall) (int, uint16, error) {
 func (h *GameHost) command(call *ScriptCall) (int, uint16, error) {
 	name := opcodeName(call)
 	switch name {
+	case "notedialog":
+		return h.noteDialog(call)
 	case "actorvisible":
 		actor, args, consumed, status, err := h.actorArgs(call, 2)
 		if err != nil || status != 0 {
@@ -835,6 +840,10 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 			return Record{}, 0, status, nil
 		}
 		return result.Record(), consumed, 0, nil
+	case "questiondialog":
+		return h.questionDialog(call)
+	case "textdialog":
+		return h.textDialog(call)
 	case "actorset", "actorstar", "actorpose", "actorowner", "actordeg", "actorvisible", "actorvalue", "actorscale", "actorspeed", "actordist":
 		actor, _, consumed, status, err := h.actorArgs(call, 1)
 		if err != nil || status != 0 {

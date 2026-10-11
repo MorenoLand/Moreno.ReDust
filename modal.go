@@ -95,6 +95,21 @@ func (m *modalDialog) Question(base render.IndexedFrame, text string, then func(
 	})
 }
 
+// Script is a box a script's dialog builtin raised. The caption and the buttons
+// come from the native call (the captions are resources 0x98 and 0x99, read
+// from the reference string table), and then receives the index of the button
+// the player pressed.
+func (m *modalDialog) Script(base render.IndexedFrame, caption, text string, buttons []string, then func(button int) (render.IndexedFrame, bool, error)) (render.IndexedFrame, bool, error) {
+	lines, err := render.WrapDialogText(text, 296)
+	if err != nil {
+		return render.IndexedFrame{}, false, err
+	}
+	return m.open(base, render.DialogView{Title: caption, Lines: lines, Buttons: buttons, Pressed: -1}, func(button int, _ string) (render.IndexedFrame, bool, error) {
+		m.close()
+		return then(button)
+	})
+}
+
 // savesDirectory is where native-format saves live, under the work directory.
 func savesDirectory(workDir string) string { return filepath.Join(workDir, "saves") }
 
