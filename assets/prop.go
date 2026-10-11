@@ -20,12 +20,16 @@ const (
 	propDescriptorRowSize     = 0x2c
 	propDescriptorFrameCount  = 0x70
 	propDescriptorDegreeCount = 0x72
+	propDescriptorSequences   = 0x2e
 )
 
 // ErrPropFrameNoVariant reports that no variant of a view matches a frame's
 // sequence value. FUN_00421B70 returns false in that case, so the native projection
 // draws nothing for the frame, so projectWorldProp treats this error as "not drawn".
 var ErrPropFrameNoVariant = fmt.Errorf("prop frame has no variant for its sequence")
+// propNoFrameResource marks a frame that no variant row serves at a degree's
+// angle; FUN_00421B70 returns false for such a frame.
+const propNoFrameResource = ^uint32(0)
 
 type PropArchive struct {
 	cache         *ResourceCache
@@ -185,26 +189,33 @@ func (a *PropArchive) View(propName, viewName string) (PropView, error) {
 		return PropView{}, fmt.Errorf("prop view descriptor %d has invalid frames=%d degrees=%d size=%d", resource, frameCount, degreeCountValue, len(data))
 	}
 	degreeCount := int(degreeCountValue)
-	frames := make([][]uint32, degreeCount)
+	if uint64(propDescriptorSequences)+uint64(frameCount)*2 > uint64(len(data)) {
+		return PropView{}, fmt.Errorf("prop view descriptor %d sequence table for %d frames is truncated", resource, frameCount)
+	}
 	variants := make([]PropFrameVariant, degreeCount)
+	for degree := range variants {
+		row := data[propDescriptorRows+degree*propDescriptorRowSize : propDescriptorRows+(degree+1)*propDescriptorRowSize]
+		variantResource := binary.LittleEndian.Uint32(row[:4])
+		if variantResource >= a.resourceCount {
+			return PropView{}, fmt.Errorf("prop view descriptor %d variant %d references resource %d outside %d entries", resource, degree, variantResource, a.resourceCount)
+		}
+		variants[degree] = PropFrameVariant{Resource: variantResource, Sequence: int16(binary.LittleEndian.Uint16(row[8:10])), Angle: int16(binary.LittleEndian.Uint16(row[0x28:0x2a])), Metric: binary.LittleEndian.Uint16(row[0x2a:0x2c]), Left: int16(binary.LittleEndian.Uint16(row[0x12:0x14])), Top: int16(binary.LittleEndian.Uint16(row[0x14:0x16])), Right: int16(binary.LittleEndian.Uint16(row[0x16:0x18])), Bottom: int16(binary.LittleEndian.Uint16(row[0x18:0x1a])), OriginX: int16(binary.LittleEndian.Uint16(row[0x1a:0x1c])), OriginY: int16(binary.LittleEndian.Uint16(row[0x1c:0x1e]))}
+	}
 	sequences := make([]int16, frameCount)
 	for frame := range sequences {
-		sequences[frame] = int16(binary.LittleEndian.Uint16(data[0x2e+frame*2 : 0x30+frame*2]))
+		sequences[frame] = int16(binary.LittleEndian.Uint16(data[propDescriptorSequences+frame*2 : propDescriptorSequences+frame*2+2]))
 	}
+	// Each frame resolves as FUN_00421B70 resolves it: the frame's sequence
+	// (stored one-based) picks the variant nearest the degree row's angle.
+	frames := make([][]uint32, degreeCount)
 	for degree := range frames {
-		row := data[propDescriptorRows+degree*propDescriptorRowSize : propDescriptorRows+(degree+1)*propDescriptorRowSize]
-		if frameCount > len(row)/4 {
-			return PropView{}, fmt.Errorf("prop view descriptor %d degree %d has %d frames in a %d-byte row", resource, degree, frameCount, len(row))
-		}
 		frames[degree] = make([]uint32, frameCount)
 		for frame := range frames[degree] {
-			frameResource := binary.LittleEndian.Uint32(row[frame*4 : frame*4+4])
-			if frameResource >= a.resourceCount {
-				return PropView{}, fmt.Errorf("prop view descriptor %d degree %d frame %d references resource %d outside %d entries", resource, degree, frame, frameResource, a.resourceCount)
+			frames[degree][frame] = propNoFrameResource
+			if variant, selected := selectPropVariant(variants, sequences[frame]-1, variants[degree].Angle); selected {
+				frames[degree][frame] = variant.Resource
 			}
-			frames[degree][frame] = frameResource
 		}
-		variants[degree] = PropFrameVariant{Resource: binary.LittleEndian.Uint32(row[:4]), Sequence: int16(binary.LittleEndian.Uint16(row[8:10])), Angle: int16(binary.LittleEndian.Uint16(row[0x28:0x2a])), Metric: binary.LittleEndian.Uint16(row[0x2a:0x2c]), Left: int16(binary.LittleEndian.Uint16(row[0x12:0x14])), Top: int16(binary.LittleEndian.Uint16(row[0x14:0x16])), Right: int16(binary.LittleEndian.Uint16(row[0x16:0x18])), Bottom: int16(binary.LittleEndian.Uint16(row[0x18:0x1a])), OriginX: int16(binary.LittleEndian.Uint16(row[0x1a:0x1c])), OriginY: int16(binary.LittleEndian.Uint16(row[0x1c:0x1e]))}
 	}
 	return PropView{Resource: resource, Name: viewName, Frames: frames, variants: variants, sequences: sequences}, nil
 }
@@ -230,7 +241,7 @@ func (a *PropArchive) FrameInfo(propName, viewName string, frameIndex int, angle
 	}
 	frameCount := int(binary.LittleEndian.Uint16(data[propDescriptorFrameCount : propDescriptorFrameCount+2]))
 	variantCountValue := binary.LittleEndian.Uint32(data[propDescriptorDegreeCount : propDescriptorDegreeCount+4])
-	if frameIndex < 0 || frameCount == 0 || uint64(propDescriptorRows)+uint64(variantCountValue)*propDescriptorRowSize > uint64(len(data)) || 0x2e+frameCount*2 > propDescriptorRows {
+	if frameIndex < 0 || frameCount == 0 || uint64(propDescriptorRows)+uint64(variantCountValue)*propDescriptorRowSize > uint64(len(data)) || uint64(propDescriptorSequences)+uint64(frameCount)*2 > uint64(len(data)) {
 		return PropFrameInfo{}, fmt.Errorf("prop view descriptor %d has invalid frame/variant tables", resource)
 	}
 	sequence := int16(binary.LittleEndian.Uint16(data[0x2e+(frameIndex%frameCount)*2:0x30+(frameIndex%frameCount)*2])) - 1
@@ -261,25 +272,32 @@ func (v PropView) FrameInfo(frameIndex int, angle int16) (PropFrameInfo, error) 
 		return PropFrameInfo{}, fmt.Errorf("prop view %q frame index %d is invalid", v.Name, frameIndex)
 	}
 	sequence := v.sequences[frameIndex%len(v.sequences)] - 1
+	variant, selected := selectPropVariant(v.variants, sequence, angle)
+	if !selected {
+		return PropFrameInfo{}, fmt.Errorf("%w: prop view %q frame %d sequence %d at angle %d", ErrPropFrameNoVariant, v.Name, frameIndex, sequence, angle)
+	}
+	return PropFrameInfo{Resource: variant.Resource, Angle: variant.Angle, Metric: variant.Metric, Left: variant.Left, Top: variant.Top, Right: variant.Right, Bottom: variant.Bottom, OriginX: variant.OriginX, OriginY: variant.OriginY}, nil
+}
+
+// selectPropVariant is the variant scan of FUN_00421B70: the first variant whose
+// sequence matches and whose angle is nearest, stopping at an exact match.
+func selectPropVariant(variants []PropFrameVariant, sequence, angle int16) (PropFrameVariant, bool) {
 	closest, selected := int16(1000), false
-	var result PropFrameInfo
-	for _, variant := range v.variants {
+	var result PropFrameVariant
+	for _, variant := range variants {
 		if variant.Sequence != sequence {
 			continue
 		}
 		distance := nativeAngleDistance(variant.Angle, angle)
 		if distance < closest {
 			closest, selected = distance, true
-			result = PropFrameInfo{Resource: variant.Resource, Angle: variant.Angle, Metric: variant.Metric, Left: variant.Left, Top: variant.Top, Right: variant.Right, Bottom: variant.Bottom, OriginX: variant.OriginX, OriginY: variant.OriginY}
+			result = variant
 			if distance < 1 {
 				break
 			}
 		}
 	}
-	if !selected {
-		return PropFrameInfo{}, fmt.Errorf("%w: prop view %q frame %d sequence %d at angle %d", ErrPropFrameNoVariant, v.Name, frameIndex, sequence, angle)
-	}
-	return result, nil
+	return result, selected
 }
 
 // FrameCount is the number of entries in the view's sequence, which is the count
@@ -302,6 +320,9 @@ func NextFrameCursor(cursor int16, frameCount int) int16 {
 func (v PropView) FrameResource(degree, frame int) (uint32, error) {
 	if degree < 0 || degree >= len(v.Frames) || frame < 0 || frame >= len(v.Frames[degree]) {
 		return 0, fmt.Errorf("prop view %q frame %d/%d is outside %d degree rows", v.Name, degree, frame, len(v.Frames))
+	}
+	if v.Frames[degree][frame] == propNoFrameResource {
+		return 0, fmt.Errorf("prop view %q frame %d has no variant at degree row %d", v.Name, frame, degree)
 	}
 	return v.Frames[degree][frame], nil
 }
