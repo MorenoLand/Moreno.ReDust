@@ -100,10 +100,34 @@ type Set struct {
 	// setWidth and setHeight are the metadata words setwidth and setheight read
 	// (offsets 0x26 and 0x28, FUN_0041B450 and FUN_0041B4A0).
 	setWidth, setHeight int16
+	// name is the Pascal string at metadata offset 0x1B7C, the set's name. FUN_004195F0
+	// copies it with FUN_0042E6C0 into DAT_00459A82, the word the path B pointinprop
+	// gate compares each projected prop's owner against.
+	name string
+}
+
+// setNameOffset is the metadata offset of the set's Pascal name (FUN_004195F0 reads
+// it from resource 0 at +0x1B7C).
+const setNameOffset = 0x1b7c
+
+// pascalAt reads the length-prefixed string at offset, clipped to the data. A missing
+// offset gives the empty string, which is the native's zero-length value.
+func pascalAt(data []byte, offset int) string {
+	if offset >= len(data) {
+		return ""
+	}
+	length := int(data[offset])
+	if offset+1+length > len(data) {
+		length = len(data) - offset - 1
+	}
+	return string(data[offset+1 : offset+1+length])
 }
 
 // File is the name the set was opened under.
 func (s *Set) File() string { return s.file }
+
+// Name is the open set's name, DAT_00459A82 (the Pascal string at metadata +0x1B7C).
+func (s *Set) Name() string { return s.name }
 
 // ScriptResource is the set script's resource (u32 at metadata offset 0x1B78,
 // read by FUN_004195F0 into DAT_00459A48).
@@ -195,7 +219,7 @@ func (w Workspace) OpenSet(name string) (*Set, error) {
 		sceneScripts = append(sceneScripts, binary.LittleEndian.Uint32(metadata[offset:offset+4]))
 	}
 	failed = false
-	return &Set{cache: cache, views: views, backgroundResource: backgroundResource, backgroundCount: backgroundCount, backgroundTable: backgroundTable, palette: append([]byte(nil), metadata[setPaletteOffset:setPaletteOffset+setPaletteSize]...), secondaryResource: secondaryResource, setWidth: int16(binary.LittleEndian.Uint16(metadata[0x26:0x28])), setHeight: int16(binary.LittleEndian.Uint16(metadata[0x28:0x2a])), resourceCount: header.CountB, cameraPullback: int(binary.LittleEndian.Uint16(metadata[0x18:0x1a])), cameraHeight: int(binary.LittleEndian.Uint16(metadata[0x1a:0x1c])), pointerTop: int16(binary.LittleEndian.Uint16(metadata[0x16:0x18])), pointerLeft: int16(binary.LittleEndian.Uint16(metadata[0x14:0x16])), pointerWidth: int16(binary.LittleEndian.Uint16(metadata[0x2a:0x2c])), pointerHeight: int16(binary.LittleEndian.Uint16(metadata[0x2c:0x2e])), file: name, scriptResource: binary.LittleEndian.Uint32(metadata[0x1b78:0x1b7c]), sceneScripts: sceneScripts}, nil
+	return &Set{cache: cache, views: views, backgroundResource: backgroundResource, backgroundCount: backgroundCount, backgroundTable: backgroundTable, palette: append([]byte(nil), metadata[setPaletteOffset:setPaletteOffset+setPaletteSize]...), secondaryResource: secondaryResource, setWidth: int16(binary.LittleEndian.Uint16(metadata[0x26:0x28])), setHeight: int16(binary.LittleEndian.Uint16(metadata[0x28:0x2a])), resourceCount: header.CountB, cameraPullback: int(binary.LittleEndian.Uint16(metadata[0x18:0x1a])), cameraHeight: int(binary.LittleEndian.Uint16(metadata[0x1a:0x1c])), pointerTop: int16(binary.LittleEndian.Uint16(metadata[0x16:0x18])), pointerLeft: int16(binary.LittleEndian.Uint16(metadata[0x14:0x16])), pointerWidth: int16(binary.LittleEndian.Uint16(metadata[0x2a:0x2c])), pointerHeight: int16(binary.LittleEndian.Uint16(metadata[0x2c:0x2e])), file: name, name: pascalAt(metadata, setNameOffset), scriptResource: binary.LittleEndian.Uint32(metadata[0x1b78:0x1b7c]), sceneScripts: sceneScripts}, nil
 }
 
 func readSetResource(cache *ResourceCache, index uint32) ([]byte, error) {
