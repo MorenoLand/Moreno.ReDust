@@ -72,6 +72,12 @@ type GameHostEnv struct {
 	Managed func(name string) bool
 	// CastScript resolves sendtocast's target by the cast's own name.
 	CastScript func(name string) (*Program, bool, error)
+	// CastCount is DAT_004599E4, the number of casts in the cast table, which
+	// countcasts returns.
+	CastCount func() int
+	// CastName is the Pascal name field of the table record at a zero-based
+	// index, which indextocast returns; false when the index is out of range.
+	CastName func(index int) (string, bool)
 	// OpenSetFile opens a set by file name ("hotlower.set", "nite.set") at its
 	// start view; StageScript returns the script a stage message runs against;
 	// AdvanceDay runs the day advance and Busy reports engine work (movies,
@@ -1135,6 +1141,42 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 			return Record{}, 0, 0, fmt.Errorf("props are unavailable")
 		}
 		name, ok := h.Props.TableName(int(args[0].Int))
+		if !ok {
+			return Record{}, 0, 0x0a, nil
+		}
+		return text(name, consumed)
+	case "countcasts":
+		// FUN_0040D060 (opcode 20029) takes no arguments and returns DAT_004599E4
+		// as a number. Like countprops, the empty parentheses are parsed through
+		// call.Args(), and a nil hook is a gap.
+		if h.Env.CastCount == nil {
+			return Record{}, 0, 0, h.gap(call)
+		}
+		_, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		return number(int32(h.Env.CastCount()), consumed)
+	case "indextocast":
+		// FUN_0040D190 (opcode 20030) evaluates one argument. A non-number is
+		// status 0x0E and an index outside 1..count is 0x0A. Otherwise the
+		// 28-byte record at index-1 yields its 16-byte Pascal name field (record
+		// +0x0C) as a string, through FUN_00421F60.
+		if h.Env.CastCount == nil || h.Env.CastName == nil {
+			return Record{}, 0, 0, h.gap(call)
+		}
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		if len(args) != 1 || args[0].Kind != 4 {
+			return Record{}, 0, ScriptStatusWrongType, nil
+		}
+		index := int(args[0].Int)
+		if index < 1 || index > h.Env.CastCount() {
+			return Record{}, 0, 0x0a, nil
+		}
+		name, ok := h.Env.CastName(index - 1)
 		if !ok {
 			return Record{}, 0, 0x0a, nil
 		}

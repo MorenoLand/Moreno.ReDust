@@ -707,6 +707,11 @@ func run() error {
 		scriptPrograms[key] = &program
 		return &program, nil
 	}
+	// castTable is the cast table countcasts and indextocast read, in
+	// opencastfile order. BOOTFILE r1 opens gang.cst (record 200) and then
+	// extra.cst (record 205) on the straight-line boot path. The port has no
+	// opencastfile of its own, so the mini-game casts are not in the table.
+	castTable := []string{gangCast.ScriptName, extraCast.ScriptName}
 	scriptHost := &scripts.GameHost{Actors: scriptActors, Props: scripts.NewScriptProps(), Loops: &nativeLoops, Random: &nativeRandom, Shops: []string{"house", "inven"}, Env: scripts.GameHostEnv{
 		CurrentSet: func() string { return activeSetName },
 		Managed:    func(name string) bool { return scriptManaged[strings.ToLower(name)] },
@@ -730,6 +735,13 @@ func run() error {
 				}
 			}
 			return nil, false, nil
+		},
+		CastCount: func() int { return len(castTable) },
+		CastName: func(index int) (string, bool) {
+			if index < 0 || index >= len(castTable) {
+				return "", false
+			}
+			return castTable[index], true
 		},
 		ResolveStar: func(set, star string) ([3]int16, bool) {
 			source := nightSet
