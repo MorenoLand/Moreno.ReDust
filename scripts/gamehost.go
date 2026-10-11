@@ -821,10 +821,15 @@ func (h *GameHost) sendToActor(call *ScriptCall) (int, uint16, error) {
 	return message + used + 1 - call.Start, 0, nil
 }
 
+// packPoint packs x and y into a point dword the way the native reads it: x is the
+// high word and y the low word (pointx reads the high word, pointy the low).
 func packPoint(position [3]int16) int32 {
 	return int32(uint32(uint16(position[0]))<<16 | uint32(uint16(position[1])))
 }
 
+// unpackPoint is the inverse of packPoint for the two components a point has. It
+// returns [x, y, 0]: index 0 is the high word (x) and index 1 the low word (y), the
+// same convention as scripts.Point. The third slot is not part of a packed point.
 func unpackPoint(value int32) [3]int16 {
 	return [3]int16{int16(uint32(value) >> 16), int16(uint32(value))}
 }

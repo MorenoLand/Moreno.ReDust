@@ -12,9 +12,10 @@ import (
 )
 
 // Props are drawn as their frame stores them. The frame's own width and height
-// are the display size: the frame extents and origin are in (height, width)
-// order, so Bottom-Top is the width, Right-Left is the height and the origin
-// is (y, x). HOUSE.PRP, INVEN.PRP and CREDITS.PRP props all follow this.
+// are the display size. The variant row names its extents in the native order
+// (see assets.PropFrameInfo): Right-Left is the width along x and Bottom-Top the
+// height along y, and the origin is (OriginX, OriginY). HOUSE.PRP, INVEN.PRP and
+// CREDITS.PRP props all follow this.
 type WorldPropSprite struct {
 	Name     string
 	Set      string
@@ -72,14 +73,14 @@ func CompositeFlatProps(background IndexedFrame, props []FlatPropSprite) (Indexe
 			return IndexedFrame{}, nil, fmt.Errorf("decode flat prop %q frame %d: %w", prop.Name, info.Resource, err)
 		}
 		width, height := frame.Width, frame.Height
-		if int(info.Bottom-info.Top) != width || int(info.Right-info.Left) != height {
+		if int(info.Right-info.Left) != width || int(info.Bottom-info.Top) != height {
 			return IndexedFrame{}, nil, fmt.Errorf("flat prop %q frame %d has encoded %dx%d pixels for native %dx%d extents", prop.Name, info.Resource, frame.Width, frame.Height, int(info.Right-info.Left), int(info.Bottom-info.Top))
 		}
 		pixels, mask, err := decodeWorldActorFrame(frame)
 		if err != nil {
 			return IndexedFrame{}, nil, fmt.Errorf("decode flat prop %q frame %d pixels: %w", prop.Name, info.Resource, err)
 		}
-		originX, originY := int(info.OriginY), int(info.OriginX)
+		originX, originY := int(info.OriginX), int(info.OriginY)
 		bounds := image.Rect(prop.Anchor.X-originX, prop.Anchor.Y-originY, prop.Anchor.X-originX+width, prop.Anchor.Y-originY+height)
 		visible := bounds.Intersect(composite.Bounds())
 		if visible.Empty() {
@@ -175,7 +176,7 @@ func projectWorldProp(background IndexedFrame, point [3]int16, activeSet string,
 		return ProjectedWorldActor{}, false, fmt.Errorf("decode world prop %q frame %d: %w", prop.Name, info.Resource, err)
 	}
 	displayWidth, displayHeight := frame.Width, frame.Height
-	if int(info.Bottom-info.Top) != displayWidth || int(info.Right-info.Left) != displayHeight {
+	if int(info.Right-info.Left) != displayWidth || int(info.Bottom-info.Top) != displayHeight {
 		return ProjectedWorldActor{}, false, fmt.Errorf("world prop %q frame %d has encoded %dx%d pixels for native %dx%d extents", prop.Name, info.Resource, frame.Width, frame.Height, int(info.Right-info.Left), int(info.Bottom-info.Top))
 	}
 	pixels, mask, err := decodeWorldActorFrame(frame)
@@ -209,8 +210,8 @@ func projectWorldProp(background IndexedFrame, point [3]int16, activeSet string,
 		return ProjectedWorldActor{}, false, nil
 	}
 	anchorX, anchorY := background.Width/2+310*lateral/depth, background.Height/2-310*(int(prop.Position[2])-camera[2])/depth
-	left := anchorX - int(info.OriginY)*width/displayWidth
-	top := anchorY - int(info.OriginX)*height/displayHeight
+	left := anchorX - int(info.OriginX)*width/displayWidth
+	top := anchorY - int(info.OriginY)*height/displayHeight
 	bounds := image.Rect(left, top, left+width, top+height)
 	visible := bounds.Intersect(image.Rect(0, 0, background.Width, background.Height))
 	if visible.Empty() {

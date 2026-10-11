@@ -53,21 +53,44 @@ type PropView struct {
 	sequences []int16
 }
 
+// PropFrameInfo is one selected variant row, named in the native order. The row
+// is the 44-byte entry FUN_00421B70 copies, and FUN_00421820 reads it as follows
+// (verified from the path A code, which is the only reader in the cache):
+//
+//	word 9  = Top     (low word axis, the y start)  rect[0]
+//	word 10 = Left    (high word axis, the x start) rect[1]
+//	word 11 = Bottom  (low word axis, the y end)    rect[2]
+//	word 12 = Right   (high word axis, the x end)   rect[3]
+//	word 13 = OriginY (the origin's low word)
+//	word 14 = OriginX (the origin's high word)
+//
+// The packed point is low = y and high = x (see scripts.Point), so the extents are
+// Bottom-Top along y, which is the frame's column count, and Right-Left along x,
+// which is the frame's row count.
 type PropFrameInfo struct {
 	Resource                 uint32
 	Angle                    int16
 	Metric                   uint16
-	Left, Top, Right, Bottom int16
-	OriginX, OriginY         int16
+	Top, Left, Bottom, Right int16
+	OriginY, OriginX         int16
 }
 
+// PropFrameVariant is one variant row of a view descriptor, named as PropFrameInfo.
 type PropFrameVariant struct {
 	Resource                 uint32
 	Sequence                 int16
 	Angle                    int16
 	Metric                   uint16
-	Left, Top, Right, Bottom int16
-	OriginX, OriginY         int16
+	Top, Left, Bottom, Right int16
+	OriginY, OriginX         int16
+}
+
+// propVariantRect reads the frame extents and origin of a 44-byte variant row in
+// the native order described at PropFrameInfo.
+func propVariantRect(row []byte) (top, left, bottom, right, originY, originX int16) {
+	return int16(binary.LittleEndian.Uint16(row[0x12:0x14])), int16(binary.LittleEndian.Uint16(row[0x14:0x16])),
+		int16(binary.LittleEndian.Uint16(row[0x16:0x18])), int16(binary.LittleEndian.Uint16(row[0x18:0x1a])),
+		int16(binary.LittleEndian.Uint16(row[0x1a:0x1c])), int16(binary.LittleEndian.Uint16(row[0x1c:0x1e]))
 }
 
 func (w Workspace) OpenPropArchive(name string) (*PropArchive, error) {
@@ -199,7 +222,8 @@ func (a *PropArchive) View(propName, viewName string) (PropView, error) {
 		if variantResource >= a.resourceCount {
 			return PropView{}, fmt.Errorf("prop view descriptor %d variant %d references resource %d outside %d entries", resource, degree, variantResource, a.resourceCount)
 		}
-		variants[degree] = PropFrameVariant{Resource: variantResource, Sequence: int16(binary.LittleEndian.Uint16(row[8:10])), Angle: int16(binary.LittleEndian.Uint16(row[0x28:0x2a])), Metric: binary.LittleEndian.Uint16(row[0x2a:0x2c]), Left: int16(binary.LittleEndian.Uint16(row[0x12:0x14])), Top: int16(binary.LittleEndian.Uint16(row[0x14:0x16])), Right: int16(binary.LittleEndian.Uint16(row[0x16:0x18])), Bottom: int16(binary.LittleEndian.Uint16(row[0x18:0x1a])), OriginX: int16(binary.LittleEndian.Uint16(row[0x1a:0x1c])), OriginY: int16(binary.LittleEndian.Uint16(row[0x1c:0x1e]))}
+		top, left, bottom, right, originY, originX := propVariantRect(row)
+		variants[degree] = PropFrameVariant{Resource: variantResource, Sequence: int16(binary.LittleEndian.Uint16(row[8:10])), Angle: int16(binary.LittleEndian.Uint16(row[0x28:0x2a])), Metric: binary.LittleEndian.Uint16(row[0x2a:0x2c]), Top: top, Left: left, Bottom: bottom, Right: right, OriginY: originY, OriginX: originX}
 	}
 	sequences := make([]int16, frameCount)
 	for frame := range sequences {
@@ -255,7 +279,8 @@ func (a *PropArchive) FrameInfo(propName, viewName string, frameIndex int, angle
 		distance := nativeAngleDistance(int16(binary.LittleEndian.Uint16(row[0x28:0x2a])), angle)
 		if distance < closest {
 			closest, selected = distance, true
-			result = PropFrameInfo{Resource: binary.LittleEndian.Uint32(row[:4]), Angle: int16(binary.LittleEndian.Uint16(row[0x28:0x2a])), Metric: binary.LittleEndian.Uint16(row[0x2a:0x2c]), Left: int16(binary.LittleEndian.Uint16(row[0x12:0x14])), Top: int16(binary.LittleEndian.Uint16(row[0x14:0x16])), Right: int16(binary.LittleEndian.Uint16(row[0x16:0x18])), Bottom: int16(binary.LittleEndian.Uint16(row[0x18:0x1a])), OriginX: int16(binary.LittleEndian.Uint16(row[0x1a:0x1c])), OriginY: int16(binary.LittleEndian.Uint16(row[0x1c:0x1e]))}
+			top, left, bottom, right, originY, originX := propVariantRect(row)
+			result = PropFrameInfo{Resource: binary.LittleEndian.Uint32(row[:4]), Angle: int16(binary.LittleEndian.Uint16(row[0x28:0x2a])), Metric: binary.LittleEndian.Uint16(row[0x2a:0x2c]), Top: top, Left: left, Bottom: bottom, Right: right, OriginY: originY, OriginX: originX}
 			if distance < 1 {
 				break
 			}
@@ -276,7 +301,7 @@ func (v PropView) FrameInfo(frameIndex int, angle int16) (PropFrameInfo, error) 
 	if !selected {
 		return PropFrameInfo{}, fmt.Errorf("%w: prop view %q frame %d sequence %d at angle %d", ErrPropFrameNoVariant, v.Name, frameIndex, sequence, angle)
 	}
-	return PropFrameInfo{Resource: variant.Resource, Angle: variant.Angle, Metric: variant.Metric, Left: variant.Left, Top: variant.Top, Right: variant.Right, Bottom: variant.Bottom, OriginX: variant.OriginX, OriginY: variant.OriginY}, nil
+	return PropFrameInfo{Resource: variant.Resource, Angle: variant.Angle, Metric: variant.Metric, Top: variant.Top, Left: variant.Left, Bottom: variant.Bottom, Right: variant.Right, OriginY: variant.OriginY, OriginX: variant.OriginX}, nil
 }
 
 // selectPropVariant is the variant scan of FUN_00421B70: the first variant whose

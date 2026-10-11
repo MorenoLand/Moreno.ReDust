@@ -19,13 +19,13 @@ type Point struct {
 // Rect is the engine's rectangle, four signed 16-bit edges. FUN_0042E340 takes
 // one as a pointer to four consecutive shorts, rect[0..3], and the verified order
 // is Top, Left, Bottom, Right: rect[0] is the top, rect[1] the left, rect[2] the
-// bottom and rect[3] the right. The Go fields are named by meaning, so their
-// declaration order does not matter.
+// bottom and rect[3] the right. The fields are declared in that order too, so a
+// positional reading of the shorts matches the declaration.
 type Rect struct {
-	Left   int16
 	Top    int16
-	Right  int16
+	Left   int16
 	Bottom int16
+	Right  int16
 }
 
 // ContainsPoint reproduces FUN_0042E340, the hit test the pointinset and

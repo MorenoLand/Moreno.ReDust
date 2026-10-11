@@ -6,13 +6,13 @@ import (
 
 // The rectangle clipper behind `pointinprop`, `FUN_0042E230`, mapped in full:
 //
-//	local_8 = *(u32 *)param_2;          // the second rectangle's x0,y0
-//	local_4 = *(u32 *)(param_2 + 2);    // and its x1,y1
-//	if (*param_2  < *param_1)  local_8  = (*param_1[0], local_8.y0);   // x0 = max
-//	if (param_2[1] < param_1[1]) local_8  = (local_8.x0, param_1[1]);   // y0 = max
-//	if (param_1[2] < param_2[2]) local_4  = (param_1[2], local_4.y1);   // x1 = min
-//	if (param_1[3] < param_2[3]) local_4  = (local_4.x1, param_1[3]);   // y1 = min
-//	if ((local_8.x0 < local_4.x1) && (local_8.y0 < local_4.y1)) {
+//	local_8 = *(u32 *)param_2;          // the second rectangle's top,left
+//	local_4 = *(u32 *)(param_2 + 2);    // and its bottom,right
+//	if (param_2[0] < param_1[0]) local_8.top    = param_1[0];   // top = max
+//	if (param_2[1] < param_1[1]) local_8.left   = param_1[1];   // left = max
+//	if (param_1[2] < param_2[2]) local_4.bottom = param_1[2];   // bottom = min
+//	if (param_1[3] < param_2[3]) local_4.right  = param_1[3];   // right = min
+//	if ((local_8.top < local_4.bottom) && (local_8.left < local_4.right)) {
 //	    *param_3 = local_8; param_3[2] = local_4; return 1;
 //	}
 //	*param_3 = 0; param_3[1] = 0; return 0;
@@ -50,14 +50,15 @@ const (
 // what makes it possible to assert that they agree on the geometry as well.
 
 // RectFromShorts builds a Rect from the four shorts in the reference's order, which is
-// how a caller reading a property row's bounds converts them.
+// Top, Left, Bottom, Right (rect[0..3] of FUN_0042E340 and FUN_0042E230).
 func RectFromShorts(s [RectShorts]int16) Rect {
-	return Rect{Left: s[0], Top: s[1], Right: s[2], Bottom: s[3]}
+	return Rect{Top: s[0], Left: s[1], Bottom: s[2], Right: s[3]}
 }
 
-// Shorts returns the rectangle as the four shorts the reference reads.
+// Shorts returns the rectangle as the four shorts the reference reads, in the order
+// Top, Left, Bottom, Right.
 func (r Rect) Shorts() [RectShorts]int16 {
-	return [RectShorts]int16{r.Left, r.Top, r.Right, r.Bottom}
+	return [RectShorts]int16{r.Top, r.Left, r.Bottom, r.Right}
 }
 
 // IsEmpty reports whether the rectangle fails the clipper's strict test, which is the
