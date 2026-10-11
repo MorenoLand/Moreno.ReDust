@@ -232,12 +232,13 @@ func (h *GameHost) propReadArgs(call *ScriptCall, count int) ([]ScriptValue, int
 // propCommand handles the prop setters. handled is false for other opcodes.
 func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, status uint16, handled bool, err error) {
 	switch name {
-	case "propset":
-		// FUN_0041E9E0. The reader parses both arguments first (0x1C), then the name must
-		// be a string (0x0E) and in the prop table (0x0A, which creates no record). The
-		// set must be a string (0x0E) of at most 15 bytes (0x1A). Then the ball stops,
-		// the set is stored, word 9 is set and the record is written back. Extra
-		// arguments run all of that and return 2.
+	case "propset", "propstar":
+		// FUN_0041E9E0 (propset) and FUN_0041EF60 (propstar) share these checks. The
+		// reader parses both arguments first (0x1C), then the name must be a string
+		// (0x0E) and in the prop table (0x0A, which creates no record). The value must
+		// be a string (0x0E) of at most 15 bytes (0x1A). Then the ball stops, the value
+		// goes into the set (propset) or the star (propstar), word 9 is set and the
+		// record is written back. Extra arguments run all of that and return 2.
 		args, consumed, extra, status, err := h.propReadArgs(call, 2)
 		if err != nil || status != 0 {
 			return 0, status, true, err
@@ -259,10 +260,16 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 		}
 		h.Props.StopBall(args[0].Text)
 		prop := h.Props.Get(args[0].Text)
-		prop.Set = args[1].Text
+		if name == "propset" {
+			prop.Set = args[1].Text
+		} else {
+			prop.Star = args[1].Text
+		}
 		prop.Projected = true
-		// The new set is compared with the open set (FUN_0042E5B0 against DAT_00459A82).
-		// On a match the record's star is resolved (FUN_0041B850) into words 13 to 15.
+		// The record's set is compared with the open set (FUN_0042E5B0 against
+		// DAT_00459A82). propset has just stored the new set, and propstar leaves the set
+		// alone, so each compares the set it means. On a match the record's star is
+		// resolved (FUN_0041B850) into words 13 to 15.
 		if strings.EqualFold(prop.Set, h.currentSet()) && h.Env.ResolveStar != nil {
 			if position, ok := h.Env.ResolveStar(prop.Set, prop.Star); ok {
 				prop.X, prop.Y, prop.Z = int32(position[0]), int32(position[1]), int32(position[2])
@@ -272,7 +279,7 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 			return consumed, ScriptStatusMalformed, true, nil
 		}
 		return consumed, 0, true, nil
-	case "propowner", "propview", "propstar":
+	case "propowner", "propview":
 		prop, args, consumed, status, err := h.propArgs(call, 2)
 		if err != nil || status != 0 {
 			return 0, status, true, err
@@ -288,17 +295,6 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 			prop.Owner = args[1].Text
 		case "propview":
 			prop.View = args[1].Text
-		case "propstar":
-			prop.Star = args[1].Text
-		}
-		if name == "propstar" {
-			prop.Projected = true
-			h.Props.StopBall(prop.Name)
-			if strings.EqualFold(prop.Set, h.currentSet()) && h.Env.ResolveStar != nil {
-				if position, ok := h.Env.ResolveStar(prop.Set, prop.Star); ok {
-					prop.X, prop.Y, prop.Z = int32(position[0]), int32(position[1]), int32(position[2])
-				}
-			}
 		}
 		return consumed, 0, true, nil
 	case "makeball":
