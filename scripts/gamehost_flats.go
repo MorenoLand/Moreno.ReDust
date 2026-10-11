@@ -18,9 +18,8 @@ import "errors"
 //
 // Me is the owner's row name: the flat's for the flat frame, the button's for the
 // button frame. Target is the addressed row name in every frame: the flat's for
-// sendtoflat, the button's for sendtobutton. The stage frame's Me is "stage", the
-// literal sendtostage uses. The native copies DAT_00459A14 into that slot, and no
-// cached export writes that global, so its value is not established here.
+// sendtoflat, the button's for sendtobutton. The stage frame's Me is the stage's
+// name, DAT_00459A14 (see stageFrameName).
 //
 // Statuses, in the order the handlers reach them: 0x0B with no stage; 0x1C for a
 // missing comma, checked before the name's type as FUN_00412EE0 checks 0x0FB4
@@ -157,7 +156,7 @@ func (h *GameHost) sendToFlat(call *ScriptCall) (int, uint16, error) {
 	}
 	chain := []ScriptFrame{
 		{Program: flatProgram, Me: flatName, Target: flatName, Label: PoolLabelFlatScript},
-		{Program: stageProgram, Me: "stage", Target: flatName, Label: PoolLabelStageScript, Last: true},
+		{Program: stageProgram, Me: h.stageFrameName(), Target: flatName, Label: PoolLabelStageScript, Last: true},
 	}
 	used, status, err := call.Interpreter.Call(chain, call.Chain, call.FrameIndex, call.Locals, call.Program, message)
 	if err != nil || status != 0 {
@@ -256,7 +255,7 @@ func (h *GameHost) sendToButton(call *ScriptCall) (int, uint16, error) {
 	chain := []ScriptFrame{
 		{Program: buttonProgram, Me: buttonName, Target: buttonName, Label: PoolLabelButtonScript},
 		{Program: flatProgram, Me: flatName, Target: buttonName, Label: PoolLabelFlatScript},
-		{Program: stageProgram, Me: "stage", Target: buttonName, Label: PoolLabelStageScript, Last: true},
+		{Program: stageProgram, Me: h.stageFrameName(), Target: buttonName, Label: PoolLabelStageScript, Last: true},
 	}
 	used, status, err := call.Interpreter.Call(chain, call.Chain, call.FrameIndex, call.Locals, call.Program, message)
 	if err != nil || status != 0 {

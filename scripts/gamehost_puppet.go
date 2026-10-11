@@ -518,7 +518,8 @@ func (h *GameHost) puppetCommand(name string, call *ScriptCall) (consumed int, s
 			return 0, 0, true, err
 		}
 		message := call.Start + 2
-		chain := []ScriptFrame{{Program: program, Me: "stage", Target: "stage", Label: PoolLabelStageScript, Last: true}}
+		name := h.stageFrameName()
+		chain := []ScriptFrame{{Program: program, Me: name, Target: name, Label: PoolLabelStageScript, Last: true}}
 		used, status, err := call.Interpreter.callCode(chain, 0, call.Chain, call.FrameIndex, call.Locals, call.Program, message, nil)
 		if err != nil || status != 0 {
 			return 0, status, true, err
@@ -775,7 +776,8 @@ func (h *GameHost) puppetValue(name string, call *ScriptCall) (Record, int, uint
 			return Record{}, 0, 0, true, err
 		}
 		message := call.Start + 2
-		chain := []ScriptFrame{{Program: program, Me: "stage", Target: "stage", Label: PoolLabelStageScript, Last: true}}
+		name := h.stageFrameName()
+		chain := []ScriptFrame{{Program: program, Me: name, Target: name, Label: PoolLabelStageScript, Last: true}}
 		var result Record
 		used, status, err := call.Interpreter.callCode(chain, 0, call.Chain, call.FrameIndex, call.Locals, call.Program, message, &result)
 		if err != nil || status != 0 {

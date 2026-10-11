@@ -334,7 +334,7 @@ func (h *GameHost) sendToFlatFx(call *ScriptCall, result *Record) (int, uint16, 
 	}
 	chain := []ScriptFrame{
 		{Program: flatProgram, Me: flatName, Target: flatName, Label: PoolLabelFlatScript},
-		{Program: stageProgram, Me: "stage", Target: flatName, Label: PoolLabelStageScript, Last: true},
+		{Program: stageProgram, Me: h.stageFrameName(), Target: flatName, Label: PoolLabelStageScript, Last: true},
 	}
 	return h.sendToChainFx(call, chain, message, result)
 }
@@ -421,7 +421,7 @@ func (h *GameHost) sendToButtonFx(call *ScriptCall, result *Record) (int, uint16
 	chain := []ScriptFrame{
 		{Program: buttonProgram, Me: buttonName, Target: buttonName, Label: PoolLabelButtonScript},
 		{Program: flatProgram, Me: flatName, Target: buttonName, Label: PoolLabelFlatScript},
-		{Program: stageProgram, Me: "stage", Target: buttonName, Label: PoolLabelStageScript, Last: true},
+		{Program: stageProgram, Me: h.stageFrameName(), Target: buttonName, Label: PoolLabelStageScript, Last: true},
 	}
 	return h.sendToChainFx(call, chain, message, result)
 }

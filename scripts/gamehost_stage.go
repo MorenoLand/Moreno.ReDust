@@ -108,6 +108,23 @@ func (h *GameHost) closeStageCommand(call *ScriptCall) (int, uint16, error) {
 	return closeAt + 1 - call.Start, 0, nil
 }
 
+// stageFrameName is the Me and Target of a stage script frame: DAT_00459A14, the
+// open stage's header name. FUN_00411900 copies it from header +0x824, and the stage
+// frame builder FUN_00413230 copies it into both fields. sendtostage reaches it
+// through FUN_00413210, sendtostagefx through FUN_004137B0, and closestage and
+// openstage through FUN_00413130 and FUN_00413210. sendtoflat and sendtobutton copy
+// it into their stage frames in FUN_00412EE0 and FUN_00412A90. The port falls back
+// to "stage" only when the StageName hook is absent or empty, which is the unwired
+// case.
+func (h *GameHost) stageFrameName() string {
+	if h.Env.StageName != nil {
+		if name := h.Env.StageName(); name != "" {
+			return name
+		}
+	}
+	return "stage"
+}
+
 // leaveStageWired reports whether every hook the leave step and the close need is
 // present, so that nothing runs before a gap can be reported.
 func (h *GameHost) leaveStageWired() bool {
@@ -125,8 +142,8 @@ func (h *GameHost) leaveStageWired() bool {
 // closestage() and closeflat() are named boundaries (FUN_0041DC00, checked against
 // the reference's name table). A frame with no such block passes, so a stage or flat
 // script without the block gives status 0 here, which is verified from FUN_0041C890
-// and FUN_0041C9A0. The stage frame's Me and Target are DAT_00459A14 in the reference;
-// no cached export writes that global, so the port uses "stage", as sendtostage does.
+// and FUN_0041C9A0. The stage frame's Me and Target are DAT_00459A14, the stage's name
+// (see stageFrameName).
 // The recheck covers the gate and the current flat name (the port's stand-in for the
 // DAT_00459A08 index); the guard word is not modelled.
 func (h *GameHost) leaveStage(call *ScriptCall) (uint16, error) {
@@ -139,7 +156,8 @@ func (h *GameHost) leaveStage(call *ScriptCall) (uint16, error) {
 	if err != nil {
 		return 0, err
 	}
-	stageChain := []ScriptFrame{{Program: stageProgram, Me: "stage", Target: "stage", Label: PoolLabelStageScript, Last: true}}
+	stageName := h.stageFrameName()
+	stageChain := []ScriptFrame{{Program: stageProgram, Me: stageName, Target: stageName, Label: PoolLabelStageScript, Last: true}}
 	_, status, err := call.Interpreter.Call(stageChain, call.Chain, call.FrameIndex, call.Locals, &stageMessage, 0)
 	if err != nil || status != 0 {
 		return status, err
@@ -247,12 +265,7 @@ func (h *GameHost) openStageFrames(call *ScriptCall) (uint16, error) {
 	if err != nil {
 		return 0, err
 	}
-	stageName := "stage"
-	if h.Env.StageName != nil {
-		if name := h.Env.StageName(); name != "" {
-			stageName = name
-		}
-	}
+	stageName := h.stageFrameName()
 	stageChain := []ScriptFrame{{Program: stageProgram, Me: stageName, Target: stageName, Label: PoolLabelStageScript, Last: true}}
 	_, status, err := call.Interpreter.Call(stageChain, call.Chain, call.FrameIndex, call.Locals, &message, 0)
 	if err != nil || status != 0 {
