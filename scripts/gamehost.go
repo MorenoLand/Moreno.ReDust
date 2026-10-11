@@ -22,6 +22,9 @@ type GameHostEnv struct {
 	// pointer rectangle DAT_00442340..46, which FUN_004057D0 builds when the set
 	// opens. A nil hook means no set is open.
 	SetRect func() (Rect, bool)
+	// StageOpen reports an open stage, the DAT_00459A00 gate that stagevisible
+	// tests. nil reads as no stage open.
+	StageOpen func() bool
 	// ResolveStar is FUN_0041B850: a named location in a set.
 	ResolveStar func(set, star string) ([3]int16, bool)
 	// Player and Camera are DAT_00459A6C and DAT_00459A78.
@@ -230,6 +233,9 @@ type GameHost struct {
 	// KeyAborts is DAT_00459996, the keyaborts flag. keyaborts(bool) stores the
 	// low word of its argument and keyaborts() reads it back sign-extended.
 	KeyAborts int16
+	// StageVisible is DAT_00459A02, the word stagevisible 16008 writes. Nothing
+	// in the port reads it yet, since pointinstage 20042 is not wired.
+	StageVisible int16
 	// Props is the prop table scripts read and write; the game keeps its own
 	// copies of owner and degree in step around script runs.
 	Props      *ScriptProps
@@ -680,6 +686,8 @@ func (h *GameHost) command(call *ScriptCall) (int, uint16, error) {
 		return h.sendToSetFx(call, nil)
 	case "sendtofloor":
 		return h.sendToFloorFx(call, nil)
+	case "stagevisible":
+		return h.stageVisibleCommand(call)
 	case "sendtoactor":
 		return h.sendToActor(call)
 	case "sendtoscene":

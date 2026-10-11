@@ -714,6 +714,7 @@ func run() error {
 	castTable := []string{gangCast.ScriptName, extraCast.ScriptName}
 	scriptHost := &scripts.GameHost{Actors: scriptActors, Props: scripts.NewScriptProps(), Loops: &nativeLoops, Random: &nativeRandom, Shops: []string{"house", "inven"}, Env: scripts.GameHostEnv{
 		CurrentSet: func() string { return activeSetName },
+		StageOpen:  func() bool { return stage != nil },
 		Managed:    func(name string) bool { return scriptManaged[strings.ToLower(name)] },
 		SetSize: func() (int16, int16, bool) {
 			if activeSet == nil {
