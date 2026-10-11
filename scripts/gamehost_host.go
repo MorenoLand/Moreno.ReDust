@@ -68,7 +68,7 @@ func (h *GameHost) hostCommand(name string, call *ScriptCall) (int, uint16, bool
 	return 0, 0, false, nil
 }
 
-// hostValue handles machinetype, setwidth and setheight.
+// hostValue handles machinetype, setwidth, setheight and tick.
 //
 // machinetype is FUN_00415720, which takes no arguments. Its string register
 // status is the status it returns: 0x36 when all twenty string slots are in
@@ -113,6 +113,23 @@ func (h *GameHost) hostValue(name string, call *ScriptCall) (Record, int, uint16
 			return Record{}, 0, status, true, nil
 		}
 		return Record{Kind: 4, Data: uint32(int32(value))}, consumed, 0, true, nil
+	case "tick":
+		// tick is FUN_00415E60, value 20008. FUN_0042B700 pumps the messages
+		// (FUN_0042BD80, not reproduced) and returns timeGetTime() * 3 / 50 as a
+		// dword, which is NativeFrameUnits(NativeTickMilliseconds()), the clock
+		// Env.Ticks reads. The result is a number with status 0. The handler
+		// consumes no arguments, so the call is "(" and ")" only.
+		if !hostOpen(call) {
+			return Record{}, 0, ScriptStatusMalformed, true, nil
+		}
+		if h.Env.Ticks == nil {
+			return Record{}, 0, 0, true, fmt.Errorf("%w: tick has no clock", ErrHostOpcodeUnimplemented)
+		}
+		consumed, status := hostClose(call)
+		if status != 0 {
+			return Record{}, 0, status, true, nil
+		}
+		return Record{Kind: 4, Data: h.Env.Ticks()}, consumed, 0, true, nil
 	}
 	return Record{}, 0, 0, false, nil
 }
