@@ -17,14 +17,20 @@ type OpenTrack struct {
 	Bank *SoundBank
 }
 
+// defaultPan is the pan word a freshly built sound record holds (FUN_00434A10
+// writes 0x80 at record +0x31), so a sound that soundpan never set reads 128.
+const defaultPan = 128
+
 // Tracks is the open track file list with the sound channels scripts drive:
-// one-shot sounds, looping sounds, per-sound volumes and the voice channel.
+// one-shot sounds, looping sounds, per-sound volumes and pans and the voice
+// channel.
 type Tracks struct {
 	workspace assets.Workspace
 	context   *ebitenaudio.Context
 	open      []*OpenTrack
 	loops     map[string]*Player
 	volumes   map[string]uint8
+	pans      map[string]uint8
 	voice     *Player
 	voiceName string
 	// OnClose is told when a track is released, so a theme playing from it
@@ -35,7 +41,7 @@ type Tracks struct {
 // NewTracks returns an empty list. The context may be nil, in which case
 // the files are tracked but nothing sounds.
 func NewTracks(workspace assets.Workspace, context *ebitenaudio.Context) *Tracks {
-	return &Tracks{workspace: workspace, context: context, loops: map[string]*Player{}, volumes: map[string]uint8{}}
+	return &Tracks{workspace: workspace, context: context, loops: map[string]*Player{}, volumes: map[string]uint8{}, pans: map[string]uint8{}}
 }
 
 // Adopt appends a bank the caller already opened (UNILIB.SND at boot).
@@ -99,6 +105,13 @@ func (t *Tracks) CloseTrack(name string) bool {
 		}
 		_ = track.Bank.Close()
 		t.open = append(t.open[:index], t.open[index+1:]...)
+		// FUN_0040E650 frees the closed track's sound records, and a reopened
+		// sound is rebuilt at defaultPan, so a pan with no open holder is dropped.
+		for sound := range t.pans {
+			if t.lookup(sound) == nil {
+				delete(t.pans, sound)
+			}
+		}
 		return true
 	}
 	return false
@@ -138,6 +151,69 @@ func (t *Tracks) SetVolume(name string, level int) {
 	if player := t.loops[key]; player != nil {
 		player.SetVolume(float64(level) / 255)
 	}
+}
+
+// Pan is soundpan's value (FUN_0040EDC0 -> FUN_004354C0): the sound's pan word,
+// defaultPan until soundpan sets it. found is false when no open track holds
+// the sound.
+func (t *Tracks) Pan(name string) (int, bool) {
+	if t.lookup(name) == nil {
+		return 0, false
+	}
+	if stored, ok := t.pans[strings.ToLower(name)]; ok {
+		return int(stored), true
+	}
+	return defaultPan, true
+}
+
+// SetPan is soundpan (FUN_0040EAF0 -> FUN_004354D0): the level is clamped to
+// 0..255 and stored on the sound. FUN_004354D0 has no audio gate, so the pan is
+// kept whether or not the audio system is up. The port has no pan control in
+// its playback (ebitengine players are not panned), and no cached native reader
+// of the pan word was found, so the value is stored only.
+func (t *Tracks) SetPan(name string, level int) bool {
+	if t.lookup(name) == nil {
+		return false
+	}
+	if level < 0 {
+		level = 0
+	} else if level > 255 {
+		level = 255
+	}
+	t.pans[strings.ToLower(name)] = uint8(level)
+	return true
+}
+
+// SampleRate is soundrate (FUN_0040EC70): the sound's sample rate from its
+// resource header (11025, 22050 or 44100). It is read-only: the native command
+// dispatcher has no soundrate statement, so nothing here sets it.
+func (t *Tracks) SampleRate(name string) (int, bool, error) {
+	track := t.lookup(name)
+	if track == nil {
+		return 0, false, nil
+	}
+	rate, err := track.Bank.SampleRate(strings.ToLower(name))
+	return rate, true, err
+}
+
+// WaveVolume is the wavevolume getter (FUN_00434970): the application level
+// 0..9, or 0 while the audio system is down (DAT_0045E068 clear). The port
+// stands a nil audio context for that flag; the mapping is inferred, since the
+// init path that sets DAT_0045E068 is not traced here.
+func (t *Tracks) WaveVolume() int {
+	if t.context == nil {
+		return 0
+	}
+	return WaveVolume()
+}
+
+// SetWaveVolume is the wavevolume setter (FUN_004349A0): ignored while the
+// audio system is down. The statement checks 0..9 before this is reached.
+func (t *Tracks) SetWaveVolume(level int) error {
+	if t.context == nil {
+		return nil
+	}
+	return SetWaveVolume(level)
 }
 
 // Play starts a sound once at its volume. A missing sound or context is not

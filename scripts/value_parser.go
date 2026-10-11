@@ -27,10 +27,10 @@ func (p *ExpressionValueParser) Parse(program Program, start int) (Record, uint3
 		return Record{}, 0, 0, fmt.Errorf("expression value index %d is out of range", start)
 	}
 	kind := program.Records[start].Kind
-	if kind == LookupOpcode("wavevolume") {
-		if p.Services.GetWaveVolume == nil {
-			return Record{}, 0, 0, fmt.Errorf("wave volume getter is unavailable")
-		}
+	// The live interpreter does not wire GetWaveVolume, so wavevolume() without
+	// it falls through to the host's value dispatch, where the sound host
+	// answers it (GameHost.soundValue).
+	if kind == LookupOpcode("wavevolume") && p.Services.GetWaveVolume != nil {
 		if KindAt(program, start+1) != LookupOpcode("(") || KindAt(program, start+2) != LookupOpcode(")") {
 			return Record{}, 0, 2, nil
 		}

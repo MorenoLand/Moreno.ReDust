@@ -2,10 +2,11 @@ package scripts
 
 import "fmt"
 
-// TrackHost is the audio side of the track-file commands. The native engine
-// keeps one array of open track files (DAT_004599F8/DAT_004599FC, 0x26 bytes
-// each: the file's handle, its sound and voice tables and, at +0x16, the
-// internal name that closetrackfile and playtheme match against).
+// TrackHost is the audio side of the track-file and sound-control commands.
+// The native engine keeps one array of open track files (DAT_004599F8/
+// DAT_004599FC, 0x26 bytes each: the file's handle, its sound and voice tables
+// and, at +0x16, the internal name that closetrackfile and playtheme match
+// against).
 type TrackHost interface {
 	// OpenTrack is opentrackfile (FUN_0040E250 -> FUN_0040E340): load the file
 	// and append it to the open list.
@@ -38,6 +39,19 @@ type TrackHost interface {
 	// TrackName is the lookup behind indextotrack (FUN_0040F040): the internal
 	// name of the 1-based open track. found is false outside 1..count (0x0A).
 	TrackName(index int) (name string, found bool)
+	// Pan is soundpan's value (FUN_0040EDC0 -> FUN_004354C0) and SetPan its
+	// statement (FUN_0040EAF0 -> FUN_004354D0): the sound record's pan word,
+	// 128 until set, clamped to 0..255 on store. found is false when no open
+	// track holds the sound.
+	Pan(name string) (level int, found bool)
+	SetPan(name string, level int) (found bool)
+	// SampleRate is soundrate (FUN_0040EC70): the sound's sample rate from its
+	// resource header. found is false when no open track holds the sound.
+	SampleRate(name string) (rate int, found bool, err error)
+	// WaveVolume and SetWaveVolume are wavevolume's getter (FUN_00434970) and
+	// setter (FUN_004349A0): the application level 0..9 for the whole mix.
+	WaveVolume() int
+	SetWaveVolume(level int) error
 }
 
 // soundCommand handles the track-file and sound-channel statements.
@@ -99,6 +113,31 @@ func (h *GameHost) soundCommand(name string, call *ScriptCall) (int, uint16, boo
 		}
 		h.Env.Tracks.SoundLoop(args[0].Text, args[1].Int != 0)
 		return consumed, 0, true, nil
+	case "soundpan":
+		if h.Env.Tracks == nil {
+			return 0, 0, true, fmt.Errorf("%w: soundpan has no track files", ErrHostOpcodeUnimplemented)
+		}
+		consumed, status, err := h.soundPanStatement(call)
+		return consumed, status, true, err
+	case "wavevolume":
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return 0, status, true, err
+		}
+		if len(args) != 1 {
+			return 0, ScriptStatusMalformed, true, nil
+		}
+		// FUN_00425C60: the level must be a number (0x0e) and lie in 0..9 (0x0a).
+		if args[0].Kind != 4 {
+			return 0, ScriptStatusWrongType, true, nil
+		}
+		if args[0].Int < 0 || args[0].Int > 9 {
+			return 0, 0x0a, true, nil
+		}
+		if h.Env.Tracks == nil {
+			return 0, 0, true, fmt.Errorf("%w: wavevolume has no audio host", ErrHostOpcodeUnimplemented)
+		}
+		return consumed, 0, true, h.Env.Tracks.SetWaveVolume(int(args[0].Int))
 	}
 	return 0, 0, false, nil
 }
@@ -122,6 +161,53 @@ func (h *GameHost) soundValue(name string, call *ScriptCall) (Record, int, uint1
 			return Record{}, 0, 0x0a, true, nil
 		}
 		return Record{Kind: 2, Data: boolWord(looping)}, consumed, 0, true, nil
+	case "soundpan":
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, true, err
+		}
+		if len(args) != 1 || args[0].Kind != 3 {
+			return Record{}, 0, ScriptStatusWrongType, true, nil
+		}
+		if h.Env.Tracks == nil {
+			return Record{}, 0, 0, true, fmt.Errorf("%w: soundpan has no track files", ErrHostOpcodeUnimplemented)
+		}
+		level, found := h.Env.Tracks.Pan(args[0].Text)
+		if !found {
+			return Record{}, 0, 0x0a, true, nil
+		}
+		return Record{Kind: 4, Data: uint32(level)}, consumed, 0, true, nil
+	case "soundrate":
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, true, err
+		}
+		if len(args) != 1 || args[0].Kind != 3 {
+			return Record{}, 0, ScriptStatusWrongType, true, nil
+		}
+		if h.Env.Tracks == nil {
+			return Record{}, 0, 0, true, fmt.Errorf("%w: soundrate has no track files", ErrHostOpcodeUnimplemented)
+		}
+		rate, found, err := h.Env.Tracks.SampleRate(args[0].Text)
+		if err != nil {
+			return Record{}, 0, 0, true, err
+		}
+		if !found {
+			return Record{}, 0, 0x0a, true, nil
+		}
+		return Record{Kind: 4, Data: uint32(rate)}, consumed, 0, true, nil
+	case "wavevolume":
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, true, err
+		}
+		if len(args) != 0 {
+			return Record{}, 0, ScriptStatusMalformed, true, nil
+		}
+		if h.Env.Tracks == nil {
+			return Record{}, 0, 0, true, fmt.Errorf("%w: wavevolume has no audio host", ErrHostOpcodeUnimplemented)
+		}
+		return Record{Kind: 4, Data: uint32(h.Env.Tracks.WaveVolume())}, consumed, 0, true, nil
 	case "currentvoice":
 		_, consumed, status, err := call.Args()
 		if err != nil || status != 0 {
@@ -232,4 +318,55 @@ func (h *GameHost) soundValue(name string, call *ScriptCall) (Record, int, uint1
 		return record, consumed, status, true, err
 	}
 	return Record{}, 0, 0, false, nil
+}
+
+// soundPanStatement is the soundpan(name, level) statement in the order
+// FUN_0040EAF0 checks: the name must be a string (0x0e, FUN_00421FC0), an open
+// track must hold the sound (0x0a, FUN_0040F210), the next record must be the
+// comma (0x1c), the level must be a number (0x0e), and the closing parenthesis
+// is checked after the store, as the native caller does. The argument list is
+// walked here rather than through ScriptCall.Args, which would report a missing
+// comma as malformed (2) instead of 0x1c. It returns the records consumed.
+func (h *GameHost) soundPanStatement(call *ScriptCall) (int, uint16, error) {
+	position := call.Start + 1
+	if call.Kind(position) != opOpen {
+		return 0, ScriptStatusMalformed, nil
+	}
+	position++
+	record, consumed, status, err := call.Eval(position)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	name, status, err := call.Interpreter.Value(record)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	if name.Kind != 3 {
+		return 0, ScriptStatusWrongType, nil
+	}
+	if _, found := h.Env.Tracks.Pan(name.Text); !found {
+		return 0, 0x0a, nil
+	}
+	position += consumed
+	if call.Kind(position) != opComma {
+		return 0, ScriptStatusMissingComma, nil
+	}
+	position++
+	record, consumed, status, err = call.Eval(position)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	level, status, err := call.Interpreter.Value(record)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	if level.Kind != 4 {
+		return 0, ScriptStatusWrongType, nil
+	}
+	h.Env.Tracks.SetPan(name.Text, int(level.Int))
+	position += consumed
+	if call.Kind(position) != opClose {
+		return 0, ScriptStatusMalformed, nil
+	}
+	return position + 1 - call.Start, 0, nil
 }

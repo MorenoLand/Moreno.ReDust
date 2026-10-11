@@ -143,6 +143,35 @@ func (b *SoundBank) Load(name string) (NativeSound, error) {
 	return NativeSound{Metadata: metadata, Samples: samples, Format: PCMFormat{SampleRate: int(metadata.SampleRate), Channels: 1, BitsPerSample: 8}}, nil
 }
 
+// SampleRate reads the sound's sample rate from its resource header without
+// decoding the samples. FUN_00434A10 reads the same dword at resource +0x1C
+// when it builds the sound record, and soundrate returns it.
+func (b *SoundBank) SampleRate(name string) (int, error) {
+	if b == nil || b.resources == nil {
+		return 0, fmt.Errorf("sound bank is closed")
+	}
+	entry, ok := b.sounds[strings.ToLower(name)]
+	if !ok {
+		return 0, fmt.Errorf("sound %q is not in the bank", name)
+	}
+	lease, err := b.resources.Acquire(entry.resource)
+	if err != nil {
+		return 0, err
+	}
+	resource, err := lease.Bytes()
+	if closeErr := lease.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return 0, err
+	}
+	metadata, err := ParseNativeSoundMetadata(resource, entry.name)
+	if err != nil {
+		return 0, err
+	}
+	return int(metadata.SampleRate), nil
+}
+
 func (b *SoundBank) Play(context *ebitenaudio.Context, name string, gain float64) error {
 	if context == nil {
 		return fmt.Errorf("audio context is nil")
