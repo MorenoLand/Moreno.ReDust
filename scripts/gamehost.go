@@ -162,6 +162,13 @@ type GameHostEnv struct {
 	Voice func(name string) error
 	// Tracks is the open track files and sound channels.
 	Tracks TrackHost
+	// StageOpen reports whether a stage is open (DAT_00459A00). pointinbutton
+	// returns 0x0B without one, before it evaluates its arguments.
+	StageOpen func() bool
+	// FlatButtons is the button block of the named flat in the open stage
+	// (FUN_00413530 by name, then the block the flat's record names). found is
+	// false for a flat the stage does not have.
+	FlatButtons func(flat string) (buttons []SceneButton, found bool, err error)
 	// Fallback handles opcodes this host does not; nil makes them gaps.
 	Fallback ScriptHost
 	// Log receives diagnostics when non-nil.
@@ -1357,6 +1364,8 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 			key = h.Env.ShiftKey
 		}
 		return boolean(key != nil && key(), consumed)
+	case "pointinbutton":
+		return h.pointInButton(call)
 	case "frame", "framerate":
 		_, consumed, status, err := call.Args()
 		if err != nil || status != 0 {
