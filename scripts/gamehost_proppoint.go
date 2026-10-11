@@ -108,16 +108,24 @@ func propRunHit(frame []byte, pos int, height, row int16) (bool, error) {
 	}
 }
 
-// propFrameHit is path A's unscaled hit test, FUN_004360C0 with flip 0. The frame's
-// box is the anchor less the frame's own origin, with the frame's column count along
-// the low word and its row count along the high word. A point outside that box is
-// false. Otherwise the column is the point's low word less the box's top, and the
-// row is its high word less the box's left, both 0-based. The column record for the
-// column is walked by propRunHit, and its result is the answer.
+// propRecordFlip is record word 5, the flip word both walkers take. FUN_0041FA40 passes
+// the low short of the dword at record words 5 and 6 as the walkers' third argument,
+// and the reference's FUN_00421820 writes word 5 = 0 on every path that returns 1
+// (MOV WORD PTR [EDI+0xA],0 at 0x421B1F). So pointinprop always walks with flip 0.
+// Word 7, which path B stores as sVar8 >> 6, is not a walker argument.
+const propRecordFlip int16 = 0
+
+// propFrameHit is path A's unscaled hit test, FUN_004360C0. The frame's box is the
+// anchor less the frame's own origin, with the frame's column count along the low word
+// and its row count along the high word. A non-zero flip mirrors the origin's high word
+// about the rows, as FUN_004360C0 does. A point outside that box is false. Otherwise the
+// column is the point's low word less the box's top, and the row is its high word less
+// the box's left, both 0-based. The column record for the column is walked by propRunHit,
+// and its result is the answer.
 //
 // Only the unscaled walker is ported. Path A reads it whenever record word 20 is
 // negative, which every path A record is (see PropPointRecord.Walker).
-func propFrameHit(frame []byte, anchor, point uint32) (bool, error) {
+func propFrameHit(frame []byte, anchor uint32, flip int16, point uint32) (bool, error) {
 	if len(frame) < propFrameHeaderBytes {
 		return false, fmt.Errorf("prop frame resource is %d bytes, shorter than its %d byte header", len(frame), propFrameHeaderBytes)
 	}
@@ -125,6 +133,9 @@ func propFrameHit(frame []byte, anchor, point uint32) (bool, error) {
 	rows := int16(binary.LittleEndian.Uint16(frame[2:4]))
 	originLow := int16(binary.LittleEndian.Uint16(frame[4:6]))
 	originHigh := int16(binary.LittleEndian.Uint16(frame[6:8]))
+	if flip != 0 {
+		originHigh = rows - originHigh
+	}
 	top := int16(uint16(anchor)) - originLow
 	left := int16(uint16(anchor>>16)) - originHigh
 	box := Rect{Top: top, Left: left, Bottom: top + columns, Right: left + rows}
@@ -227,5 +238,5 @@ func (h *GameHost) propPointHit(prop PropPointRecord, point uint32) (bool, error
 	if prop.Walker >= 0 {
 		return false, fmt.Errorf("%w: pointinprop scaled walk (FUN_004396F0, word 20 >= 0) is not ported", ErrHostOpcodeUnimplemented)
 	}
-	return propFrameHit(prop.Frame.Data, prop.Anchor, point)
+	return propFrameHit(prop.Frame.Data, prop.Anchor, propRecordFlip, point)
 }

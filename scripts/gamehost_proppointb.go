@@ -49,10 +49,13 @@ var (
 //	scale = (Scale * Metric) / 1000, scaled width and height are scale * extent / depth
 //	the box is the projected anchor less the origin, clipped to the set's pointer rectangle
 //	FUN_0042E340: the point must be inside the clipped box
-//	FUN_004396F0, the scaled walker, with the flip word sVar8 >> 6 and the scale
+//	FUN_004396F0, the scaled walker, with the flip propRecordFlip (out word 5) and the scale
 //
-// The reference also stores the depth in word 20 and steps the frame cursor inside
-// FUN_00421B70. Neither write is replicated here, so pointinprop does not change the record.
+// FUN_00421820 also stores the depth in record word 20 (path B, after the clip) and steps
+// the frame cursor (FUN_00421B70, before the clip). Both writes land on the copy that
+// FUN_004213C0 returns, which FUN_0041FA40 discards. So pointinprop leaves the prop store
+// as it found it, and this port reads the store without writing it. The frame pump's
+// writes to the table entry are a separate gap, not part of this statement.
 func (h *GameHost) projectedPropHit(prop PropPointRecord, point uint32) (bool, error) {
 	_, open := h.setRect()
 	if !PointInSetWillTest(SetState{Active: open, Visible: h.setVisible}) {
@@ -111,8 +114,9 @@ func (h *GameHost) projectedPropHit(prop PropPointRecord, point uint32) (bool, e
 	}
 	anchor := uint32(uint16(anchorY)) | uint32(uint16(anchorX))<<16
 	scaleWord := int32(uint32(uint16(scaledY)) | uint32(uint16(scaledX))<<16)
-	// Word 7 is sVar8 >> 6, the clamped gate's shift, and FUN_004396F0 reads it as its flip.
-	return propFrameHitScaled(frame.Data, anchor, gate>>6, scaleWord, point)
+	// The walker's flip is out word 5, which is always 0 (propRecordFlip). Word 7 is
+	// sVar8 >> 6, which the draw takes as its fifth argument, not the hit test.
+	return propFrameHitScaled(frame.Data, anchor, propRecordFlip, scaleWord, point)
 }
 
 // propFrameHitScaled is FUN_004396F0, the scaled walker that path B's pointinprop uses.
