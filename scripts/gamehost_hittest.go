@@ -46,8 +46,8 @@ const (
 //
 //	FUN_004220A0: one expression; its status passes through
 //	not numeric                        -> 0x0E, nothing written
-//	FUN_00406C10: the projected world walk (actors, then props); a hit writes
-//	              "actor" or "prop" and returns the name
+//	FUN_00406C10: the projected world walk (actors, then props); a hit gives an id,
+//	              which hitIdentity turns into "actor" or "prop" and a name
 //	set open and visible (DAT_00459A24, DAT_00459A26) and the point inside the
 //	  pointer rectangle: writes "scene" and returns the view row at the camera's
 //	  cell (FUN_0041BFB0); no such row -> 0x0A after the label is written
@@ -97,12 +97,16 @@ func (h *GameHost) hitTest(call *ScriptCall) (Record, int, uint16, error) {
 func (h *GameHost) hitTestPoint(packed uint32) (string, uint16, error) {
 	point := PointFromPacked(packed)
 
-	name, found, err := h.worldWalkHit(packed)
+	id, found, err := h.worldWalkHit(packed)
 	if err != nil {
 		return "", 0, err
 	}
 	if found {
-		h.setResultLabel(HitLabelProp)
+		label, name, err := h.hitIdentity(id)
+		if err != nil {
+			return "", 0, err
+		}
+		h.setResultLabel(label)
 		return name, 0, nil
 	}
 
@@ -142,35 +146,30 @@ func (h *GameHost) hitTestPoint(packed uint32) (string, uint16, error) {
 // Still a gap:
 //   - a projected actor. FUN_0040DB70 keeps it on the list, and its frame walk (FUN_0040DEC0)
 //     and the scaled step above are not ported;
-//   - a prop hit while the actor table has entries. FUN_0040E0C0 matches the prop's id word
-//     (+0x2E) against each actor's version stamp (+0x30), and neither is modelled. The
-//     prop word is minted by FUN_00420370 from FUN_004012A0, whose return value is not
-//     verified;
 //   - two rows with one name. The port keeps one record per name, and the native keeps a row each.
 //
-// The name of a prop hit is the hit record's own name. The native finds it by id through
-// FUN_00421D70, which returns the first row with the same id. That is the same row unless
-// two rows share an id, which is not checked.
-func (h *GameHost) worldWalkHit(packed uint32) (string, bool, error) {
+// The walk returns the hit entry's id, the entry's +0x04 dword. For a prop that is the
+// prop's stamp (+0x2E, FUN_00421820 copies it), and hitIdentity turns it into a name.
+func (h *GameHost) worldWalkHit(packed uint32) (uint32, bool, error) {
 	actorKeys := h.actorKeys()
 	if len(actorKeys) > 0 && h.Env.ProjectedDepth == nil {
-		return "", false, fmt.Errorf("%w: hittest with actors in the table and no projection hook (FUN_0040DB70)", ErrHostOpcodeUnimplemented)
+		return 0, false, fmt.Errorf("%w: hittest with actors in the table and no projection hook (FUN_0040DB70)", ErrHostOpcodeUnimplemented)
 	}
 	for _, key := range actorKeys {
 		if _, projected := h.Env.ProjectedDepth(h.Actors.actors[key]); projected {
-			return "", false, fmt.Errorf("%w: hittest with a projected actor (FUN_0040DEC0 frame walk and FUN_004398A0 not ported)", ErrHostOpcodeUnimplemented)
+			return 0, false, fmt.Errorf("%w: hittest with a projected actor (FUN_0040DEC0 frame walk and FUN_004398A0 not ported)", ErrHostOpcodeUnimplemented)
 		}
 	}
 	if h.Props == nil {
-		return "", false, nil
+		return 0, false, nil
 	}
 	names := h.Props.TableNames()
 	if len(names) > 0 && h.Env.PropPoint == nil {
-		return "", false, fmt.Errorf("%w: hittest with props and no PropPoint hook", ErrHostOpcodeUnimplemented)
+		return 0, false, fmt.Errorf("%w: hittest with props and no PropPoint hook", ErrHostOpcodeUnimplemented)
 	}
 	list, err := h.propWalkList(names)
 	if err != nil {
-		return "", false, err
+		return 0, false, err
 	}
 	sortPropWalk(list)
 	point := PointFromPacked(packed)
@@ -180,31 +179,56 @@ func (h *GameHost) worldWalkHit(packed uint32) (string, bool, error) {
 			continue
 		}
 		if entry.key >= 0 {
-			return "", false, fmt.Errorf("%w: hittest on prop %q with a non-negative key (scaled walker FUN_004396F0 and FUN_004398A0 not verified)", ErrHostOpcodeUnimplemented, entry.name)
+			return 0, false, fmt.Errorf("%w: hittest on prop %q with a non-negative key (scaled walker FUN_004396F0 and FUN_004398A0 not verified)", ErrHostOpcodeUnimplemented, entry.name)
 		}
 		hit, err := propFrameHit(entry.frame, entry.anchor, propRecordFlip, packed)
 		if err != nil {
-			return "", false, err
+			return 0, false, err
 		}
 		if !hit {
 			continue
 		}
-		if len(actorKeys) > 0 {
-			return "", false, fmt.Errorf("%w: hittest prop hit with actors in the table (FUN_0040E0C0 id match on the prop word +0x2E and the actor stamp +0x30 not modelled)", ErrHostOpcodeUnimplemented)
-		}
-		return h.propWalkName(entry.name), true, nil
+		return entry.stamp, true, nil
 	}
-	return "", false, nil
+	return 0, false, nil
+}
+
+// hitIdentity is the id lookup FUN_004153E0 runs after the walk, in the native order.
+// FUN_0040E0C0 comes first: it scans the whole actor table for the first row whose stamp
+// (+0x30) is id, and a match writes "actor" and returns that actor's name (+0x54). Only
+// when no actor has the id does FUN_00421D70 scan the prop table for the first row whose
+// stamp (+0x2E) is id, writing "prop" and returning that row's name (+0x4E). So a prop hit
+// whose id equals an actor's stamp is reported as the actor, whatever the actor's
+// visibility or placement, because FUN_0040E0C0 tests the stamp alone.
+//
+// The stamps come from one counter and never change (stamp.go), so an actor takes a
+// prop's id only when two stamps collide. The port's boot path mints distinct values (checked
+// on the shipped casts and prop archives). A collision after a load, when restored stamps
+// meet the new counter, is not traced. The probes set the stamps directly to exercise both
+// outcomes.
+//
+// Native 0x1194 is a fatal diagnostic when neither table has the id. The walk only
+// returns ids the prop table holds, so that case is reported as a gap rather than a guess.
+func (h *GameHost) hitIdentity(id uint32) (string, string, error) {
+	if actor, found := h.Actors.ByStamp(id); found {
+		return HitLabelActor, actor.Name, nil
+	}
+	if name, found := h.Props.ByStamp(id); found {
+		return HitLabelProp, h.propWalkName(name), nil
+	}
+	return "", "", fmt.Errorf("%w: hittest id %d names neither an actor nor a prop (FUN_004153E0 raises 0x1194)", ErrHostOpcodeUnimplemented, id)
 }
 
 // propWalkEntry is one prop entry of the walk list, the fields FUN_00406C10 reads from
-// the 36-byte entry: the sort key, the clipped box, and the walker's inputs.
+// the 36-byte entry: the sort key, the clipped box, the walker's inputs, and the id
+// (+0x04), which is the prop's stamp.
 type propWalkEntry struct {
 	name   string
 	key    int16
 	rect   Rect
 	frame  []byte
 	anchor uint32
+	stamp  uint32
 }
 
 // propWalkCapacity is the most entries the list holds. FUN_004060C0 raises 0x13F8 when the
@@ -250,6 +274,9 @@ func (h *GameHost) propWalkList(names []string) ([]propWalkEntry, error) {
 // with its word 20 as the key. Path B keeps what projectedPropCull keeps, with the depth
 // as the key.
 func (h *GameHost) propWalkEntryFor(name string, prop PropPointRecord) (propWalkEntry, bool, error) {
+	// FUN_00421820 copies the row's +0x2E into the entry's +0x04 on both paths, so the
+	// id is the row's stamp.
+	stamp, _ := h.Props.StampOf(name)
 	if !prop.Visible {
 		return propWalkEntry{}, false, nil
 	}
@@ -261,13 +288,13 @@ func (h *GameHost) propWalkEntryFor(name string, prop PropPointRecord) (propWalk
 		if !inside {
 			return propWalkEntry{}, false, nil
 		}
-		return propWalkEntry{name: name, key: prop.Walker, rect: clipped, frame: prop.Frame.Data, anchor: prop.Anchor}, true, nil
+		return propWalkEntry{name: name, key: prop.Walker, rect: clipped, frame: prop.Frame.Data, anchor: prop.Anchor, stamp: stamp}, true, nil
 	}
 	cull, kept, err := h.projectedPropCull(prop)
 	if err != nil || !kept {
 		return propWalkEntry{}, false, err
 	}
-	return propWalkEntry{name: name, key: cull.depth, rect: cull.rect, frame: cull.frame.Data, anchor: cull.anchor}, true, nil
+	return propWalkEntry{name: name, key: cull.depth, rect: cull.rect, frame: cull.frame.Data, anchor: cull.anchor, stamp: stamp}, true, nil
 }
 
 // sortPropWalk is FUN_004061A0 on the walk list. The loop is the native's, with the same
@@ -283,8 +310,8 @@ func sortPropWalk(list []propWalkEntry) {
 	}
 }
 
-// propWalkName is the name the native returns for a prop hit: the record's own name, when it
-// has one. See worldWalkHit for the id lookup that is not modelled.
+// propWalkName is the name FUN_00421D70 returns for a prop row: the record's own name, when
+// it has one. hitIdentity passes it the row that holds the id.
 func (h *GameHost) propWalkName(name string) string {
 	if prop, ok := h.Props.Lookup(name); ok && prop.Name != "" {
 		return prop.Name

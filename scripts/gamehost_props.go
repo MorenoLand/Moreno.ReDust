@@ -57,6 +57,12 @@ type PropRecord struct {
 	// argument is zero and the word is non-negative. The frame pump stores the depth
 	// here on path B (ProjectedPumpStep), and propxy resets a non-negative word to -1.
 	Walker int16
+
+	// Stamp is +0x2E, the version stamp. FUN_00420370 mints it when a shop's prop row is
+	// built, and propinstance's copy gets a fresh one (FUN_0041E840). The table row holds
+	// the same value (ScriptProps.stamps), and Get, Lookup, AddToTable and Restore keep the
+	// two equal. Hittest reads it as the id of a prop hit (hitIdentity). Zero is unset.
+	Stamp uint32 `json:"stamp,omitempty"`
 }
 
 // clearProjected is the word 9 store of propxy (FUN_0041FDF0), with the word 20 reset that
@@ -109,13 +115,58 @@ type ScriptProps struct {
 	// half-size (actorhitbox("player", z, xy)).
 	PlayerBox [2]int16
 	// table is the game's prop table in native order: each open shop's props in
-	// list order, then the props propinstance adds.
-	table []string
-	Balls [16]PropBallJob
+	// list order, then the props propinstance adds. stamps runs alongside it, one
+	// stamp per row (the +0x2E dword of each native row).
+	table  []string
+	stamps []uint32
+	Balls  [16]PropBallJob
 }
 
-// AddToTable appends a prop name to the prop table.
-func (t *ScriptProps) AddToTable(name string) { t.table = append(t.table, name) }
+// AddToTable appends a prop row. The row gets a fresh stamp, as the native row does:
+// FUN_00420370 for each shop row and FUN_0041E840 for propinstance's copy. A record the
+// scripts already hold under the name takes the same stamp, since propinstance
+// stores its copy before it appends the row.
+func (t *ScriptProps) AddToTable(name string) {
+	stamp := mintStamp()
+	t.table = append(t.table, name)
+	t.stamps = append(t.stamps, stamp)
+	if record, ok := t.props[strings.ToLower(name)]; ok {
+		record.Stamp = stamp
+	}
+}
+
+// rowIndex is the first table row named name (case folded), or -1.
+func (t *ScriptProps) rowIndex(name string) int {
+	for index, entry := range t.table {
+		if strings.EqualFold(entry, name) {
+			return index
+		}
+	}
+	return -1
+}
+
+// StampOf is the stamp of the named table row, false when the name is not in the table.
+func (t *ScriptProps) StampOf(name string) (uint32, bool) {
+	index := t.rowIndex(name)
+	if index < 0 {
+		return 0, false
+	}
+	return t.stamps[index], true
+}
+
+// ByStamp is FUN_00421D70: the first table row whose stamp is id, and its name. A zero
+// id never matches, because zero is unset.
+func (t *ScriptProps) ByStamp(id uint32) (string, bool) {
+	if t == nil || id == 0 {
+		return "", false
+	}
+	for index, stamp := range t.stamps {
+		if stamp == id {
+			return t.table[index], true
+		}
+	}
+	return "", false
+}
 
 // TableCount is countprops: the number of props in the table.
 func (t *ScriptProps) TableCount() int { return len(t.table) }
@@ -134,16 +185,14 @@ func (t *ScriptProps) TableName(index int) (string, bool) {
 // table name the scripts never touched reads as the native default record, which
 // is hidden and has no view.
 func (t *ScriptProps) Lookup(name string) (*PropRecord, bool) {
-	for _, entry := range t.table {
-		if !strings.EqualFold(entry, name) {
-			continue
-		}
-		if prop, ok := t.props[strings.ToLower(name)]; ok {
-			return prop, true
-		}
-		return &PropRecord{Name: name, Owner: "none", Scale: 1000, Walker: -1}, true
+	index := t.rowIndex(name)
+	if index < 0 {
+		return nil, false
 	}
-	return nil, false
+	if prop, ok := t.props[strings.ToLower(name)]; ok {
+		return prop, true
+	}
+	return &PropRecord{Name: name, Owner: "none", Scale: 1000, Walker: -1, Stamp: t.stamps[index]}, true
 }
 
 // PropBallJob is one ball slot, the 48-byte job FUN_00410760 builds: speeds
@@ -172,6 +221,9 @@ func (t *ScriptProps) Get(name string) *PropRecord {
 		return prop
 	}
 	prop := &PropRecord{Name: name, Owner: "none", Scale: 1000, Walker: -1}
+	if stamp, ok := t.StampOf(name); ok {
+		prop.Stamp = stamp
+	}
 	t.props[key] = prop
 	return prop
 }

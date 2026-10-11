@@ -618,6 +618,9 @@ func (h *GameHost) command(call *ScriptCall) (int, uint16, error) {
 		if _, exists := h.Actors.Lookup(args[1].Text); exists != 0 {
 			copied := *source
 			copied.Name, copied.Job = args[1].Text, nil
+			// FUN_0040A860 stores a fresh stamp at the copy's +0x30 before the row is
+			// appended, so the copy never shares its source's stamp.
+			copied.Stamp = mintStamp()
 			h.Actors.Add(&copied)
 			if h.Env.Instanced != nil {
 				h.Env.Instanced(source.Name, copied.Name)

@@ -46,6 +46,11 @@ type ActorRecord struct {
 	// MOV word ptr at copy+0x52 that the decompile omits); the constructor sets
 	// it to 0. The ball hit test (FUN_00410E50) needs it at least 1.
 	HitboxSide int16
+	// Stamp is +0x30, the version stamp. FUN_0040C1F0 mints it when the actor is built,
+	// and actorinstance's copy gets a fresh one (FUN_0040A860). Nothing changes it after
+	// that: FUN_0040D800 checks it on write-back. FUN_0040E0C0 finds the actor by it, which
+	// is how hittest names a prop whose id matches an actor (hitIdentity). Zero is unset.
+	Stamp uint32
 	// Value is actorvalue (FUN_0040D450).
 	Value int32
 	// Set, Star and Owner are the 16-byte name fields at +0x64, +0x74 and
@@ -117,6 +122,22 @@ func (t *ScriptActors) At(index int) (*ActorRecord, bool) {
 	return t.actors[t.order[index-1]], true
 }
 
+// ByStamp is FUN_0040E0C0: the first actor in table order whose stamp is id, the
+// lookup hittest runs before it names a prop. The native loop tests the stamp alone,
+// so an actor is found whether or not it is visible, placed or on the walk list. A
+// zero id never matches, because zero is unset.
+func (t *ScriptActors) ByStamp(id uint32) (*ActorRecord, bool) {
+	if t == nil || id == 0 {
+		return nil, false
+	}
+	for _, key := range t.order {
+		if actor := t.actors[key]; actor.Stamp == id {
+			return actor, true
+		}
+	}
+	return nil, false
+}
+
 // Lookup is the resolver FUN_0040D730; a miss is status 0x0A.
 func (t *ScriptActors) Lookup(name string) (*ActorRecord, uint16) {
 	if t == nil {
@@ -141,9 +162,10 @@ func (t *ScriptActors) Names() []string {
 
 // NewCastActorRecord is the actor constructor FUN_0040C1F0: hidden, heading
 // 0, turn rate 16, speed 4, depth -1, scale 1000, owner "None", set, star and
-// pose from the cast record. The caller places it when its set is open.
+// pose from the cast record. The caller places it when its set is open. The stamp is
+// minted here, as the constructor's FUN_004012A0 call stores it at +0x30.
 func NewCastActorRecord(cast, name, set, star, pose string, poses []string) *ActorRecord {
-	return &ActorRecord{Name: name, Cast: cast, Set: set, Star: star, Pose: pose, Poses: poses, TurnRate: 16, Speed: 4, Depth: -1, Scale: 1000, Owner: "None"}
+	return &ActorRecord{Name: name, Cast: cast, Set: set, Star: star, Pose: pose, Poses: poses, TurnRate: 16, Speed: 4, Depth: -1, Scale: 1000, Owner: "None", Stamp: mintStamp()}
 }
 
 // HasPose is FUN_0040E050's pose existence test.
@@ -174,7 +196,9 @@ func (a *ActorRecord) String() string {
 	return fmt.Sprintf("%s set=%s star=%s pos=%v deg=%d pose=%s frame=%d scale=%d visible=%t", a.Name, a.Set, a.Star, a.Position, a.Heading, a.Pose, a.Frame, a.Scale, a.Visible)
 }
 
-// ActorRecordState is the persisted form of an ActorRecord.
+// ActorRecordState is the persisted form of an ActorRecord. Stamp is the record's +0x30
+// stamp; a save written before stamps existed has none, and the record keeps the one its
+// constructor minted.
 type ActorRecordState struct {
 	Visible     bool                  `json:"visible"`
 	Placed      bool                  `json:"placed"`
@@ -189,6 +213,7 @@ type ActorRecordState struct {
 	ZClip       int16                 `json:"zclip"`
 	HitboxWidth int16                 `json:"hitboxWidth"`
 	HitboxSide  int16                 `json:"hitboxSide"`
+	Stamp       uint32                `json:"stamp,omitempty"`
 	Value       int32                 `json:"value"`
 	Set         string                `json:"set"`
 	Star        string                `json:"star"`
@@ -208,7 +233,7 @@ func (t *ScriptActors) Snapshot(names []string) map[string]ActorRecordState {
 		if status != 0 {
 			continue
 		}
-		state := ActorRecordState{Visible: actor.Visible, Placed: actor.Placed, Heading: actor.Heading, Position: actor.Position, Pose: actor.Pose, Frame: actor.Frame, Speed: actor.Speed, Depth: actor.Depth, Scale: actor.Scale, TurnRate: actor.TurnRate, ZClip: actor.ZClip, HitboxWidth: actor.HitboxWidth, HitboxSide: actor.HitboxSide, Value: actor.Value, Set: actor.Set, Star: actor.Star, Owner: actor.Owner}
+		state := ActorRecordState{Visible: actor.Visible, Placed: actor.Placed, Heading: actor.Heading, Position: actor.Position, Pose: actor.Pose, Frame: actor.Frame, Speed: actor.Speed, Depth: actor.Depth, Scale: actor.Scale, TurnRate: actor.TurnRate, ZClip: actor.ZClip, HitboxWidth: actor.HitboxWidth, HitboxSide: actor.HitboxSide, Stamp: actor.Stamp, Value: actor.Value, Set: actor.Set, Star: actor.Star, Owner: actor.Owner}
 		if job := actor.Job; job != nil {
 			state.JobMode, state.JobTarget, state.JobHeading = job.Mode, job.Target, job.Heading
 			if job.Walk != nil {
@@ -236,6 +261,11 @@ func (t *ScriptActors) Restore(states map[string]ActorRecordState) error {
 		actor.Pose, actor.Frame, actor.Speed, actor.Depth, actor.Scale = state.Pose, state.Frame, state.Speed, state.Depth, state.Scale
 		actor.TurnRate, actor.ZClip, actor.HitboxWidth, actor.HitboxSide, actor.Value = state.TurnRate, state.ZClip, state.HitboxWidth, state.HitboxSide, state.Value
 		actor.Set, actor.Star, actor.Owner, actor.Job = state.Set, state.Star, state.Owner, nil
+		if state.Stamp != 0 {
+			// The native load copies the saved rows back, stamps included (FUN_00422DE0 copies
+			// 0x29 dwords per row; FUN_004235C0 loads the actor table block).
+			actor.Stamp = state.Stamp
+		}
 		if state.JobMode != 0 {
 			job := &ActorJob{Mode: state.JobMode, Target: state.JobTarget, Heading: state.JobHeading}
 			if state.JobWalk != nil {
