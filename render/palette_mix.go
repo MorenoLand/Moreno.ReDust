@@ -19,9 +19,10 @@ const clutRawSize = 256 * 8
 // lo, hi and t are each clamped to 0..255 first, and the division truncates
 // toward zero as C integer division does. When lo is above hi after clamping,
 // nothing changes. Index words and entries outside lo..hi keep from's values, and
-// neither input is modified. Entries 0 and 255 take part like the others; the
-// native apply step (FUN_0042F060) overrides them when the result reaches the
-// screen, which the port does not do yet.
+// neither input is modified. Entries 0 and 255 take part like the others. The
+// native apply step (FUN_0042F060) then forces their RGB in the live palette, and
+// the realise steps never send them to the screen, so ScreenPalette.Apply does
+// the same.
 func MixPaletteRaw(from, to []byte, lo, hi, t int32) ([]byte, error) {
 	if len(from) != clutRawSize || len(to) != clutRawSize {
 		return nil, fmt.Errorf("CLUT blend has %d and %d bytes, want %d", len(from), len(to), clutRawSize)

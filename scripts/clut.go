@@ -4,7 +4,23 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"redust/render"
 )
+
+// ScreenPaletteHost is the live screen palette (DAT_004590FC) and the palettes of
+// the open set, stage and puppet that the CLUT name rules read. A nil host on
+// GameHostEnv makes every palette name a gap.
+type ScreenPaletteHost interface {
+	// Named returns the 2048-byte raw palette for "current", "set", "stage" or
+	// "puppet" (lower case). ok is false when that source is not open, and for
+	// "current" when no palette has been shown yet.
+	Named(name string) (raw []byte, ok bool, err error)
+	// Apply makes clut (the blended 2048-byte raw CLUT) the live palette, as
+	// FUN_0042F060 does. base is the palette source the screen shows the live
+	// palette through.
+	Apply(clut, base []byte) error
+}
 
 // clutResourceName returns the RCDATA name the CLUT registry looks up for a
 // name value. FUN_004269F0 sends a number to FUN_0042ED60, which formats "%s%d"
@@ -39,12 +55,10 @@ func clutUpper(text string) string {
 	return string(bytes)
 }
 
-// clutSource says where the port would have to read a mixclut name from. FUN_004269F0
-// tries the string names "current", "set", "stage" and "puppet" first, against the
-// live palette and the open set, stage and puppet, and falls back to the registry.
-// The live palette is not modelled, and the script host is not given the open
-// set, stage or puppet palettes, so those names are described as sources the
-// port lacks.
+// clutSource says where the port would have to read a mixclut name from, for the
+// gap message. FUN_004269F0 tries the string names "current", "set", "stage" and
+// "puppet" first, against the live palette and the open set, stage and puppet,
+// and falls back to the registry.
 func clutSource(name ScriptValue) string {
 	if name.Kind == 3 {
 		switch upper := clutUpper(name.Text); upper {
@@ -59,6 +73,32 @@ func clutSource(name ScriptValue) string {
 		return "a registry name over 26 bytes (undefined natively)"
 	}
 	return "registry resource " + resource
+}
+
+// clutPalette resolves one mixclut name to a 2048-byte raw CLUT, following the
+// order of FUN_004269F0. A number names a registry CLUT<n>, and the registry
+// resources are not readable from the user's assets, so it is a gap. The
+// strings "current", "set", "stage" and "puppet" name the live palette and the
+// open sources. "set", "stage" and "puppet" fall through to the registry when
+// their source is not open, which is undefined natively, so that is a gap too.
+// Any other string is a registry name. The only one the port can supply is
+// CLUT.BLACK, from render.BlackPaletteRaw: its RGB is zero in entries 1..255
+// (2026-10-10 evidence), and its entry 0 RGB is overwritten by the apply.
+func (h *GameHost) clutPalette(name ScriptValue) ([]byte, bool, error) {
+	if h.Env.Palette == nil {
+		return nil, false, nil
+	}
+	if name.Kind == 3 {
+		switch upper := clutUpper(name.Text); upper {
+		case "CURRENT", "SET", "STAGE", "PUPPET":
+			return h.Env.Palette.Named(strings.ToLower(upper))
+		}
+	}
+	resource, ok := clutResourceName(name)
+	if !ok || resource != "CLUT.BLACK" {
+		return nil, false, nil
+	}
+	return render.BlackPaletteRaw(), true, nil
 }
 
 // clutValue evaluates one mixclut argument at position and releases its string
@@ -79,11 +119,13 @@ func clutValue(call *ScriptCall, position int) (ScriptValue, int, uint16, error)
 // The arguments are read in the native order, so a malformed call returns the
 // status the native readers give: 0x1C for a missing comma, 0x0E for a name that
 // is neither a string nor a number and for lo, hi or t that is not a number, and
-// 2 for a missing closing parenthesis. The native blend (render.MixPaletteRaw)
-// writes its result to the live screen palette (FUN_0042F060). The port has no
-// live palette, since each render.IndexedFrame carries its own, so a well-formed
-// call is a host gap, as it was before this slice.
-func mixclutStatement(call *ScriptCall) (int, uint16, error) {
+// 2 for a missing closing parenthesis. The first name is the source: the result
+// starts as a copy of its CLUT, and entries lo..hi move toward the second name's
+// CLUT by t/255 (render.MixPaletteRaw). The result is applied to the live screen
+// palette (FUN_0042F060). The palette base is the source name's palette, the set
+// for "set" and the live palette for "current"; a black registry name is never
+// the base.
+func mixclutStatement(h *GameHost, call *ScriptCall) (int, uint16, error) {
 	if !hostOpen(call) {
 		return 0, ScriptStatusMalformed, nil
 	}
@@ -130,6 +172,28 @@ func mixclutStatement(call *ScriptCall) (int, uint16, error) {
 	if call.Kind(next) != opClose {
 		return 0, ScriptStatusMalformed, nil
 	}
-	return 0, 0, fmt.Errorf("%w: mixclut needs %s and %s, and the port has no live screen palette to write the blend to",
-		ErrHostOpcodeUnimplemented, clutSource(first), clutSource(second))
+	from, okFrom, err := h.clutPalette(first)
+	if err != nil {
+		return 0, 0, err
+	}
+	to, okTo, err := h.clutPalette(second)
+	if err != nil {
+		return 0, 0, err
+	}
+	if !okFrom || !okTo {
+		return 0, 0, fmt.Errorf("%w: mixclut needs %s and %s, and the port cannot resolve both",
+			ErrHostOpcodeUnimplemented, clutSource(first), clutSource(second))
+	}
+	blended, err := render.MixPaletteRaw(from, to, lo.Int, hi.Int, t.Int)
+	if err != nil {
+		return 0, 0, err
+	}
+	base := from
+	if first.Kind == 3 && clutUpper(first.Text) == "BLACK" {
+		base = to
+	}
+	if err := h.Env.Palette.Apply(blended, base); err != nil {
+		return 0, 0, err
+	}
+	return next - call.Start + 1, 0, nil
 }

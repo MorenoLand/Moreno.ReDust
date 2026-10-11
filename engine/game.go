@@ -43,7 +43,7 @@ type MouseState struct {
 }
 
 func NewGame(frame render.IndexedFrame) (*Game, error) {
-	image, err := frame.EbitenImage()
+	image, err := frameImage(frame)
 	if err != nil {
 		return nil, err
 	}
@@ -54,6 +54,19 @@ func NewGame(frame render.IndexedFrame) (*Game, error) {
 // The in-game file chooser uses it to read a file name; other screens leave it
 // nil.
 var TextInput func(text string)
+
+// FrameFilter, when set, is applied to each frame before the window converts it.
+// The presenter sets it to the live screen palette, so that indexed frames are
+// shown through the palette the script statements have changed.
+var FrameFilter func(render.IndexedFrame) render.IndexedFrame
+
+// frameImage converts frame for the window, through FrameFilter when it is set.
+func frameImage(frame render.IndexedFrame) (*ebiten.Image, error) {
+	if FrameFilter != nil {
+		frame = FrameFilter(frame)
+	}
+	return frame.EbitenImage()
+}
 
 // gameKeys are the keys reported to the key callback, in priority order: only
 // the first key pressed in a frame is delivered.
@@ -81,7 +94,7 @@ func (g *Game) Update() error {
 			return err
 		}
 		if changed {
-			image, err := frame.EbitenImage()
+			image, err := frameImage(frame)
 			if err != nil {
 				return err
 			}
@@ -98,7 +111,7 @@ func (g *Game) Update() error {
 				return err
 			}
 			if changed {
-				image, err := frame.EbitenImage()
+				image, err := frameImage(frame)
 				if err != nil {
 					return err
 				}
@@ -112,7 +125,7 @@ func (g *Game) Update() error {
 			return err
 		}
 		if changed {
-			image, err := frame.EbitenImage()
+			image, err := frameImage(frame)
 			if err != nil {
 				return err
 			}

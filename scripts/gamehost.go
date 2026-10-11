@@ -65,6 +65,9 @@ type GameHostEnv struct {
 	// Presenter shows conversations; PuppetFile reads a PUP's script table.
 	Presenter  PuppetPresenter
 	PuppetFile func(file string) (assets.PuppetFile, error)
+	// Palette is the live screen palette and the open set's palette, which
+	// mixclut blends. Nil makes mixclut a gap.
+	Palette ScreenPaletteHost
 	// FileExists reports whether a script file name is present in the asset
 	// root. findfile answers from it: the reference probes eight prefixed
 	// candidates on disk, and the port has one asset root in their place. Nil

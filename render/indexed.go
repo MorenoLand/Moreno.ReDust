@@ -21,6 +21,17 @@ type IndexedFrame struct {
 	Pixels  []byte
 	Palette color.Palette
 	rgba    *image.RGBA
+	// source is the 2048-byte raw palette the frame was built from, and colors
+	// is the Palette it produced. ScreenPalette uses both: a frame whose Palette
+	// is still colors is unmodified and may be shown through the live palette.
+	source []byte
+	colors color.Palette
+}
+
+// paletteIntact reports whether Palette is still the slice built from source,
+// so that no fade or caller has replaced the frame's colours.
+func (f IndexedFrame) paletteIntact() bool {
+	return len(f.colors) == 256 && len(f.Palette) == 256 && &f.Palette[0] == &f.colors[0]
 }
 
 type paletteEntry struct {
@@ -201,7 +212,8 @@ func indexedFrame(width, height int, pixels, paletteRaw []byte) (IndexedFrame, e
 	if err != nil {
 		return IndexedFrame{}, err
 	}
-	return IndexedFrame{Width: width, Height: height, Pixels: append([]byte(nil), pixels...), Palette: palette.Colors()}, nil
+	colors := palette.Colors()
+	return IndexedFrame{Width: width, Height: height, Pixels: append([]byte(nil), pixels...), Palette: colors, source: append([]byte(nil), paletteRaw...), colors: colors}, nil
 }
 
 func PaletteStateFromRaw(paletteRaw []byte) (PaletteState, error) {

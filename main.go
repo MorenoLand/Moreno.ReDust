@@ -283,6 +283,9 @@ func run() error {
 		return fmt.Errorf("open startup game set: %w", err)
 	}
 	defer func() { _ = nightSet.Close() }()
+	// screenPalette is the live screen palette (DAT_004590FC). Palette statements
+	// change it, and the window shows frames through it (engine.FrameFilter).
+	var screenPalette render.ScreenPalette
 	activeSet, activeSetName, activeSetOwned := nightSet, "town", false
 	defer func() {
 		if activeSetOwned && activeSet != nil {
@@ -1844,6 +1847,7 @@ func run() error {
 			}
 		}
 		activeSet, activeSetName, activeSetOwned = nextSet, semanticName, nextOwned
+		screenPalette.Reset()
 		render.SetNativeCamera(nextSet.CameraPullback(), nextSet.CameraHeight())
 		view, worldPoint, backgroundFrame = nextView, nextPoint, background
 		scriptHost.OpenSet()
@@ -2064,6 +2068,31 @@ func run() error {
 		currentFrame, stageFrame, convDirty = frame, frame, true
 		return nil
 	}
+	scriptHost.Env.Palette = scriptScreenPalette{
+		named: func(name string) ([]byte, bool, error) {
+			switch name {
+			case "current":
+				raw := screenPalette.Raw()
+				return raw, raw != nil, nil
+			case "set":
+				if activeSet == nil {
+					return nil, false, nil
+				}
+				raw := activeSet.Palette()
+				return raw, len(raw) == 0x800, nil
+			}
+			// The open stage and puppet palettes are not passed to the script host yet.
+			return nil, false, nil
+		},
+		apply: func(clut, base []byte) error {
+			if err := screenPalette.Apply(clut, base); err != nil {
+				return err
+			}
+			convDirty = true
+			return nil
+		},
+	}
+	engine.FrameFilter = screenPalette.Show
 	scriptHost.Env.Presenter = &scriptPresenter{
 		open: func(file string) error {
 			puppet, err := render.OpenPuppet(workspace, file)
@@ -5882,6 +5911,16 @@ type scriptPresenter struct {
 	play     func(name string) error
 	movie    func() bool
 }
+
+// scriptScreenPalette adapts the live screen palette and the open set's palette
+// to the script host's ScreenPaletteHost.
+type scriptScreenPalette struct {
+	named func(name string) ([]byte, bool, error)
+	apply func(clut, base []byte) error
+}
+
+func (p scriptScreenPalette) Named(name string) ([]byte, bool, error) { return p.named(name) }
+func (p scriptScreenPalette) Apply(clut, base []byte) error           { return p.apply(clut, base) }
 
 func (p *scriptPresenter) OpenPuppet(file string) error                { return p.open(file) }
 func (p *scriptPresenter) ClosePuppet() error                          { return p.close() }
