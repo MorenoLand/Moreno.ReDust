@@ -57,16 +57,47 @@ var (
 // as it found it, and this port reads the store without writing it. The frame pump's
 // writes to the table entry are a separate gap, not part of this statement.
 func (h *GameHost) projectedPropHit(prop PropPointRecord, point uint32) (bool, error) {
-	_, open := h.setRect()
-	if !PointInSetWillTest(SetState{Active: open, Visible: h.setVisible}) {
+	cull, inList, err := h.projectedPropCull(prop)
+	if err != nil || !inList {
+		return false, err
+	}
+	if !ContainsPoint(PointFromPacked(point), cull.rect) {
 		return false, nil
 	}
+	// The walker's flip is out word 5, which is always 0 (propRecordFlip). Word 7 is
+	// sVar8 >> 6, which the draw takes as its fifth argument, not the hit test.
+	return propFrameHitScaled(cull.frame.Data, cull.anchor, propRecordFlip, cull.scaleWord, point)
+}
+
+// projectedPropCull is the cull of path B: every test FUN_00421820 makes before it keeps a
+// projected record on the world walk's list, whatever the point. It is the same sequence
+// projectedPropHit runs, and the walk reads its depth as the sort key and its clipped box
+// as the region it tests. ok is false when the record is not on the list.
+type projectedPropCull struct {
+	// depth is FUN_004064B0's depth, which path B stores at entry +0x0C.
+	depth int16
+	// rect is the projected box clipped to the set's pointer rectangle.
+	rect   Rect
+	anchor uint32
+	// scaleWord is the scaled size, low word y and high word x.
+	scaleWord int32
+	// gate is sVar8 clamped to zero and checked against 0x600. It is not a walker argument;
+	// the walker's flip is propRecordFlip.
+	gate  int16
+	frame *PropFrame
+}
+
+func (h *GameHost) projectedPropCull(prop PropPointRecord) (projectedPropCull, bool, error) {
+	_, open := h.setRect()
+	if !PointInSetWillTest(SetState{Active: open, Visible: h.setVisible}) {
+		return projectedPropCull{}, false, nil
+	}
 	if h.Env.CameraState == nil || prop.FrameAt == nil {
-		return false, fmt.Errorf("%w: pointinprop of a projected prop (word 9 != 0) with a set open", ErrHostOpcodeUnimplemented)
+		return projectedPropCull{}, false, fmt.Errorf("%w: pointinprop of a projected prop (word 9 != 0) with a set open", ErrHostOpcodeUnimplemented)
 	}
 	camera := h.Env.CameraState()
 	if !strings.EqualFold(prop.Owner, camera.SetName) {
-		return false, nil
+		return projectedPropCull{}, false, nil
 	}
 	heading := camera.Heading
 	projection := render.NativeProjectQ14(
@@ -75,7 +106,7 @@ func (h *GameHost) projectedPropHit(prop PropPointRecord, point uint32) (bool, e
 		heading, render.NativeActorFocalLength, pathBCentreX, pathBCentreY)
 	depth := int16(projection.Depth)
 	if depth < 0x20 {
-		return false, nil
+		return projectedPropCull{}, false, nil
 	}
 	theta := render.NativeAngle(camera.Position[1]-prop.Position[1], camera.Position[0]-prop.Position[0])
 	// (w12 - A6A + A76 - theta) & 0xFF. A76 is A6A, so the heading cancels.
@@ -85,20 +116,20 @@ func (h *GameHost) projectedPropHit(prop PropPointRecord, point uint32) (bool, e
 		gate = 0
 	}
 	if gate > 0x600 {
-		return false, nil
+		return projectedPropCull{}, false, nil
 	}
 	frame, err := prop.FrameAt(angle)
 	if err != nil {
-		return false, err
+		return projectedPropCull{}, false, err
 	}
 	if frame == nil {
-		return false, nil
+		return projectedPropCull{}, false, nil
 	}
 	info := frame.Info
 	extentX := info.Right - info.Left
 	extentY := info.Bottom - info.Top
 	if extentX == 0 || extentY == 0 {
-		return false, fmt.Errorf("%w: pointinprop of a projected prop with an empty frame extent (native divides by zero)", ErrHostOpcodeUnimplemented)
+		return projectedPropCull{}, false, fmt.Errorf("%w: pointinprop of a projected prop with an empty frame extent (native divides by zero)", ErrHostOpcodeUnimplemented)
 	}
 	scale := int32(int16((prop.Scale * int32(int16(info.Metric))) / 1000))
 	scaledX := int16((scale * int32(extentX)) / int32(depth))
@@ -109,14 +140,12 @@ func (h *GameHost) projectedPropHit(prop PropPointRecord, point uint32) (bool, e
 	top, left := anchorY-offsetY, anchorX-offsetX
 	box := Rect{Top: top, Left: left, Bottom: top + scaledY, Right: left + scaledX}
 	clipped, inside := ClipRect(camera.Pointer, box)
-	if !inside || !ContainsPoint(PointFromPacked(point), clipped) {
-		return false, nil
+	if !inside {
+		return projectedPropCull{}, false, nil
 	}
 	anchor := uint32(uint16(anchorY)) | uint32(uint16(anchorX))<<16
 	scaleWord := int32(uint32(uint16(scaledY)) | uint32(uint16(scaledX))<<16)
-	// The walker's flip is out word 5, which is always 0 (propRecordFlip). Word 7 is
-	// sVar8 >> 6, which the draw takes as its fifth argument, not the hit test.
-	return propFrameHitScaled(frame.Data, anchor, propRecordFlip, scaleWord, point)
+	return projectedPropCull{depth: depth, rect: clipped, anchor: anchor, scaleWord: scaleWord, gate: gate, frame: frame}, true, nil
 }
 
 // propFrameHitScaled is FUN_004396F0, the scaled walker that path B's pointinprop uses.

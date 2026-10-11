@@ -162,6 +162,18 @@ func propFrameHit(frame []byte, anchor uint32, flip int16, point uint32) (bool, 
 	return false, errPropColumnNotFound
 }
 
+// pathAClip is the box path A keeps on the walk list and tests points against: the
+// anchor less the frame's origin, sized by the frame's extent, clipped to the stage view
+// (FUN_00421820 with FUN_00406F40 and FUN_0042E230). ok is false when the clip is empty.
+// The caller has checked that a frame was selected.
+func pathAClip(prop PropPointRecord) (Rect, bool) {
+	info := prop.Frame.Info
+	top := int16(uint16(prop.Anchor)) - info.OriginY
+	left := int16(uint16(prop.Anchor>>16)) - info.OriginX
+	frameBox := Rect{Top: top, Left: left, Bottom: top + (info.Bottom - info.Top), Right: left + (info.Right - info.Left)}
+	return ClipRect(frameBox, StageViewRect)
+}
+
 // pointInProp is FUN_0041FA40, pointinprop 20040, on path A. The reference runs these
 // steps in order, and the dispatcher has already required "(" and, on status 0, ")":
 //
@@ -227,11 +239,7 @@ func (h *GameHost) propPointHit(prop PropPointRecord, point uint32) (bool, error
 	if prop.Frame == nil {
 		return false, nil
 	}
-	info := prop.Frame.Info
-	top := int16(uint16(prop.Anchor)) - info.OriginY
-	left := int16(uint16(prop.Anchor>>16)) - info.OriginX
-	frameBox := Rect{Top: top, Left: left, Bottom: top + (info.Bottom - info.Top), Right: left + (info.Right - info.Left)}
-	clipped, inside := ClipRect(frameBox, StageViewRect)
+	clipped, inside := pathAClip(prop)
 	if !inside || !ContainsPoint(PointFromPacked(point), clipped) {
 		return false, nil
 	}

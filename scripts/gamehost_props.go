@@ -165,6 +165,12 @@ func (t *ScriptProps) Get(name string) *PropRecord {
 	return prop
 }
 
+// TableNames is the prop table's names in native order, the order FUN_004216F0 walks
+// the rows in. Names is sorted by name and is not the table.
+func (t *ScriptProps) TableNames() []string {
+	return append([]string(nil), t.table...)
+}
+
 // Names lists the props in a stable order.
 func (t *ScriptProps) Names() []string {
 	names := make([]string, 0, len(t.props))
