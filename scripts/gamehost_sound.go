@@ -32,6 +32,12 @@ type TrackHost interface {
 	// SoundName is the lookup behind indextosound (FUN_0040EF60): the name in
 	// the 1-based row of that track's first row array.
 	SoundName(track string, index int) (name string, found bool, err error)
+	// TrackCount is counttracks (FUN_0040F010): the number of open track files,
+	// DAT_004599FC.
+	TrackCount() int
+	// TrackName is the lookup behind indextotrack (FUN_0040F040): the internal
+	// name of the 1-based open track. found is false outside 1..count (0x0A).
+	TrackName(index int) (name string, found bool)
 }
 
 // soundCommand handles the track-file and sound-channel statements.
@@ -188,6 +194,41 @@ func (h *GameHost) soundValue(name string, call *ScriptCall) (Record, int, uint1
 			return Record{}, 0, 0x0a, true, nil
 		}
 		record, status, err := call.Interpreter.Record(ScriptValue{Kind: 3, Text: sound})
+		return record, consumed, status, true, err
+	case "counttracks":
+		// FUN_0040F010 takes no argument, and FUN_004137b0 then requires the
+		// close record right after the open one; anything else is status 0x02.
+		if call.Kind(call.Start+1) != opOpen || call.Kind(call.Start+2) != opClose {
+			return Record{}, 0, ScriptStatusMalformed, true, nil
+		}
+		if h.Env.Tracks == nil {
+			return Record{}, 0, 0, true, fmt.Errorf("%w: counttracks has no track files", ErrHostOpcodeUnimplemented)
+		}
+		record, status, err := call.Interpreter.Record(ScriptValue{Kind: 4, Int: int32(h.Env.Tracks.TrackCount())})
+		return record, 3, status, true, err
+	case "indextotrack":
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, true, err
+		}
+		// FUN_0040F040 reads one argument with FUN_004220a0. With none, the close
+		// record reaches FUN_00422040, which rejects it with 0x0E, as it does a
+		// non-integer index. The index is then checked against 1..count (0x0A).
+		if len(args) == 0 || args[0].Kind != 4 {
+			return Record{}, 0, ScriptStatusWrongType, true, nil
+		}
+		if h.Env.Tracks == nil {
+			return Record{}, 0, 0, true, fmt.Errorf("%w: indextotrack has no track files", ErrHostOpcodeUnimplemented)
+		}
+		name, found := h.Env.Tracks.TrackName(int(args[0].Int))
+		if !found {
+			return Record{}, 0, 0x0a, true, nil
+		}
+		// FUN_004137b0 wants the close record after the index, so extras are 0x02.
+		if len(args) != 1 {
+			return Record{}, 0, ScriptStatusMalformed, true, nil
+		}
+		record, status, err := call.Interpreter.Record(ScriptValue{Kind: 3, Text: name})
 		return record, consumed, status, true, err
 	}
 	return Record{}, 0, 0, false, nil

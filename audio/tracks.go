@@ -56,6 +56,20 @@ func (t *Tracks) Find(name string) *OpenTrack {
 	return nil
 }
 
+// TrackCount is counttracks (FUN_0040F010): the number of open track files,
+// DAT_004599FC.
+func (t *Tracks) TrackCount() int { return len(t.open) }
+
+// TrackName is the lookup behind indextotrack (FUN_0040F040): the internal name
+// at +0x16 of the 1-based open track. found is false outside 1..count, which
+// is status 0x0A.
+func (t *Tracks) TrackName(index int) (name string, found bool) {
+	if index < 1 || index > len(t.open) {
+		return "", false
+	}
+	return t.open[index-1].Name, true
+}
+
 // OpenTrack is opentrackfile.
 func (t *Tracks) OpenTrack(file string) error {
 	path := "DATA/" + strings.ToUpper(strings.TrimPrefix(strings.ReplaceAll(file, `\`, "/"), "DATA/"))
