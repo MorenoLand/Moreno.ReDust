@@ -350,12 +350,40 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 		}
 		prop.Visible = args[1].Int != 0
 		return consumed, 0, true, nil
-	case "propxy", "propxyz":
-		count := 3
-		if name == "propxyz" {
-			count = 4
+	case "propxyz":
+		// FUN_0041FBD0. FUN_004171C0 reads four arguments (0x1C for a missing comma). The
+		// name must be a string (0x0E) and in the prop table (0x0A, which creates no
+		// record). Arguments 2 to 4 must be numbers (0x0E). The ball stops, words 13, 14
+		// and 15 take the low halves of the three numbers, and word 9 is set. Extra
+		// arguments run all of that and return 2.
+		args, consumed, extra, status, err := h.propReadArgs(call, 4)
+		if err != nil || status != 0 {
+			return 0, status, true, err
 		}
-		args, consumed, extra, status, err := h.propNamedArgs(call, count)
+		if h.Props == nil {
+			return 0, 0, true, fmt.Errorf("props are unavailable")
+		}
+		if args[0].Kind != 3 {
+			return 0, ScriptStatusWrongType, true, nil
+		}
+		if !h.Props.Known(args[0].Text) {
+			return 0, StatusNameNotFound, true, nil
+		}
+		for _, arg := range args[1:] {
+			if arg.Kind != 4 {
+				return 0, ScriptStatusWrongType, true, nil
+			}
+		}
+		h.Props.StopBall(args[0].Text)
+		prop := h.Props.Get(args[0].Text)
+		prop.X, prop.Y, prop.Z = int32(int16(args[1].Int)), int32(int16(args[2].Int)), int32(int16(args[3].Int))
+		prop.Projected = true
+		if extra {
+			return consumed, ScriptStatusMalformed, true, nil
+		}
+		return consumed, 0, true, nil
+	case "propxy":
+		args, consumed, extra, status, err := h.propNamedArgs(call, 3)
 		if err != nil || status != 0 {
 			return 0, status, true, err
 		}
@@ -365,20 +393,15 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 			}
 		}
 		// FUN_0040F7D0 stops the prop's ball, a slot whose active word is cleared, and
-		// the record is stored after that (FUN_004214A0).
+		// the record is stored after that (FUN_004214A0). The statement stores the low
+		// 16-bit word of each number (MOV word ptr): argument 2 goes to word 11 (x, the
+		// high word of the anchor) and argument 3 to word 10 (y, the low word), and word
+		// 9 is cleared (FUN_0041FDF0). The port keeps those two words in X and Y.
 		h.Props.StopBall(args[0].Text)
 		prop := h.Props.Get(args[0].Text)
-		// The statement stores the low 16-bit word of each number (MOV word ptr). For
-		// propxy, argument 2 is word 11 (x, the high word of the anchor) and argument 3
-		// is word 10 (y, the low word), from FUN_0041FDF0. For propxyz, FUN_0041FBD0
-		// stores arguments 2, 3 and 4 in words 13, 14 and 15.
 		prop.X, prop.Y = int32(int16(args[1].Int)), int32(int16(args[2].Int))
-		if name == "propxyz" {
-			prop.Z = int32(int16(args[3].Int))
-		}
-		prop.Projected = name == "propxyz"
+		prop.Projected = false
 		if extra {
-			// The dispatcher's closing-paren check runs after the handler and returns 2.
 			return consumed, ScriptStatusMalformed, true, nil
 		}
 		return consumed, 0, true, nil
