@@ -269,8 +269,9 @@ const (
 	SubResourceCountSlot    = 0x34E
 	SubResourceCapacitySlot = 0x34F
 	// StatusNullAllocation is native status 0x66, returned by a sub-resource miss
-	// when the FUN_00401120 flag is 0 (free memory short after eviction). The port's
-	// acquire has no such gate, so this status is not produced.
+	// when the FUN_00401120 flag is 0 (free memory short after eviction). The port
+	// produces it as assets.ErrResourceMemoryShortfall in ResourceCache.Acquire, once
+	// the registry has a memory reading.
 	StatusNullAllocation uint16 = 0x66
 )
 

@@ -13,6 +13,12 @@ var ErrResourceReferenceUnderflow = errors.New("APPL resource reference count be
 var ErrResourceLeaseClosed = errors.New("APPL resource lease is closed")
 var ErrResourceWritebackUnsupported = errors.New("modified APPL resources cannot be written back")
 
+// ErrResourceMemoryShortfall is native status 0x66: a miss whose memory gate
+// (FUN_00401120) found too little free memory even after the eviction walk. The
+// load is not made and the row is not added. The gate only runs when the registry
+// has a memory reading (SetMemoryStatus).
+var ErrResourceMemoryShortfall = errors.New("APPL resource load found too little free memory after eviction (native status 0x66)")
+
 var resourceClock struct {
 	mu    sync.Mutex
 	ticks uint32
@@ -93,10 +99,38 @@ func (c *ResourceCache) Header() (Header, error) {
 	return c.container.Header(), nil
 }
 
+// Acquire is FUN_004014F0. A cached index only gains a reference. A miss runs the
+// directory check first (index range, file offset, record key), then the memory
+// gate with the record's length plus 20000 bytes, and only then loads the payload.
+// The gate may evict zero-reference rows from any registered cache, this one
+// included, so the cache's lock is not held across it.
 func (c *ResourceCache) Acquire(index uint32) (*ResourceLease, error) {
 	if c == nil {
 		return nil, ErrResourceCacheClosed
 	}
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil, ErrResourceCacheClosed
+	}
+	if slot := c.findSlot(index); slot >= 0 {
+		c.slots[slot].references++
+		c.slots[slot].stamp = nextResourceTick()
+		c.mu.Unlock()
+		return &ResourceLease{cache: c, slot: slot}, nil
+	}
+	_, length, err := c.container.recordLength(index)
+	if err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
+	registry := c.registry
+	c.mu.Unlock()
+
+	if err := registry.reserveForLoad(int64(length) + nativeLoadHeadroom); err != nil {
+		return nil, err
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
