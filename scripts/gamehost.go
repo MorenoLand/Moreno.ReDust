@@ -166,6 +166,18 @@ type GameHostEnv struct {
 	// CursorVisible receives the cursor's visibility after showcursor or
 	// hidecursor changes the display count. Nil leaves the cursor alone.
 	CursorVisible func(visible bool)
+	// FreeMemory is the host's memory reading that freemem takes the minimum of
+	// (FUN_0042C420, through GlobalMemoryStatus): the page file's available
+	// bytes, the available virtual bytes and the total physical bytes. The
+	// reading is live and host-dependent by design. Nil makes freemem a gap.
+	FreeMemory assets.NativeMemoryStatus
+	// ProcessorType is the host's processor type, the dwProcessorType that
+	// machinespeed returns (FUN_004279D0). Nil makes machinespeed a gap.
+	ProcessorType func() uint32
+	// CacheCounts is the APPL cache's counts for cacheinfo: the manager (node)
+	// count, and the cached rows whose reference count is positive and the rows
+	// at zero or below. Nil makes cacheinfo a gap for the counts it reads.
+	CacheCounts func() (nodes, referenced, unreferenced int)
 	// Sound plays a UNILIB sound by name (voicesound, singlesound, ...).
 	Sound func(name string) error
 	// CastManaged reports whether any of a cast's actors run from their

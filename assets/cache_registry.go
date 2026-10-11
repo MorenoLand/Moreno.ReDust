@@ -35,6 +35,32 @@ func (r *ResourceCacheRegistry) Head() *ResourceCache {
 	return r.managers[0]
 }
 
+// RowCounts walks the managers the way FUN_00416F10 walks the APPL manager
+// list. It returns the number of managers and, over every cached row of every
+// manager, how many rows have a positive reference count and how many are at
+// zero or below (the native test is "< 1"). Lock order matches Register: the
+// registry, then each manager.
+func (r *ResourceCacheRegistry) RowCounts() (managers, referenced, unreferenced int) {
+	if r == nil {
+		return 0, 0, 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, manager := range r.managers {
+		manager.mu.Lock()
+		managers++
+		for i := range manager.slots {
+			if manager.slots[i].references >= 1 {
+				referenced++
+			} else {
+				unreferenced++
+			}
+		}
+		manager.mu.Unlock()
+	}
+	return managers, referenced, unreferenced
+}
+
 func (r *ResourceCacheRegistry) Register(manager *ResourceCache) error {
 	if r == nil || manager == nil {
 		return ErrResourceCacheRegistryUnavailable

@@ -2417,6 +2417,7 @@ func run() error {
 
 	scriptHost.Env.Ticks = func() uint32 { return scripts.NativeFrameUnits(native.NativeTickMilliseconds()) }
 	scriptHost.Env.LeftButton = func() bool { return ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) }
+	scriptHost.Env.CacheCounts = func() (int, int, int) { return workspace.ResourceCacheRegistry().RowCounts() }
 	scriptHost.Env.PlayerHeading = func() int16 {
 		degree, _ := render.NativeCurrentDegree(worldPoint[2])
 		return degree

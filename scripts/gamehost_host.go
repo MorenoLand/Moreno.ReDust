@@ -1,6 +1,10 @@
 package scripts
 
-import "fmt"
+import (
+	"fmt"
+
+	"redust/assets"
+)
 
 // machineTypeName is what machinetype() returns. FUN_00415720 passes the
 // Pascal string at 0x0045DA88 to FUN_004279B0, which first writes the string's
@@ -68,7 +72,8 @@ func (h *GameHost) hostCommand(name string, call *ScriptCall) (int, uint16, bool
 	return 0, 0, false, nil
 }
 
-// hostValue handles machinetype, setwidth, setheight and tick.
+// hostValue handles machinetype, setwidth, setheight, freemem, machinespeed,
+// cacheinfo, tick, button and commandkey.
 //
 // machinetype is FUN_00415720, which takes no arguments. Its string register
 // status is the status it returns: 0x36 when all twenty string slots are in
@@ -113,6 +118,55 @@ func (h *GameHost) hostValue(name string, call *ScriptCall) (Record, int, uint16
 			return Record{}, 0, status, true, nil
 		}
 		return Record{Kind: 4, Data: uint32(int32(value))}, consumed, 0, true, nil
+	case "freemem":
+		// freemem is FUN_00416510, value 20027. It takes no arguments and returns
+		// status 0 on every path: FUN_0042C420 calls GlobalMemoryStatus and returns
+		// the least of the available page file, the available virtual and the total
+		// physical bytes, which assets.NativeAvailableMemory computes. The reading is
+		// live, so the number is host-dependent by design and comes from the
+		// FreeMemory hook. The close check runs before the reading, so a call with an
+		// argument reports 2 whatever the memory is.
+		if !hostOpen(call) {
+			return Record{}, 0, ScriptStatusMalformed, true, nil
+		}
+		consumed, status := hostClose(call)
+		if status != 0 {
+			return Record{}, 0, status, true, nil
+		}
+		if h.Env.FreeMemory == nil {
+			return Record{}, 0, 0, true, fmt.Errorf("%w: freemem has no memory reading", ErrHostOpcodeUnimplemented)
+		}
+		pageFile, virtual, totalPhysical := h.Env.FreeMemory()
+		return Record{Kind: 4, Data: assets.NativeAvailableMemory(pageFile, virtual, totalPhysical)}, consumed, 0, true, nil
+	case "machinespeed":
+		// machinespeed is FUN_00415750, value 20066. It takes no arguments.
+		// FUN_004279D0 loads KERNEL32, resolves GetSystemInfo and returns the host's
+		// dwProcessorType, or 0x182 (386) when the export is missing. The result is a
+		// machine property, not a speed, and it has no port equivalent on every
+		// platform, so the value comes from the ProcessorType hook. The argument
+		// checks and status are the native ones.
+		if !hostOpen(call) {
+			return Record{}, 0, ScriptStatusMalformed, true, nil
+		}
+		consumed, status := hostClose(call)
+		if status != 0 {
+			return Record{}, 0, status, true, nil
+		}
+		if h.Env.ProcessorType == nil {
+			return Record{}, 0, 0, true, fmt.Errorf("%w: machinespeed has no processor type", ErrHostOpcodeUnimplemented)
+		}
+		return Record{Kind: 4, Data: h.Env.ProcessorType()}, consumed, 0, true, nil
+	case "cacheinfo":
+		// cacheinfo is FUN_00416F10, value 20082. It returns 0x28 with no set open
+		// (DAT_00459A24, the SetRect gate) before it evaluates its argument.
+		if !hostOpen(call) {
+			return Record{}, 0, ScriptStatusMalformed, true, nil
+		}
+		if _, open := h.setRect(); !open {
+			return Record{}, 0, 0x28, true, nil
+		}
+		record, consumed, status, err := h.cacheInfo(call)
+		return record, consumed, status, true, err
 	case "tick":
 		// tick is FUN_00415E60, value 20008. FUN_0042B700 pumps the messages
 		// (FUN_0042BD80, not reproduced) and returns timeGetTime() * 3 / 50 as a
@@ -210,4 +264,51 @@ func (h *GameHost) hostValue(name string, call *ScriptCall) (Record, int, uint16
 		return record, consumed, status, true, err
 	}
 	return Record{}, 0, 0, false, nil
+}
+
+// cacheInfo reads cacheinfo's one argument and its selector. FUN_00416F10
+// evaluates one expression (FUN_004220A0), which must be a number (0x0E
+// otherwise). The selector picks a count over the APPL cache: 1 is the manager
+// (node) count, 4 the cached rows whose reference count is positive, and 5 the
+// rows at zero or below (FUN_00401100 heads the manager list, and each node's
+// row count and rows are the port's ResourceCache slots). Selectors 2 and 3 are
+// byte totals of native heap blocks (GlobalSize), which the port cannot match,
+// so they are a gap. Any other selector is 0x0E, returned before the close
+// check, as the native handler does.
+func (h *GameHost) cacheInfo(call *ScriptCall) (Record, int, uint16, error) {
+	arg, closeAt, status, err := builtinArgument(call)
+	if err != nil || status != 0 {
+		return Record{}, 0, status, err
+	}
+	value, status, err := call.Interpreter.Value(arg)
+	if err != nil || status != 0 {
+		return Record{}, 0, status, err
+	}
+	if value.Kind != 4 {
+		return Record{}, 0, ScriptStatusWrongType, nil
+	}
+	switch value.Int {
+	case 1, 2, 3, 4, 5:
+	default:
+		return Record{}, 0, ScriptStatusWrongType, nil
+	}
+	consumed, status := builtinFrameEnd(call, closeAt)
+	if status != 0 {
+		return Record{}, 0, status, nil
+	}
+	if value.Int == 2 || value.Int == 3 {
+		return Record{}, 0, 0, fmt.Errorf("%w: cacheinfo(%d) sums native heap blocks", ErrHostOpcodeUnimplemented, value.Int)
+	}
+	if h.Env.CacheCounts == nil {
+		return Record{}, 0, 0, fmt.Errorf("%w: cacheinfo has no cache counts", ErrHostOpcodeUnimplemented)
+	}
+	nodes, referenced, unreferenced := h.Env.CacheCounts()
+	count := nodes
+	switch value.Int {
+	case 4:
+		count = referenced
+	case 5:
+		count = unreferenced
+	}
+	return Record{Kind: 4, Data: uint32(count)}, consumed, 0, nil
 }
