@@ -12,7 +12,9 @@ import (
 type ActorRecord struct {
 	// Name is the actor's resolver key.
 	Name string
-	// Cast is the cast file the actor was loaded from.
+	// Cast is the owning cast's native name (its resource 0 +0x928, Cast.ScriptName).
+	// indextoactor writes it to the result slot. The native finds the cast record by
+	// the actor's dword +2 (the cast record's dword 0); the port names the cast instead.
 	Cast string
 	// Visible is +0x00, written by actorvisible (FUN_0040B580).
 	Visible bool

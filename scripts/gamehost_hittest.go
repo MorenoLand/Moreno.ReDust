@@ -2,6 +2,7 @@ package scripts
 
 import (
 	"fmt"
+	"strings"
 )
 
 // The result slot DAT_00459720 is read by one native, the result value, and
@@ -11,11 +12,12 @@ import (
 //	FUN_00425CD0  result 16010 (statement) copies a string register into the slot
 //	FUN_00415C20  result 16010 (value)     *status = 0; returns a copy of the slot
 //	FUN_00418930  script-entry clear       copies the zero-length string
-//	FUN_0040D090  indextoactor 20013       writes a cast name (not ported: resultStale)
-//	FUN_00421210  indextoprop 20032        writes a shop name (not ported: resultStale)
+//	FUN_0040D090  indextoactor 20013       writes the owning cast's name
+//	FUN_00421210  indextoprop 20032        writes the owning shop's name
 //
-// The port writes the slot from hittest and the result statement. ClearResultBuffer
-// (scriptentry.go) is the script-entry clear, which no runtime path calls yet.
+// The port writes the slot from hittest, the result statement, indextoactor and
+// indextoprop. ClearResultBuffer (scriptentry.go) is the script-entry clear, which
+// no runtime path calls yet.
 //
 // The slot holds a Pascal string: a length byte then the text. FUN_0042E6C0
 // copies the length byte and that many bytes, and FUN_00421F60 stores the copy
@@ -245,6 +247,59 @@ func (h *GameHost) setResultLabel(label string) {
 	h.resultStale = false
 }
 
+// setResultText writes a name into the result slot as a Pascal string, the form
+// FUN_0042E6C0 copies: the length byte, then the text.
+func (h *GameHost) setResultText(name string) {
+	h.context.ResultBuffer = PascalFromCString(name)
+	h.resultStale = false
+}
+
+// actorCastResult is the slot write of FUN_0040D090 on its success path. FUN_0040D940
+// finds the cast record whose dword 0 equals the actor's dword +2 (FUN_0040C1F0 stores
+// *param_1 there, which castwarm matches against the cast record's dword 0), and the
+// cast's Pascal name at record +0x0C is copied into the slot. The port finds the cast by its native name, ActorRecord.Cast, in the
+// cast table. A miss is status 0x0A with the slot untouched. Without the cast hooks the
+// slot's content is unknown, so resultStale is set.
+func (h *GameHost) actorCastResult(actor *ActorRecord) uint16 {
+	if h.Env.CastCount == nil || h.Env.CastName == nil {
+		h.resultStale = true
+		return 0
+	}
+	for index := 0; index < h.Env.CastCount(); index++ {
+		if name, ok := h.Env.CastName(index); ok && strings.EqualFold(name, actor.Cast) {
+			h.setResultText(name)
+			return 0
+		}
+	}
+	return 0x0a
+}
+
+// propShopResult is the slot write of FUN_00421210 on its success path. FUN_004215F0
+// finds the shop record whose dword 0 equals the prop's dword +2, the owner shop handle
+// FUN_00420370 writes, and the shop's Pascal name at record +0x0C is copied into the
+// slot. The port takes the owner from its prop hook, the same owner the sendtoprop chain
+// resolves, and matches it against the open shops. A miss is status 0x0A with the slot
+// untouched. Without the prop hook, or when the owner is not one the port can name, the
+// slot's content is unknown, so resultStale is set.
+func (h *GameHost) propShopResult(prop string) uint16 {
+	if h.Env.PropScript == nil {
+		h.resultStale = true
+		return 0
+	}
+	_, _, shop, found := h.Env.PropScript(prop)
+	if !found {
+		h.resultStale = true
+		return 0
+	}
+	for _, open := range h.Shops {
+		if strings.EqualFold(open, shop) {
+			h.setResultText(open)
+			return 0
+		}
+	}
+	return 0x0a
+}
+
 // resultValue is FUN_00415C20, result 16010 as a value: *status = 0 and a copy of
 // the slot. Any argument makes the dispatcher's ')' check fail with status 2, so
 // the handler's own result is only returned for the empty call.
@@ -257,7 +312,7 @@ func (h *GameHost) resultValue(call *ScriptCall) (Record, int, uint16, error) {
 		return Record{}, 0, ScriptStatusMalformed, nil
 	}
 	if h.resultStale {
-		return Record{}, 0, 0, fmt.Errorf("%w: result after indextoactor or indextoprop (their slot writes FUN_0040D090 and FUN_00421210 are not ported)", ErrHostOpcodeUnimplemented)
+		return Record{}, 0, 0, fmt.Errorf("%w: result after indextoactor or indextoprop whose slot content is unknown (a missing cast or prop hook, or a prop with no known owner)", ErrHostOpcodeUnimplemented)
 	}
 	record, status, err := call.Interpreter.Record(ScriptValue{Kind: 3, Text: PascalTextOf(h.context.ResultBuffer)})
 	if err != nil || status != 0 {

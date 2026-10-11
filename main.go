@@ -474,7 +474,7 @@ func run() error {
 			for index, pose := range actor.Poses {
 				poses[index] = pose.Name
 			}
-			scriptActors.Add(scripts.NewCastActorRecord(cast.Name, actor.Name, actor.Selector, actor.Location, actor.Script, poses))
+			scriptActors.Add(scripts.NewCastActorRecord(cast.ScriptName, actor.Name, actor.Selector, actor.Location, actor.Script, poses))
 			scriptActorCasts[key], scriptActorRecords[key] = cast, actor
 			scriptActorOrder = append(scriptActorOrder, key)
 		}

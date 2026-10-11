@@ -303,9 +303,9 @@ type GameHost struct {
 	// context holds the result slot DAT_00459720 (ResultBuffer) that the result
 	// statement and value and the hittest value share.
 	context ScriptContextState
-	// resultStale is set when a builtin that writes the slot natively has run without
-	// its writer being ported (indextoactor and indextoprop), so the slot's content is
-	// unknown and result() reports a gap until a ported writer stores a value.
+	// resultStale is set when indextoactor or indextoprop succeeds but cannot name the
+	// slot's content: the cast or prop hook is missing, or the prop's owner is unknown.
+	// result() then reports a gap until a writer stores a value.
 	resultStale bool
 	// Props is the prop table scripts read and write; the game keeps its own
 	// copies of owner and degree in step around script runs.
@@ -1051,8 +1051,11 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 		if !ok {
 			return Record{}, 0, 0x0a, nil
 		}
-		// FUN_0040D090 also writes the result slot (the cast name), which is not ported.
-		h.resultStale = true
+		// FUN_0040D090 writes the owning cast's name into the slot after the index
+		// check and before the actor name is returned.
+		if status := h.actorCastResult(actor); status != 0 {
+			return Record{}, 0, status, nil
+		}
 		return text(actor.Name, consumed)
 	case "propdist":
 		prop, _, consumed, status, err := h.propArgs(call, 1)
@@ -1369,8 +1372,11 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 		if !ok {
 			return Record{}, 0, 0x0a, nil
 		}
-		// FUN_00421210 also writes the result slot (the owning shop's name), which is not ported.
-		h.resultStale = true
+		// FUN_00421210 writes the prop's owning shop name into the slot after the
+		// index check and before the prop name is returned.
+		if status := h.propShopResult(name); status != 0 {
+			return Record{}, 0, status, nil
+		}
 		return text(name, consumed)
 	case "countcasts":
 		// FUN_0040D060 (opcode 20029) takes no arguments and returns DAT_004599E4
