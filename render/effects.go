@@ -9,7 +9,7 @@ import (
 type BarndoorEffect struct {
 	from         IndexedFrame
 	target       IndexedFrame
-	bandHeight   int
+	bandWidth    int
 	ticksPerStep int
 	step         int
 	elapsed      int
@@ -103,7 +103,7 @@ func newBarndoorEffect(from, target IndexedFrame, duration int, open bool) (*Bar
 	}
 	from.Pixels = append([]byte(nil), from.Pixels...)
 	target.Pixels = append([]byte(nil), target.Pixels...)
-	effect := &BarndoorEffect{from: from, target: target, bandHeight: from.Height/16 + 1, ticksPerStep: stepTicks, step: 1, open: open}
+	effect := &BarndoorEffect{from: from, target: target, bandWidth: from.Width/16 + 1, ticksPerStep: stepTicks, step: 1, open: open}
 	if from.rgba != nil || target.rgba != nil {
 		var err error
 		effect.fromRGBA, err = from.rgbaImage()
@@ -118,6 +118,10 @@ func newBarndoorEffect(from, target IndexedFrame, duration int, open bool) (*Bar
 	return effect, nil
 }
 
+// CurrentFrame returns the screen during the wait after the bands so far.
+// The native bands are vertical strips. FUN_004072C0 and FUN_00407390 take the
+// band size from word 3 minus word 1 of the stage rectangle, and word 1 is the
+// x that the BitBlt reads, so each band is bandWidth columns of full height.
 func (e *BarndoorEffect) CurrentFrame() IndexedFrame {
 	if e == nil {
 		return IndexedFrame{}
@@ -128,38 +132,33 @@ func (e *BarndoorEffect) CurrentFrame() IndexedFrame {
 		rgba = image.NewRGBA(image.Rect(0, 0, e.from.Width, e.from.Height))
 		draw.Draw(rgba, rgba.Bounds(), e.fromRGBA, image.Point{}, draw.Src)
 	}
-	center := e.from.Height / 2
+	copyColumns := func(start, end int) {
+		if start < 0 {
+			start = 0
+		}
+		if end > e.from.Width {
+			end = e.from.Width
+		}
+		if start >= end {
+			return
+		}
+		for y := 0; y < e.from.Height; y++ {
+			copy(pixels[y*e.from.Width+start:y*e.from.Width+end], e.target.Pixels[y*e.target.Width+start:y*e.target.Width+end])
+			if rgba != nil {
+				copy(rgba.Pix[y*rgba.Stride+start*4:y*rgba.Stride+end*4], e.targetRGBA.Pix[y*e.targetRGBA.Stride+start*4:y*e.targetRGBA.Stride+end*4])
+			}
+		}
+	}
+	center := e.from.Width / 2
 	for band := 0; band < e.step; band++ {
-		topStart, topEnd := band*e.bandHeight, (band+1)*e.bandHeight
-		bottomStart, bottomEnd := e.from.Height-(band+1)*e.bandHeight, e.from.Height-band*e.bandHeight
+		leftStart, leftEnd := band*e.bandWidth, (band+1)*e.bandWidth
+		rightStart, rightEnd := e.from.Width-(band+1)*e.bandWidth, e.from.Width-band*e.bandWidth
 		if e.open {
-			topStart, topEnd = center-(band+1)*e.bandHeight, center-band*e.bandHeight
-			bottomStart, bottomEnd = center+band*e.bandHeight, center+(band+1)*e.bandHeight
+			leftStart, leftEnd = center-(band+1)*e.bandWidth, center-band*e.bandWidth
+			rightStart, rightEnd = center+band*e.bandWidth, center+(band+1)*e.bandWidth
 		}
-		if topStart < 0 {
-			topStart = 0
-		}
-		if topEnd > e.from.Height {
-			topEnd = e.from.Height
-		}
-		if bottomStart < 0 {
-			bottomStart = 0
-		}
-		if bottomEnd > e.from.Height {
-			bottomEnd = e.from.Height
-		}
-		for y := topStart; y < topEnd; y++ {
-			copy(pixels[y*e.from.Width:(y+1)*e.from.Width], e.target.Pixels[y*e.target.Width:(y+1)*e.target.Width])
-			if rgba != nil {
-				copy(rgba.Pix[y*rgba.Stride:y*rgba.Stride+e.from.Width*4], e.targetRGBA.Pix[y*e.targetRGBA.Stride:y*e.targetRGBA.Stride+e.from.Width*4])
-			}
-		}
-		for y := bottomStart; y < bottomEnd; y++ {
-			copy(pixels[y*e.from.Width:(y+1)*e.from.Width], e.target.Pixels[y*e.target.Width:(y+1)*e.target.Width])
-			if rgba != nil {
-				copy(rgba.Pix[y*rgba.Stride:y*rgba.Stride+e.from.Width*4], e.targetRGBA.Pix[y*e.targetRGBA.Stride:y*e.targetRGBA.Stride+e.from.Width*4])
-			}
-		}
+		copyColumns(leftStart, leftEnd)
+		copyColumns(rightStart, rightEnd)
 	}
 	return IndexedFrame{Width: e.from.Width, Height: e.from.Height, Pixels: pixels, Palette: e.target.Palette, rgba: rgba}
 }
