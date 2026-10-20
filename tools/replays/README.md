@@ -22,3 +22,11 @@ tool with `-set=nitecour -clock=3`, which is the night courtyard file (its rows 
 go run ./tools/courtsave -from=bin/saves/ballsacks.rtd -set=nitecour -clock=3 -out=bin/courtyard-night.json
 go run . --silent --debug --work=bin/ --load=bin/courtyard-night.json --silent-script=tools/replays/courtyard-night-snapshots.json
 ```
+
+`chin-door-exit.json` checks the Chinese restaurant's rice door the same way: the save starts
+in Scene A2 facing west, the click opens the door, and the up arrow leads out to the town.
+
+```bash
+go run ./tools/courtsave -from=bin/saves/ballsacks.rtd -set=chin -scene="Scene A2" -point=0,1,4 -out=bin/chin.json
+go run . --silent --debug --work=bin/ --load=bin/chin.json --silent-script=tools/replays/chin-door-exit.json
+```

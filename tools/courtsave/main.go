@@ -7,6 +7,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 
 	"redust/save"
@@ -15,9 +16,10 @@ import (
 func main() {
 	from := flag.String("from", "bin/saves/ballsacks.rtd", "existing save to start from")
 	out := flag.String("out", "", "JSON save to write")
-	set := flag.String("set", "court", "set name (court or nitecour)")
+	set := flag.String("set", "court", "set file name: court, nitecour, chin, and so on")
 	scene := flag.String("scene", "Scene C5", "view name; C5 is the courtyard's south view, facing south")
 	clock := flag.Int("clock", 1, "game clock; 3 is night, which opens nitecour when the set is night")
+	point := flag.String("point", "2,4,2", "world point as direction,scene,facing (1 north, 2 south, 3 east, 4 west)")
 	flag.Parse()
 	if *out == "" {
 		log.Fatal("-out is required")
@@ -28,7 +30,11 @@ func main() {
 	}
 	progress.SetName = *set
 	progress.ViewName = *scene
-	progress.Point = [3]int16{2, 4, 2}
+	var pointValue [3]int16
+	if _, err := fmt.Sscanf(*point, "%d,%d,%d", &pointValue[0], &pointValue[1], &pointValue[2]); err != nil {
+		log.Fatalf("-point must be direction,scene,facing: %v", err)
+	}
+	progress.Point = pointValue
 	progress.Day = 1
 	progress.Clock = *clock
 	progress.TownReturnScene = "Scene G8"

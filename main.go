@@ -1402,7 +1402,16 @@ func run() error {
 	// FUN_00419D20, FUN_00419EE0, FUN_00419BC0 and FUN_00419C70 do for the sets
 	// whose scripts the port runs. setEventsOpen is true between the set's open
 	// and close events.
-	scriptedSets := map[string]bool{"town": true, "court": true}
+	// scriptedSets are the sets whose shipped scripts drive their mouse, cursor and keys (the
+	// BOOTFILE chain). The hotel and Sallower sets stay with the story code, which drives them by
+	// hand, and MAYROOM keeps its hotel-story trigger, so none of those are listed.
+	scriptedSets := map[string]bool{
+		"town": true, "court": true,
+		"apoth": true, "bank": true, "chin": true, "doctor1": true, "doctor2": true, "jail": true,
+		"livery": true, "maydine": true, "mayhall": true, "maystudy": true, "mayupper": true,
+		"nitescho": true, "padre": true, "paper": true, "school": true, "stage": true, "store": true,
+		"undertak": true,
+	}
 	setEventsOpen := false
 	var raiseSetEvent func(set bool, message string) error
 	deliverScriptEvent := func(event scripts.ActorEvent) error {

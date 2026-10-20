@@ -1,0 +1,12 @@
+{
+  "actions": [
+    {"type": "wait", "milliseconds": 500},
+    {"type": "assert", "expect": {"set": "chin"}},
+    {"type": "click", "x": 250, "y": 150},
+    {"type": "wait", "milliseconds": 1500},
+    {"type": "key", "key": "ArrowUp"},
+    {"type": "wait", "milliseconds": 3000},
+    {"type": "assert", "expect": {"set": "town"}},
+    {"type": "snapshot", "path": "bin/chin-after-exit.png"}
+  ]
+}
