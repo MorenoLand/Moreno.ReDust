@@ -1,0 +1,6 @@
+{
+  "actions": [
+    {"type": "wait", "milliseconds": 800},
+    {"type": "assert", "expect": {"set": "snake"}}
+  ]
+}

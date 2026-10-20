@@ -1136,6 +1136,27 @@ func run() error {
 		scriptHost.Props.AddToTable(name)
 	}
 	scriptInterpreter := scripts.NewInterpreter(scriptHost)
+	// opentrackfile resolves its name through the path pages, as openshopfile does, so an
+	// underground set's track (UNDER/SNAKE.SND) is found under its own path.
+	tracks.Resolve = func(name string) (string, bool) {
+		if scriptInterpreter == nil {
+			return "", false
+		}
+		var resolved string
+		resolution, _, _ := scripts.ResolveStageFileInPrefixes(name, scriptInterpreter.StagePrefix, func(candidate string) (bool, bool) {
+			asset, err := assets.ResolveAssetName(candidate)
+			if err != nil {
+				return false, false
+			}
+			path := strings.ToUpper(asset)
+			if !workspace.HasAsset(path) {
+				return false, false
+			}
+			resolved = path
+			return true, true
+		})
+		return resolved, resolution == scripts.StageResolved
+	}
 	// The port never runs BOOTFILE's boot(), whose path statements set pages 1..5 and
 	// 8. The stage search reads those pages live, so they are set here.
 	if err := scriptInterpreter.SetBootContextPages(); err != nil {
@@ -1410,7 +1431,7 @@ func run() error {
 		"apoth": true, "bank": true, "chin": true, "doctor1": true, "doctor2": true, "jail": true,
 		"livery": true, "maydine": true, "mayhall": true, "maystudy": true, "mayupper": true,
 		"nitescho": true, "padre": true, "paper": true, "school": true, "stage": true, "store": true,
-		"undertak": true,
+		"undertak": true, "hub": true, "mine": true, "snake": true, "tbird": true, "flute": true,
 	}
 	setEventsOpen := false
 	var raiseSetEvent func(set bool, message string) error
@@ -1866,7 +1887,14 @@ func run() error {
 				nextOwned = err == nil
 			}
 		} else {
+			// A set is in DATA, or in UNDER for the underground sets (HUB, MINE, SNAKE, TBIRD,
+			// FLUTE), which the hub's gotointerior and gotospecial calls open.
 			nextSet, err = workspace.OpenSet("DATA/" + strings.ToUpper(setName) + ".SET")
+			if err != nil {
+				if underSet, underErr := workspace.OpenSet("UNDER/" + strings.ToUpper(setName) + ".SET"); underErr == nil {
+					nextSet, err = underSet, nil
+				}
+			}
 			nextOwned = err == nil
 		}
 		if err != nil {

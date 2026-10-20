@@ -38,6 +38,9 @@ type soundChannel struct {
 // channel.
 type Tracks struct {
 	workspace assets.Workspace
+	// Resolve maps a track name to its asset path through the stage-file search
+	// (FUN_004178C0), which opentrackfile runs. Nil, or a name it does not resolve, uses DATA/.
+	Resolve func(name string) (path string, ok bool)
 	context   *ebitenaudio.Context
 	open      []*OpenTrack
 	loops     map[string]*Player
@@ -93,6 +96,11 @@ func (t *Tracks) TrackName(index int) (name string, found bool) {
 // OpenTrack is opentrackfile.
 func (t *Tracks) OpenTrack(file string) error {
 	path := "DATA/" + strings.ToUpper(strings.TrimPrefix(strings.ReplaceAll(file, `\`, "/"), "DATA/"))
+	if t.Resolve != nil {
+		if resolved, ok := t.Resolve(file); ok {
+			path = resolved
+		}
+	}
 	bank, err := OpenSoundBank(t.workspace, path)
 	if err != nil {
 		return err
