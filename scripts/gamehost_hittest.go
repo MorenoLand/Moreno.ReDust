@@ -151,21 +151,28 @@ func (h *GameHost) hitTestPoint(packed uint32) (string, uint16, error) {
 // The walk returns the hit entry's id, the entry's +0x04 dword. For a prop that is the
 // prop's stamp (+0x2E, FUN_00421820 copies it), and hitIdentity turns it into a name.
 func (h *GameHost) worldWalkHit(packed uint32) (uint32, bool, error) {
-	// A projected actor is the sprite the frame draws, and the first one under the point
-	// answers, as the click test does. Its stamp names it, so hitIdentity labels it an actor.
 	if len(h.actorKeys()) > 0 && h.Env.ActorHitAt == nil {
 		return 0, false, fmt.Errorf("%w: hittest with actors in the table and no projected-actor hook", ErrHostOpcodeUnimplemented)
 	}
+	// The projected actor under the point is one entry of the walk, with its depth as its
+	// key (FUN_0040DB70 stores the depth at entry +0x0C). The walk visits entries in
+	// ascending key order, so the actor is decided when the walk reaches its key. A tie goes
+	// to the actor, which the native order does not show.
+	var actor *ActorRecord
+	var actorKey int16
 	if h.Env.ActorHitAt != nil {
-		if name, hit := h.Env.ActorHitAt(packed); hit {
-			actor, status := h.Actors.Lookup(name)
+		if name, depth, hit := h.Env.ActorHitAt(packed); hit {
+			record, status := h.Actors.Lookup(name)
 			if status != 0 {
 				return 0, false, fmt.Errorf("%w: projected actor %q is not in the actor table", ErrHostOpcodeUnimplemented, name)
 			}
-			return actor.Stamp, true, nil
+			actor, actorKey = record, depth
 		}
 	}
 	if h.Props == nil {
+		if actor != nil {
+			return actor.Stamp, true, nil
+		}
 		return 0, false, nil
 	}
 	names := h.Props.TableNames()
@@ -180,6 +187,9 @@ func (h *GameHost) worldWalkHit(packed uint32) (uint32, bool, error) {
 	point := PointFromPacked(packed)
 	for i := len(list) - 1; i >= 0; i-- {
 		entry := list[i]
+		if actor != nil && actorKey <= entry.key {
+			return actor.Stamp, true, nil
+		}
 		if !ContainsPoint(point, entry.rect) {
 			continue
 		}
@@ -194,6 +204,9 @@ func (h *GameHost) worldWalkHit(packed uint32) (uint32, bool, error) {
 			continue
 		}
 		return entry.stamp, true, nil
+	}
+	if actor != nil {
+		return actor.Stamp, true, nil
 	}
 	return 0, false, nil
 }

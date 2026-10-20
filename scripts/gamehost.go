@@ -266,9 +266,9 @@ type GameHostEnv struct {
 	// (FUN_0040C4C0). An unknown cast is status 0x0A on close.
 	OpenCast  func(name string) (status uint16, err error)
 	// ActorHitAt is the first projected actor under a packed point, as the frame draws it
-	// (the click test's order). ActorHitIn reports whether one named projected actor holds
+	// (the click test's order), with its depth, which is the actor's walk key. ActorHitIn reports whether one named projected actor holds
 	// the point, which pointinactor asks.
-	ActorHitAt func(packed uint32) (name string, hit bool)
+	ActorHitAt func(packed uint32) (name string, depth int16, hit bool)
 	ActorHitIn func(name string, packed uint32) bool
 	CloseCast func(name string) (status uint16, err error)
 	// StageName is the open stage's name, DAT_00459A14: the header's Pascal name at

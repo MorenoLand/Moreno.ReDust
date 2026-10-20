@@ -3188,8 +3188,17 @@ func run() error {
 	}
 	// The projected actors are the ones the frame draws this frame, so the click test's mask
 	// answers the script hit tests (hittest and pointinactor) for them.
-	scriptHost.Env.ActorHitAt = func(packed uint32) (string, bool) {
-		return render.HitTestWorldActors(projectedActors, image.Pt(int(int16(packed>>16)), int(int16(packed))))
+	scriptHost.Env.ActorHitAt = func(packed uint32) (string, int16, bool) {
+		name, hit := render.HitTestWorldActors(projectedActors, image.Pt(int(int16(packed>>16)), int(int16(packed))))
+		if !hit {
+			return "", 0, false
+		}
+		for _, actor := range projectedActors {
+			if actor.Name == name {
+				return name, int16(actor.Depth), true
+			}
+		}
+		return name, 0, true
 	}
 	scriptHost.Env.ActorHitIn = func(name string, packed uint32) bool {
 		return render.HitTestWorldActorNamed(projectedActors, name, image.Pt(int(int16(packed>>16)), int(int16(packed))))
