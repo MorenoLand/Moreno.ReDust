@@ -276,6 +276,33 @@ func (s *Set) FindViewByIDs(directionID, sceneID uint16) (SetView, bool) {
 	return SetView{}, false
 }
 
+// BackgroundRow is one row of the set's background table: the point it leaves, the point
+// it enters, and the background resource drawn for that move. Development tools list the
+// rows to choose a start point; the game reads them through BackgroundResourceForPoints.
+type BackgroundRow struct {
+	From, To [3]int16
+	Resource uint32
+}
+
+// BackgroundRows lists every row of the background table in table order.
+func (s *Set) BackgroundRows() []BackgroundRow {
+	if s == nil {
+		return nil
+	}
+	rows := make([]BackgroundRow, 0, s.backgroundCount)
+	for index := 0; index < s.backgroundCount; index++ {
+		row := s.backgroundTable[index*setBackgroundRowSize : (index+1)*setBackgroundRowSize]
+		var entry BackgroundRow
+		for axis := 0; axis < 3; axis++ {
+			entry.From[axis] = int16(binary.LittleEndian.Uint16(row[axis*2 : axis*2+2]))
+			entry.To[axis] = int16(binary.LittleEndian.Uint16(row[(axis+3)*2 : (axis+4)*2]))
+		}
+		entry.Resource = binary.LittleEndian.Uint32(row[24:28])
+		rows = append(rows, entry)
+	}
+	return rows
+}
+
 func (s *Set) BackgroundResourceForPoints(from, to [3]int16) (uint32, bool, error) {
 	if s == nil {
 		return 0, false, fmt.Errorf("SET is unavailable")
