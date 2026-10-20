@@ -450,6 +450,17 @@ func (h *GameHost) command(call *ScriptCall) (int, uint16, error) {
 		return h.resultStatement(call)
 	case "notedialog":
 		return h.noteDialog(call)
+	case "menuvisible":
+		// FUN_004259A0 takes one boolean (0x0E otherwise). Its true and false paths call
+		// FUN_0042D9F0 and FUN_0042DA00, which are empty, so the command changes nothing.
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return 0, status, err
+		}
+		if len(args) != 1 || args[0].Kind != 2 {
+			return 0, ScriptStatusWrongType, nil
+		}
+		return consumed, 0, nil
 	case "actorvisible":
 		actor, args, consumed, status, err := h.actorArgs(call, 2)
 		if err != nil || status != 0 {
@@ -1633,6 +1644,14 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 			}
 		}
 		return text(name, consumed)
+	case "menuvisible":
+		_, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		// FUN_00414F20 copies DAT_00459680 raw. FUN_00427FE0 sets it to 1 at startup,
+		// and no other code writes it, so the value is always true.
+		return Record{Kind: 2, Data: 1}, consumed, 0, nil
 	case "pointinbutton":
 		return h.pointInButton(call)
 	case "pointinprop":
