@@ -1402,7 +1402,7 @@ func run() error {
 	// FUN_00419D20, FUN_00419EE0, FUN_00419BC0 and FUN_00419C70 do for the sets
 	// whose scripts the port runs. setEventsOpen is true between the set's open
 	// and close events.
-	scriptedSets := map[string]bool{"town": true, "court": true, "nitecour": true}
+	scriptedSets := map[string]bool{"town": true, "court": true}
 	setEventsOpen := false
 	var raiseSetEvent func(set bool, message string) error
 	deliverScriptEvent := func(event scripts.ActorEvent) error {
@@ -1840,6 +1840,12 @@ func run() error {
 	switchSpecialSet := func(setName, sceneName, directionName string) (render.IndexedFrame, error) {
 		setName = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(strings.TrimPrefix(setName, "DATA/")), ".set"))
 		semanticName := setName
+		if setName == "nitecour" {
+			// NITECOUR.SET names its coordinate rows court, as COURT.SET does, and the shipped
+			// props set the court name (propset(me,"court")). The night courtyard is therefore
+			// the court set for the prop and scene checks; the file is still NITECOUR.SET.
+			semanticName = "court"
+		}
 		var nextSet *assets.Set
 		nextOwned := false
 		if setName == "town" || setName == "nite" {

@@ -1,0 +1,14 @@
+{
+  "actions": [
+    {"type": "wait", "milliseconds": 500},
+    {"type": "assert", "expect": {"set": "court"}},
+    {"type": "snapshot", "path": "bin/courtyard-night-before-door.png"},
+    {"type": "click", "x": 260, "y": 150},
+    {"type": "wait", "milliseconds": 1500},
+    {"type": "snapshot", "path": "bin/courtyard-night-door-after-click.png"},
+    {"type": "key", "key": "ArrowUp"},
+    {"type": "wait", "milliseconds": 3000},
+    {"type": "assert", "expect": {"set": "town"}},
+    {"type": "snapshot", "path": "bin/courtyard-night-after-exit.png"}
+  ]
+}

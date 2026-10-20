@@ -13,3 +13,12 @@ go run . --silent --debug --work=bin/ --load=bin/courtyard.json --silent-script=
 The replay asserts the set is `court` after the click and `town` after the exit. The
 snapshots show the open door and the street outside. `tools/setviews` lists the views of
 any set, for choosing another save point.
+
+`courtyard-night-snapshots.json` is the same check at night. Its save comes from the same
+tool with `-set=nitecour -clock=3`, which is the night courtyard file (its rows are named
+`court`, so the port reports the set as `court`):
+
+```bash
+go run ./tools/courtsave -from=bin/saves/ballsacks.rtd -set=nitecour -clock=3 -out=bin/courtyard-night.json
+go run . --silent --debug --work=bin/ --load=bin/courtyard-night.json --silent-script=tools/replays/courtyard-night-snapshots.json
+```
