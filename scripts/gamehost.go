@@ -1113,6 +1113,25 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 			return Record{}, 0, 0x0a, nil
 		}
 		return text(name, consumed)
+	case "flattoindex":
+		if _, open := h.openFlats(); !open {
+			return Record{}, 0, StatusNoActiveStage, nil
+		}
+		if h.Env.FlatIndex == nil {
+			return Record{}, 0, 0, h.gap(call)
+		}
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		if len(args) != 1 || args[0].Kind != 3 {
+			return Record{}, 0, ScriptStatusWrongType, nil
+		}
+		flat, found := h.Env.FlatIndex(args[0].Text)
+		if !found {
+			return number(0, consumed)
+		}
+		return number(int32(flat+1), consumed)
 	case "countbuttons":
 		if _, open := h.openFlats(); !open {
 			return Record{}, 0, StatusNoActiveStage, nil
