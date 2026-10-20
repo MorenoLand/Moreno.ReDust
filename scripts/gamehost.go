@@ -34,9 +34,6 @@ type GameHostEnv struct {
 	// ProjectedDepth is FUN_0040DB70 for one actor: its depth and whether it
 	// survives the cull.
 	ProjectedDepth func(actor *ActorRecord) (int16, bool)
-	// PropDepth is the projected depth of a prop the world draws, for propdist
-	// (FUN_0041F400 projects the prop with FUN_00421820); false when it is not drawn.
-	PropDepth func(name string) (int16, bool)
 	// BallBlocked reports whether a ball at cell (x, y) meets a backdrop: the set's
 	// view there has Flags set (FUN_00406B70 reads SetView.Flags at +8).
 	BallBlocked func(x, y int) bool
@@ -1221,11 +1218,26 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 		if err != nil || status != 0 {
 			return Record{}, 0, status, err
 		}
-		// A prop that is not drawn reports 32000, as FUN_0041F400 does.
+		// FUN_0041F400: a path A prop (word 9 zero) answers its word 20, the walker word, with
+		// no visibility test. A path B prop answers the depth FUN_00421820 stores when it keeps
+		// the record, and 32000 when it does not. FUN_00421820 returns at once for a hidden record.
+		if !prop.Projected {
+			return number(int32(prop.Walker), consumed)
+		}
 		distance := int32(32000)
-		if h.Env.PropDepth != nil {
-			if depth, ok := h.Env.PropDepth(prop.Name); ok {
-				distance = int32(depth)
+		if h.Env.PropPoint != nil {
+			record, found, err := h.Env.PropPoint(prop.Name)
+			if err != nil {
+				return Record{}, 0, 0, err
+			}
+			if found && record.Visible {
+				cull, listed, err := h.projectedPropCull(record)
+				if err != nil {
+					return Record{}, 0, 0, err
+				}
+				if listed {
+					distance = int32(cull.depth)
+				}
 			}
 		}
 		return number(distance, consumed)

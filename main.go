@@ -891,14 +891,6 @@ func run() error {
 			}
 			return int32(worldPoint[0])*256 + 128, int32(worldPoint[1])*256 + 128, z
 		},
-		PropDepth: func(name string) (int16, bool) {
-			for _, projected := range projectedActors {
-				if strings.EqualFold(projected.Name, name) {
-					return int16(projected.Depth), true
-				}
-			}
-			return 0, false
-		},
 		Heading: render.NativeActorHeadingToPoint,
 		// frame() is DAT_00459998, which FUN_004059D0 advances once per pump (20 a
 		// second), not the 60 Hz tick counter.
