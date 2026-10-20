@@ -40,3 +40,14 @@ go run . --silent --debug --work=bin/ --load=bin/store.json --silent-script=tool
 
 Note: courtsave sets the town return scene to Scene G8, so every test exit lands on that street.
 Real saves record the scene the player entered from.
+
+`underground-open.json` needs a save in the snake set. Its first background row is Scene B2 facing west:
+
+```bash
+go run ./tools/courtsave -from=bin/saves/ballsacks.rtd -set=snake -scene="Scene B2" -point=1,1,1 -out=bin/snake.json
+go run . --silent --debug --work=bin/ --load=bin/snake.json --silent-script=tools/replays/underground-open.json
+```
+
+The target range (`TARGET/TARGET.SET`) opens from its first row, Scene I13, facing west
+(`-point=8,12,1`). Its openset expects the game's entry script to have set the path first,
+so a save-started open reports `openstagefile` status 0x2a, which is a test artifact.

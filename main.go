@@ -1432,6 +1432,7 @@ func run() error {
 		"livery": true, "maydine": true, "mayhall": true, "maystudy": true, "mayupper": true,
 		"nitescho": true, "padre": true, "paper": true, "school": true, "stage": true, "store": true,
 		"undertak": true, "hub": true, "mine": true, "snake": true, "tbird": true, "flute": true,
+		"target": true,
 	}
 	setEventsOpen := false
 	var raiseSetEvent func(set bool, message string) error
@@ -1887,11 +1888,14 @@ func run() error {
 				nextOwned = err == nil
 			}
 		} else {
-			// A set is in DATA, or in UNDER for the underground sets (HUB, MINE, SNAKE, TBIRD,
-			// FLUTE), which the hub's gotointerior and gotospecial calls open.
+			// A set is in DATA, or in UNDER (the underground sets HUB, MINE, SNAKE, TBIRD and FLUTE)
+			// or TARGET (the target range), which the gotointerior and gotospecial calls open.
 			nextSet, err = workspace.OpenSet("DATA/" + strings.ToUpper(setName) + ".SET")
-			if err != nil {
-				if underSet, underErr := workspace.OpenSet("UNDER/" + strings.ToUpper(setName) + ".SET"); underErr == nil {
+			for _, folder := range []string{"UNDER", "TARGET"} {
+				if err == nil {
+					break
+				}
+				if underSet, underErr := workspace.OpenSet(folder + "/" + strings.ToUpper(setName) + ".SET"); underErr == nil {
 					nextSet, err = underSet, nil
 				}
 			}
