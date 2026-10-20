@@ -991,6 +991,22 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 			return Record{}, 0, status, nil
 		}
 		return result.Record(), consumed, 0, nil
+	case "pointinstage":
+		// FUN_00412690: the argument must be numeric (0x0E) and gives no result otherwise.
+		// The result is a type-2 boolean: false unless a stage is open (DAT_00459A00) and
+		// DAT_00459A02 is set, and otherwise the hit test on the stage view rectangle.
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		if len(args) != 1 {
+			return Record{}, 0, ScriptStatusWrongType, nil
+		}
+		result, status := PointInStageValue(args[0].Kind, uint32(args[0].Int), h.stageIsOpen(), h.StageVisible != 0)
+		if status != 0 {
+			return Record{}, 0, status, nil
+		}
+		return result.Record(), consumed, 0, nil
 	case "questiondialog":
 		return h.questionDialog(call)
 	case "textdialog":
