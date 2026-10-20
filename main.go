@@ -3186,6 +3186,14 @@ func run() error {
 		openCasts = openCasts[:last]
 		return 0, nil
 	}
+	// The projected actors are the ones the frame draws this frame, so the click test's mask
+	// answers the script hit tests (hittest and pointinactor) for them.
+	scriptHost.Env.ActorHitAt = func(packed uint32) (string, bool) {
+		return render.HitTestWorldActors(projectedActors, image.Pt(int(int16(packed>>16)), int(int16(packed))))
+	}
+	scriptHost.Env.ActorHitIn = func(name string, packed uint32) bool {
+		return render.HitTestWorldActorNamed(projectedActors, name, image.Pt(int(int16(packed>>16)), int(int16(packed))))
+	}
 	scriptHost.Env.EndBall = func(name, message string) error {
 		source, label := fmt.Sprintf("sendtoprop(%q,endball(%q))", name, message), name+" endball("+message+")"
 		if scriptTask != nil {

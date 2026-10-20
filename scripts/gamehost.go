@@ -265,6 +265,11 @@ type GameHostEnv struct {
 	// OpenCast is opencastfile's install (FUN_0040BFA0) and CloseCast closecastfile's
 	// (FUN_0040C4C0). An unknown cast is status 0x0A on close.
 	OpenCast  func(name string) (status uint16, err error)
+	// ActorHitAt is the first projected actor under a packed point, as the frame draws it
+	// (the click test's order). ActorHitIn reports whether one named projected actor holds
+	// the point, which pointinactor asks.
+	ActorHitAt func(packed uint32) (name string, hit bool)
+	ActorHitIn func(name string, packed uint32) bool
 	CloseCast func(name string) (status uint16, err error)
 	// StageName is the open stage's name, DAT_00459A14: the header's Pascal name at
 	// 0x824, copied by FUN_00411900. FUN_00413230 gives the stage frame it as Me and
@@ -1783,6 +1788,8 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 			return Record{}, 0, status, err
 		}
 		return number(int32(h.mousePoint), consumed)
+	case "pointinactor":
+		return h.pointInActor(call)
 	case "pointinbutton":
 		return h.pointInButton(call)
 	case "pointinprop":

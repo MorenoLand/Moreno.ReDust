@@ -151,13 +151,18 @@ func (h *GameHost) hitTestPoint(packed uint32) (string, uint16, error) {
 // The walk returns the hit entry's id, the entry's +0x04 dword. For a prop that is the
 // prop's stamp (+0x2E, FUN_00421820 copies it), and hitIdentity turns it into a name.
 func (h *GameHost) worldWalkHit(packed uint32) (uint32, bool, error) {
-	actorKeys := h.actorKeys()
-	if len(actorKeys) > 0 && h.Env.ProjectedDepth == nil {
-		return 0, false, fmt.Errorf("%w: hittest with actors in the table and no projection hook (FUN_0040DB70)", ErrHostOpcodeUnimplemented)
+	// A projected actor is the sprite the frame draws, and the first one under the point
+	// answers, as the click test does. Its stamp names it, so hitIdentity labels it an actor.
+	if len(h.actorKeys()) > 0 && h.Env.ActorHitAt == nil {
+		return 0, false, fmt.Errorf("%w: hittest with actors in the table and no projected-actor hook", ErrHostOpcodeUnimplemented)
 	}
-	for _, key := range actorKeys {
-		if _, projected := h.Env.ProjectedDepth(h.Actors.actors[key]); projected {
-			return 0, false, fmt.Errorf("%w: hittest with a projected actor (FUN_0040DEC0 frame walk and FUN_004398A0 not ported)", ErrHostOpcodeUnimplemented)
+	if h.Env.ActorHitAt != nil {
+		if name, hit := h.Env.ActorHitAt(packed); hit {
+			actor, status := h.Actors.Lookup(name)
+			if status != 0 {
+				return 0, false, fmt.Errorf("%w: projected actor %q is not in the actor table", ErrHostOpcodeUnimplemented, name)
+			}
+			return actor.Stamp, true, nil
 		}
 	}
 	if h.Props == nil {
@@ -191,6 +196,25 @@ func (h *GameHost) worldWalkHit(packed uint32) (uint32, bool, error) {
 		return entry.stamp, true, nil
 	}
 	return 0, false, nil
+}
+
+// pointInActor is pointinactor 20039, FUN_0040B8D0. The name is a string and the actor
+// must be in the table (unknown is 0x0A); the point must be numeric (0x0E). The result is a
+// type-2 boolean that is true when the actor's projected sprite holds the point. The
+// native keeps the actor (FUN_0040DB70), tests the box (FUN_0042E340) and runs the frame
+// walker. The port answers from the sprite mask drawn this frame, the test the click path uses.
+func (h *GameHost) pointInActor(call *ScriptCall) (Record, int, uint16, error) {
+	actor, args, consumed, status, err := h.actorArgs(call, 2)
+	if err != nil || status != 0 {
+		return Record{}, 0, status, err
+	}
+	if args[1].Kind != 4 {
+		return Record{}, 0, ScriptStatusWrongType, nil
+	}
+	if h.Env.ActorHitIn == nil {
+		return Record{}, 0, 0, fmt.Errorf("%w: pointinactor has no projected-actor hook", ErrHostOpcodeUnimplemented)
+	}
+	return Record{Kind: 2, Data: boolWord(h.Env.ActorHitIn(actor.Name, uint32(args[1].Int)))}, consumed, 0, nil
 }
 
 // hitIdentity is the id lookup FUN_004153E0 runs after the walk, in the native order.

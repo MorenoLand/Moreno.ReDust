@@ -7,6 +7,7 @@ import (
 	"image/draw"
 	"math"
 	"sort"
+	"strings"
 
 	"redust/assets"
 )
@@ -277,6 +278,20 @@ func CompositeWorldActorsAndProps(background IndexedFrame, point [3]int16, activ
 	}
 	background.rgba = composite
 	return background, projected, nil
+}
+
+// HitTestWorldActorNamed reports whether the named projected actor holds the point, by
+// the same mask HitTestWorldActors reads. It is false when no projected actor has the
+// name, which is how pointinactor treats an actor the frame did not draw.
+func HitTestWorldActorNamed(actors []ProjectedWorldActor, name string, point image.Point) bool {
+	for _, actor := range actors {
+		if !strings.EqualFold(actor.Name, name) {
+			continue
+		}
+		_, hit := HitTestWorldActors([]ProjectedWorldActor{actor}, point)
+		return hit
+	}
+	return false
 }
 
 func HitTestWorldActors(actors []ProjectedWorldActor, point image.Point) (string, bool) {
