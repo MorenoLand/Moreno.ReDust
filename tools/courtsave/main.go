@@ -17,6 +17,7 @@ func main() {
 	out := flag.String("out", "", "JSON save to write")
 	set := flag.String("set", "court", "set name (court or nitecour)")
 	scene := flag.String("scene", "Scene C5", "view name; C5 is the courtyard's south view, facing south")
+	clock := flag.Int("clock", 1, "game clock; 3 is night, which opens nitecour when the set is night")
 	flag.Parse()
 	if *out == "" {
 		log.Fatal("-out is required")
@@ -29,7 +30,7 @@ func main() {
 	progress.ViewName = *scene
 	progress.Point = [3]int16{2, 4, 2}
 	progress.Day = 1
-	progress.Clock = 1
+	progress.Clock = *clock
 	progress.TownReturnScene = "Scene G8"
 	if err := save.SaveGameProgress(*out, progress); err != nil {
 		log.Fatal(err)
