@@ -257,6 +257,11 @@ type GameHostEnv struct {
 	// FUN_00413430(0) makes flat 0 current. The host loads the file through its
 	// workspace. status is 0 once the stage is installed. Nil makes openstagefile a gap.
 	OpenStage func(name string) (status uint16, err error)
+	// OpenShop is the install openshopfile performs (FUN_00420110). It returns the record
+	// name the open list keeps. CloseShop is closeshopfile's install (FUN_00420630) and
+	// returns the name of the record it closed. An unknown shop is status 0x0A.
+	OpenShop  func(name string) (shopName string, status uint16, err error)
+	CloseShop func(name string) (shopName string, status uint16, err error)
 	// StageName is the open stage's name, DAT_00459A14: the header's Pascal name at
 	// 0x824, copied by FUN_00411900. FUN_00413230 gives the stage frame it as Me and
 	// Target. Nil makes the openstage frame use "stage".
@@ -442,6 +447,61 @@ func (h *GameHost) Command(call *ScriptCall) (int, uint16, error) {
 		h.Env.Diagnose(fmt.Sprintf("%s returned status %#x", opcodeName(call), status))
 	}
 	return consumed, status, err
+}
+
+// shopFileCommand is openshopfile (FUN_00420110) and closeshopfile (FUN_00420630). Each
+// takes one string, which must be a string (0x0E otherwise). An open adds its shop to
+// the open list, and a close removes the matching shop record. The list is the one
+// countshops and indextoshop read.
+func (h *GameHost) shopFileCommand(call *ScriptCall, open bool) (int, uint16, error) {
+	if call.Kind(call.Start+1) != opOpen {
+		return 0, ScriptStatusMalformed, nil
+	}
+	if h.Env.OpenShop == nil || h.Env.CloseShop == nil {
+		return 0, 0, h.gap(call)
+	}
+	record, used, status, err := call.Eval(call.Start + 2)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	if record.Kind != ValueTypeString {
+		return 0, StatusWrongOperandType, nil
+	}
+	name, status, err := call.Interpreter.Value(record)
+	if err != nil || status != 0 {
+		return 0, status, err
+	}
+	if open {
+		shopName, status, err := h.Env.OpenShop(name.Text)
+		if err != nil || status != 0 {
+			return 0, status, err
+		}
+		h.Shops = append(h.Shops, shopName)
+	} else {
+		shopName, status, err := h.Env.CloseShop(name.Text)
+		if err != nil || status != 0 {
+			return 0, status, err
+		}
+		h.removeShop(shopName)
+	}
+	closeAt := call.Start + 2 + used
+	if call.Kind(closeAt) != opClose {
+		return 0, ScriptStatusMalformed, nil
+	}
+	return closeAt + 1 - call.Start, 0, nil
+}
+
+// removeShop takes a shop out of the open list the way FUN_00420630 does: the last record
+// is copied into the freed slot and the count drops.
+func (h *GameHost) removeShop(name string) {
+	for index, shop := range h.Shops {
+		if strings.EqualFold(shop, name) {
+			last := len(h.Shops) - 1
+			h.Shops[index] = h.Shops[last]
+			h.Shops = h.Shops[:last]
+			return
+		}
+	}
 }
 
 func (h *GameHost) command(call *ScriptCall) (int, uint16, error) {
@@ -795,6 +855,8 @@ func (h *GameHost) command(call *ScriptCall) (int, uint16, error) {
 		return h.stageVisibleCommand(call)
 	case "closestagefile":
 		return h.closeStageCommand(call)
+	case "openshopfile", "closeshopfile":
+		return h.shopFileCommand(call, name == "openshopfile")
 	case "openstagefile":
 		return h.openStageCommand(call)
 	case "sendtoactor":

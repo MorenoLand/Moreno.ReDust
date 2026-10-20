@@ -146,6 +146,14 @@ func inventoryCashNeedsRefresh(rendered int32, valid bool, current int32) bool {
 	return !valid || rendered != current
 }
 
+// openShopFile is a shop file openshopfile opened: its file, the record name the shop
+// list keeps (+0x928), and the archive whose props the prop lookups read.
+type openShopFile struct {
+	file    string
+	name    string
+	archive *assets.PropArchive
+}
+
 func run() error {
 	work := flag.String("work", "bin", "work directory; assets are read from its assets child")
 	debug := flag.Bool("debug", false, "enable diagnostics")
@@ -925,15 +933,29 @@ func run() error {
 	propInstances := map[string]string{}
 	// resolveScriptProp is one script prop's world sprite: the view the script chose,
 	// from the same archive and alias the draw uses. Its error is the view lookup's.
+	// openShops are the shop files openshopfile opened, in open order. Their props are
+	// looked up after the boot archives, as their rows come after the boot rows.
+	var openShops []openShopFile
+	archiveForProp := func(key string) *assets.PropArchive {
+		if _, found := inventoryArchive.Definition(key); found {
+			return inventoryArchive
+		}
+		if _, found := propArchive.Definition(key); found {
+			return propArchive
+		}
+		for _, shop := range openShops {
+			if _, found := shop.archive.Definition(key); found {
+				return shop.archive
+			}
+		}
+		return propArchive
+	}
 	resolveScriptProp := func(name string, prop *scripts.PropRecord) (render.WorldPropSprite, error) {
 		key := strings.ToLower(name)
 		if original, aliased := propInstances[key]; aliased {
 			key = original
 		}
-		archive := propArchive
-		if _, found := inventoryArchive.Definition(key); found {
-			archive = inventoryArchive
-		}
+		archive := archiveForProp(key)
 		view, err := archive.View(key, prop.View)
 		if err != nil {
 			return render.WorldPropSprite{}, err
@@ -1050,10 +1072,7 @@ func run() error {
 		if original, aliased := propInstances[key]; aliased {
 			key = original
 		}
-		archive := propArchive
-		if _, found := inventoryArchive.Definition(key); found {
-			archive = inventoryArchive
-		}
+		archive := archiveForProp(key)
 		record := scripts.PropPointRecord{
 			Visible: prop.Visible,
 			// Word 9 is set by propset, propstar and propxyz, cleared by propxy, and stored by
@@ -2612,7 +2631,14 @@ func run() error {
 		case "house":
 			file = "DATA/HOUSE.PRP"
 		default:
-			return "", 0, false
+			for _, shop := range openShops {
+				if strings.EqualFold(shop.name, name) {
+					file = shop.file
+				}
+			}
+			if file == "" {
+				return "", 0, false
+			}
 		}
 		data, err := scriptResource(file, 0)
 		if err != nil || len(data) < 0x928 {
@@ -2654,6 +2680,13 @@ func run() error {
 			return "DATA/INVEN.PRP", definition.ScriptResource, "inven", true
 		}
 		definition, found := propArchive.Definition(name)
+		if !found {
+			for _, shop := range openShops {
+				if definition, found := shop.archive.Definition(name); found {
+					return shop.file, definition.ScriptResource, shop.name, true
+				}
+			}
+		}
 		return "DATA/HOUSE.PRP", definition.ScriptResource, "house", found
 	}
 	// propWarmRecord is a prop's definition block for propwarm and shopwarm, read
@@ -2664,10 +2697,7 @@ func run() error {
 		if original, aliased := propInstances[strings.ToLower(name)]; aliased {
 			definitionName = original
 		}
-		if _, found := inventoryArchive.Definition(definitionName); found {
-			return inventoryArchive.WarmRecord(definitionName)
-		}
-		return propArchive.WarmRecord(definitionName)
+		return archiveForProp(definitionName).WarmRecord(definitionName)
 	}
 	// actorwarm, castwarm, propwarm and shopwarm walk the resource blocks of the
 	// records they name (FUN_0040E120 and FUN_00421DD0), in the native table order.
@@ -2736,10 +2766,7 @@ func run() error {
 		if original, aliased := propInstances[name]; aliased {
 			name = original
 		}
-		if listed, known := inventoryArchive.ViewListed(name, view); known {
-			return listed, true
-		}
-		return propArchive.ViewListed(name, view)
+		return archiveForProp(name).ViewListed(name, view)
 	}
 	// FUN_004204D0: opening a shop file sends each of its props openprop().
 	for _, archive := range []*assets.PropArchive{propArchive, inventoryArchive} {
@@ -2993,6 +3020,79 @@ func run() error {
 			return runScriptIn(label, nil, source)
 		}
 		return startScriptSourceIn(label, nil, source, nil)
+	}
+	// sendPropMessage runs a message the shop installs send: the same run as a sendtoprop
+	// from a script, or a script of its own when none is running.
+	sendPropMessage := func(label, source string) error {
+		if scriptTask != nil {
+			return runScriptIn(label, nil, source)
+		}
+		return startScriptSourceIn(label, nil, source, nil)
+	}
+	// The openshopfile install (FUN_00420110). The name resolves through the stage-file search
+	// (FUN_004178C0), the file loads, each prop row is appended (FUN_00420370) and openprop
+	// is sent to every prop (FUN_004204D0). The record name is the file's Pascal name at
+	// +0x928, which closeshopfile matches.
+	scriptHost.Env.OpenShop = func(name string) (string, uint16, error) {
+		var resolved string
+		resolution, status, err := scripts.ResolveStageFileInPrefixes(name, scriptInterpreter.StagePrefix, func(candidate string) (bool, bool) {
+			asset, err := assets.ResolveAssetName(candidate)
+			if err != nil {
+				return false, false
+			}
+			path := strings.ToUpper(asset)
+			if !workspace.HasAsset(path) {
+				return false, false
+			}
+			resolved = path
+			return true, true
+		})
+		if resolution != scripts.StageResolved {
+			return "", status, err
+		}
+		data, err := scriptResource(resolved, 0)
+		if err != nil || len(data) < 0x928 || 0x929+int(data[0x928]) > len(data) {
+			return "", 0, fmt.Errorf("shop %s has no header", resolved)
+		}
+		shopName := string(data[0x929 : 0x929+int(data[0x928])])
+		archive, err := workspace.OpenPropArchive(resolved)
+		if err != nil {
+			return "", 0, fmt.Errorf("open shop %s: %w", resolved, err)
+		}
+		openShops = append(openShops, openShopFile{file: resolved, name: shopName, archive: archive})
+		for _, prop := range archive.ListNames() {
+			scriptHost.Props.AddToTable(prop)
+		}
+		for _, prop := range archive.ListNames() {
+			if err := sendPropMessage("openprop "+prop, fmt.Sprintf("sendtoprop(%q,openprop())", prop)); err != nil {
+				return "", 0, err
+			}
+		}
+		return shopName, 0, nil
+	}
+	// The closeshopfile install (FUN_00420630). The record is matched by name (FUN_00421520,
+	// 0x0A when no open shop has it). Its prop rows leave the table, each by moving the last
+	// row into its place, and the shop is closed.
+	scriptHost.Env.CloseShop = func(name string) (string, uint16, error) {
+		index := -1
+		for i, shop := range openShops {
+			if strings.EqualFold(shop.name, name) {
+				index = i
+				break
+			}
+		}
+		if index < 0 {
+			return "", 0x0a, nil
+		}
+		shop := openShops[index]
+		for _, prop := range shop.archive.ListNames() {
+			scriptHost.Props.RemoveFromTable(prop)
+		}
+		last := len(openShops) - 1
+		openShops[index] = openShops[last]
+		openShops = openShops[:last]
+		shop.archive.Close()
+		return shop.name, 0, nil
 	}
 	scriptHost.Env.EndBall = func(name, message string) error {
 		source, label := fmt.Sprintf("sendtoprop(%q,endball(%q))", name, message), name+" endball("+message+")"

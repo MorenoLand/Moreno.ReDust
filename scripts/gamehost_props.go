@@ -135,6 +135,18 @@ func (t *ScriptProps) AddToTable(name string) {
 	}
 }
 
+// RemoveFromTable deletes the first row named name the way FUN_00420630 does for a
+// closing shop's rows: the last row is copied into the freed slot and the count drops.
+func (t *ScriptProps) RemoveFromTable(name string) {
+	index := t.rowIndex(name)
+	if index < 0 {
+		return
+	}
+	last := len(t.table) - 1
+	t.table[index], t.stamps[index] = t.table[last], t.stamps[last]
+	t.table, t.stamps = t.table[:last], t.stamps[:last]
+}
+
 // rowIndex is the first table row named name (case folded), or -1.
 func (t *ScriptProps) rowIndex(name string) int {
 	for index, entry := range t.table {
