@@ -632,6 +632,38 @@ func (h *GameHost) command(call *ScriptCall) (int, uint16, error) {
 		actor.HitboxWidth = int16(args[1].Int)
 		actor.HitboxSide = int16(args[2].Int)
 		return consumed, 0, nil
+	case "actorxy":
+		// FUN_0040BA60: a name and two numbers (0x0E otherwise). The actor's jobs stop, its
+		// two position words take x and y, word 9 (placed) is cleared, and a depth of 0 or
+		// more is set to -1, as the native clamp does (FUN_0040D800 writes the record back).
+		actor, args, consumed, status, err := h.actorArgs(call, 3)
+		if err != nil || status != 0 {
+			return 0, status, err
+		}
+		if args[1].Kind != 4 || args[2].Kind != 4 {
+			return 0, ScriptStatusWrongType, nil
+		}
+		h.stopJobs(actor.Name)
+		actor.Position[0], actor.Position[1] = int16(args[1].Int), int16(args[2].Int)
+		actor.Placed = false
+		if actor.Depth >= 0 {
+			actor.Depth = -1
+		}
+		return consumed, 0, nil
+	case "actoris3d":
+		// FUN_0040BE60: a name and a boolean (0x0E otherwise). Only false changes the actor:
+		// a depth of 0 or more becomes -1. True leaves it alone.
+		actor, args, consumed, status, err := h.actorArgs(call, 2)
+		if err != nil || status != 0 {
+			return 0, status, err
+		}
+		if args[1].Kind != 2 {
+			return 0, ScriptStatusWrongType, nil
+		}
+		if args[1].Int == 0 && actor.Depth >= 0 {
+			actor.Depth = -1
+		}
+		return consumed, 0, nil
 	case "actorxyz":
 		actor, args, consumed, status, err := h.actorArgs(call, 4)
 		if err != nil || status != 0 {
