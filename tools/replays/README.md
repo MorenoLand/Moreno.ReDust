@@ -30,3 +30,13 @@ in Scene A2 facing west, the click opens the door, and the up arrow leads out to
 go run ./tools/courtsave -from=bin/saves/ballsacks.rtd -set=chin -scene="Scene A2" -point=0,1,4 -out=bin/chin.json
 go run . --silent --debug --work=bin/ --load=bin/chin.json --silent-script=tools/replays/chin-door-exit.json
 ```
+
+`store-door-exit.json` does the same for the general store (its door is in Scene D2, facing east):
+
+```bash
+go run ./tools/courtsave -from=bin/saves/ballsacks.rtd -set=store -scene="Scene D2" -point=3,1,3 -out=bin/store.json
+go run . --silent --debug --work=bin/ --load=bin/store.json --silent-script=tools/replays/store-door-exit.json
+```
+
+Note: courtsave sets the town return scene to Scene G8, so every test exit lands on that street.
+Real saves record the scene the player entered from.
