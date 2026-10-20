@@ -1618,6 +1618,21 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 			return Record{}, 0, status, err
 		}
 		return text(CurrentSetName(h.currentSet() != "", h.currentSet()), consumed)
+	case "currentstage":
+		_, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		// FUN_00412650: the open stage's header name (DAT_00459A14), or the fallback
+		// "None" (the C string at DAT_0045D07D, which FUN_00427FC0 makes Pascal) with no stage.
+		name := "None"
+		if h.stageIsOpen() {
+			name = ""
+			if h.Env.StageName != nil {
+				name = h.Env.StageName()
+			}
+		}
+		return text(name, consumed)
 	case "pointinbutton":
 		return h.pointInButton(call)
 	case "pointinprop":
