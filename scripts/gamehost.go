@@ -324,6 +324,9 @@ type GameHost struct {
 	// button state stilldown reads when no button-up record is pending.
 	pending  pendingTable
 	leftDown bool
+	// mousePoint is the packed cursor point the last mouse state carried (y low, x high),
+	// which mouse() answers. The native reads the live cursor, so this is the frame's point.
+	mousePoint uint32
 }
 
 // setRect reads the set gate and the pointer rectangle through the host hook.
@@ -1652,6 +1655,13 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 		// FUN_00414F20 copies DAT_00459680 raw. FUN_00427FE0 sets it to 1 at startup,
 		// and no other code writes it, so the value is always true.
 		return Record{Kind: 2, Data: 1}, consumed, 0, nil
+	case "mouse":
+		// FUN_00415E20: the cursor as a packed point, type 4. It takes no argument.
+		_, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return Record{}, 0, status, err
+		}
+		return number(int32(h.mousePoint), consumed)
 	case "pointinbutton":
 		return h.pointInButton(call)
 	case "pointinprop":

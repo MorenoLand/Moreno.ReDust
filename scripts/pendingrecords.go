@@ -151,6 +151,7 @@ func buttonUpRecord(point uint32) pendingRecord {
 // does not read.
 func (h *GameHost) NoteMouse(point uint32, leftDown, leftReleased, rightReleased bool) {
 	h.leftDown = leftDown
+	h.mousePoint = point
 	if leftReleased {
 		h.pending.enqueue(buttonUpRecord(point))
 	}
