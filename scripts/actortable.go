@@ -111,6 +111,24 @@ func (t *ScriptActors) Add(actor *ActorRecord) {
 	t.actors[key] = actor
 }
 
+// Remove deletes an actor row the way closecastfile does (FUN_0040C4C0): the last name
+// in the load order moves into the freed slot. An unknown name is a no-op.
+func (t *ScriptActors) Remove(name string) {
+	key := strings.ToLower(name)
+	if _, exists := t.actors[key]; !exists {
+		return
+	}
+	for index, entry := range t.order {
+		if entry == key {
+			last := len(t.order) - 1
+			t.order[index] = t.order[last]
+			t.order = t.order[:last]
+			break
+		}
+	}
+	delete(t.actors, key)
+}
+
 // Count and At are countactors and indextoactor's table (FUN_0040D030,
 // FUN_0040D090): actors in load order, indexed from 1.
 func (t *ScriptActors) Count() int { return len(t.order) }

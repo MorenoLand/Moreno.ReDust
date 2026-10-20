@@ -205,6 +205,9 @@ func run() error {
 		log.Printf("cast-file=DATA/GANG.CST actors=%d", len(gangCast.Actors))
 		log.Printf("cast-file=DATA/EXTRA.CST actors=%d", len(extraCast.Actors))
 	}
+	// openCasts are the casts the game has open, in open order: the boot's gang and extra,
+	// then whatever opencastfile adds. The cast table countcasts and indextocast read.
+	openCasts := []assets.Cast{gangCast, extraCast}
 	var soundBank *audio.SoundBank
 	var themeBank *audio.SoundBank
 	var themePlayer *audio.Player
@@ -472,7 +475,7 @@ func run() error {
 	var pendingMovement assets.SceneMove
 	var scriptTask *scripts.ScriptTask
 	var startScriptTask func(event scripts.ActorEvent) error
-	for _, cast := range []assets.Cast{gangCast, extraCast} {
+	for _, cast := range openCasts {
 		for _, actor := range cast.Actors {
 			key := strings.ToLower(actor.Name)
 			if _, exists := scriptActorRecords[key]; exists {
@@ -750,7 +753,6 @@ func run() error {
 	// opencastfile order. BOOTFILE r1 opens gang.cst (record 200) and then
 	// extra.cst (record 205) on the straight-line boot path. The port has no
 	// opencastfile of its own, so the mini-game casts are not in the table.
-	castTable := []string{gangCast.ScriptName, extraCast.ScriptName}
 	// nativeCamera is the reference's camera state (FUN_00406570's globals). The port does
 	// not run the reference's cell-to-cell camera move (FUN_00405DF0), so the camera rests on
 	// the player's cell and direction (worldPoint), which placeNativeCamera keeps current
@@ -790,7 +792,7 @@ func run() error {
 			ebiten.SetCursorMode(mode)
 		},
 		CastManaged: func(name string) bool {
-			for _, cast := range []assets.Cast{gangCast, extraCast} {
+			for _, cast := range openCasts {
 				if strings.EqualFold(cast.ScriptName, name) {
 					for _, actor := range cast.Actors {
 						if scriptManaged[strings.ToLower(actor.Name)] {
@@ -808,7 +810,7 @@ func run() error {
 			return flatButtons(stage, flat)
 		},
 		CastScript: func(name string) (*scripts.Program, bool, error) {
-			for _, cast := range []assets.Cast{gangCast, extraCast} {
+			for _, cast := range openCasts {
 				if strings.EqualFold(cast.ScriptName, name) {
 					program, err := scriptProgram(cast.Name, cast.ScriptResource)
 					return program, err == nil, err
@@ -816,12 +818,12 @@ func run() error {
 			}
 			return nil, false, nil
 		},
-		CastCount: func() int { return len(castTable) },
+		CastCount: func() int { return len(openCasts) },
 		CastName: func(index int) (string, bool) {
-			if index < 0 || index >= len(castTable) {
+			if index < 0 || index >= len(openCasts) {
 				return "", false
 			}
-			return castTable[index], true
+			return openCasts[index].ScriptName, true
 		},
 		ResolveStar: func(set, star string) ([3]int16, bool) {
 			source := nightSet
@@ -2717,7 +2719,7 @@ func run() error {
 			return []assets.WarmRecord{{Cache: cache, Blocks: scriptActorRecords[key].WarmBlocks()}}, nil
 		case "castwarm":
 			castFile := ""
-			for _, cast := range []assets.Cast{gangCast, extraCast} {
+			for _, cast := range openCasts {
 				if strings.EqualFold(cast.ScriptName, name) {
 					castFile = cast.Name
 					break
@@ -3093,6 +3095,96 @@ func run() error {
 		openShops = openShops[:last]
 		shop.archive.Close()
 		return shop.name, 0, nil
+	}
+	// The opencastfile install (FUN_0040BFA0). The name resolves through the stage-file search,
+	// the cast loads, and each actor joins the table (FUN_0040C1F0). The cast's opencast() runs
+	// (FUN_0040C360), then openactor() for each of its actors. An actor already in the table
+	// keeps its record, as the boot cast open does.
+	scriptHost.Env.OpenCast = func(name string) (uint16, error) {
+		var resolved string
+		resolution, status, err := scripts.ResolveStageFileInPrefixes(name, scriptInterpreter.StagePrefix, func(candidate string) (bool, bool) {
+			asset, err := assets.ResolveAssetName(candidate)
+			if err != nil {
+				return false, false
+			}
+			path := strings.ToUpper(asset)
+			if !workspace.HasAsset(path) {
+				return false, false
+			}
+			resolved = path
+			return true, true
+		})
+		if resolution != scripts.StageResolved {
+			return status, err
+		}
+		cast, err := workspace.OpenCast(resolved)
+		if err != nil {
+			return 0, fmt.Errorf("open cast %s: %w", resolved, err)
+		}
+		openCasts = append(openCasts, cast)
+		for _, actor := range cast.Actors {
+			key := strings.ToLower(actor.Name)
+			if _, exists := scriptActorRecords[key]; exists {
+				continue
+			}
+			poses := make([]string, len(actor.Poses))
+			for index, pose := range actor.Poses {
+				poses[index] = pose.Name
+			}
+			scriptActors.Add(scripts.NewCastActorRecord(cast.ScriptName, actor.Name, actor.Selector, actor.Location, actor.Script, poses))
+			scriptActorCasts[key], scriptActorRecords[key] = cast, actor
+			scriptActorOrder = append(scriptActorOrder, key)
+			scriptManaged[key] = true
+		}
+		if err := sendPropMessage("opencast "+cast.ScriptName, fmt.Sprintf("sendtocast(%q,opencast())", cast.ScriptName)); err != nil {
+			return 0, err
+		}
+		for _, actor := range cast.Actors {
+			if !scriptManaged[strings.ToLower(actor.Name)] {
+				continue
+			}
+			if err := sendPropMessage("openactor "+actor.Name, fmt.Sprintf("sendtoactor(%q,openactor())", actor.Name)); err != nil {
+				return 0, err
+			}
+		}
+		return 0, nil
+	}
+	// The closecastfile install (FUN_0040C4C0). The cast is matched by its script name. Its
+	// actors leave the table (the rows that name it), the cast leaves the list by moving the
+	// last cast into its place, and an unknown cast is 0x0A.
+	scriptHost.Env.CloseCast = func(name string) (uint16, error) {
+		index := -1
+		for i, cast := range openCasts {
+			if strings.EqualFold(cast.ScriptName, name) {
+				index = i
+				break
+			}
+		}
+		if index < 0 {
+			return 0x0a, nil
+		}
+		cast := openCasts[index]
+		for _, actor := range cast.Actors {
+			key := strings.ToLower(actor.Name)
+			owner, held := scriptActorCasts[key]
+			if !held || owner.ScriptName != cast.ScriptName {
+				continue
+			}
+			scriptActors.Remove(key)
+			delete(scriptActorCasts, key)
+			delete(scriptActorRecords, key)
+			delete(scriptManaged, key)
+			for position, entry := range scriptActorOrder {
+				if entry == key {
+					scriptActorOrder = append(scriptActorOrder[:position], scriptActorOrder[position+1:]...)
+					break
+				}
+			}
+		}
+		last := len(openCasts) - 1
+		openCasts[index] = openCasts[last]
+		openCasts = openCasts[:last]
+		return 0, nil
 	}
 	scriptHost.Env.EndBall = func(name, message string) error {
 		source, label := fmt.Sprintf("sendtoprop(%q,endball(%q))", name, message), name+" endball("+message+")"

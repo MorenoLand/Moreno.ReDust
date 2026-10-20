@@ -262,6 +262,10 @@ type GameHostEnv struct {
 	// returns the name of the record it closed. An unknown shop is status 0x0A.
 	OpenShop  func(name string) (shopName string, status uint16, err error)
 	CloseShop func(name string) (shopName string, status uint16, err error)
+	// OpenCast is opencastfile's install (FUN_0040BFA0) and CloseCast closecastfile's
+	// (FUN_0040C4C0). An unknown cast is status 0x0A on close.
+	OpenCast  func(name string) (status uint16, err error)
+	CloseCast func(name string) (status uint16, err error)
 	// StageName is the open stage's name, DAT_00459A14: the header's Pascal name at
 	// 0x824, copied by FUN_00411900. FUN_00413230 gives the stage frame it as Me and
 	// Target. Nil makes the openstage frame use "stage".
@@ -449,15 +453,14 @@ func (h *GameHost) Command(call *ScriptCall) (int, uint16, error) {
 	return consumed, status, err
 }
 
-// shopFileCommand is openshopfile (FUN_00420110) and closeshopfile (FUN_00420630). Each
-// takes one string, which must be a string (0x0E otherwise). An open adds its shop to
-// the open list, and a close removes the matching shop record. The list is the one
-// countshops and indextoshop read.
-func (h *GameHost) shopFileCommand(call *ScriptCall, open bool) (int, uint16, error) {
+// fileNameCommand is the body the open and close file commands share. It takes one
+// string argument, which must be a string (0x0E otherwise), and hands its text to run.
+// wired is false when the hook is missing, which is a gap before anything is evaluated.
+func (h *GameHost) fileNameCommand(call *ScriptCall, wired bool, run func(name string) (uint16, error)) (int, uint16, error) {
 	if call.Kind(call.Start+1) != opOpen {
 		return 0, ScriptStatusMalformed, nil
 	}
-	if h.Env.OpenShop == nil || h.Env.CloseShop == nil {
+	if !wired {
 		return 0, 0, h.gap(call)
 	}
 	record, used, status, err := call.Eval(call.Start + 2)
@@ -471,24 +474,46 @@ func (h *GameHost) shopFileCommand(call *ScriptCall, open bool) (int, uint16, er
 	if err != nil || status != 0 {
 		return 0, status, err
 	}
-	if open {
-		shopName, status, err := h.Env.OpenShop(name.Text)
-		if err != nil || status != 0 {
-			return 0, status, err
-		}
-		h.Shops = append(h.Shops, shopName)
-	} else {
-		shopName, status, err := h.Env.CloseShop(name.Text)
-		if err != nil || status != 0 {
-			return 0, status, err
-		}
-		h.removeShop(shopName)
+	if status, err := run(name.Text); err != nil || status != 0 {
+		return 0, status, err
 	}
 	closeAt := call.Start + 2 + used
 	if call.Kind(closeAt) != opClose {
 		return 0, ScriptStatusMalformed, nil
 	}
 	return closeAt + 1 - call.Start, 0, nil
+}
+
+// shopFileCommand is openshopfile (FUN_00420110) and closeshopfile (FUN_00420630). An
+// open adds its shop to the open list, and a close removes the matching shop record.
+// The list is the one countshops and indextoshop read.
+func (h *GameHost) shopFileCommand(call *ScriptCall, open bool) (int, uint16, error) {
+	return h.fileNameCommand(call, h.Env.OpenShop != nil && h.Env.CloseShop != nil, func(name string) (uint16, error) {
+		if open {
+			shopName, status, err := h.Env.OpenShop(name)
+			if err != nil || status != 0 {
+				return status, err
+			}
+			h.Shops = append(h.Shops, shopName)
+			return 0, nil
+		}
+		shopName, status, err := h.Env.CloseShop(name)
+		if err != nil || status != 0 {
+			return status, err
+		}
+		h.removeShop(shopName)
+		return 0, nil
+	})
+}
+
+// castFileCommand is opencastfile (FUN_0040BFA0) and closecastfile (FUN_0040C4C0).
+func (h *GameHost) castFileCommand(call *ScriptCall, open bool) (int, uint16, error) {
+	return h.fileNameCommand(call, h.Env.OpenCast != nil && h.Env.CloseCast != nil, func(name string) (uint16, error) {
+		if open {
+			return h.Env.OpenCast(name)
+		}
+		return h.Env.CloseCast(name)
+	})
 }
 
 // removeShop takes a shop out of the open list the way FUN_00420630 does: the last record
@@ -889,6 +914,8 @@ func (h *GameHost) command(call *ScriptCall) (int, uint16, error) {
 		return h.closeStageCommand(call)
 	case "openshopfile", "closeshopfile":
 		return h.shopFileCommand(call, name == "openshopfile")
+	case "opencastfile", "closecastfile":
+		return h.castFileCommand(call, name == "opencastfile")
 	case "openstagefile":
 		return h.openStageCommand(call)
 	case "sendtoactor":
