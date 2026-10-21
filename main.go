@@ -3269,6 +3269,9 @@ func run() error {
 			if !held || owner.ScriptName != cast.ScriptName {
 				continue
 			}
+			// A closed cast's actors leave the table with their loops (the actor's walk and idle
+			// callbacks have no record to run against once the table row is gone).
+			nativeLoops.Stop(scripts.LoopKindActor, key)
 			scriptActors.Remove(key)
 			delete(scriptActorCasts, key)
 			delete(scriptActorRecords, key)

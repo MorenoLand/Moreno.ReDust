@@ -86,6 +86,17 @@ go run ./tools/courtsave -from=bin/saves/ballsacks.rtd -set=hub -scene="Scene C4
 go run . --silent --debug --work=bin/ --load=bin/hub-mine-entry.json --silent-script=tools/replays/hub-mine-entry.json
 ```
 
+`mine-puzzle.json` solves the mine. From the hub with the mask in hand (courtsave's `-hand=mask`), it runs the
+hub-mine-entry route into the mine, then the mine's wrap-around grid: the skeleton starts 15 cells east and 14 cells
+south of the centre (standx 16000, standy 14976), so the player walks to C3 and wraps the grid 15 times east and 14
+times south. The asserts check standx and standy reach 640. Then the mask is dragged from the panel onto the skeleton,
+which sets minepuzzle to done, plays SKELETON.MOV and returns to the hub.
+
+```bash
+go run ./tools/courtsave -from=bin/saves/ballsacks.rtd -set=hub -scene="Scene C4" -point=2,3,3 -hand=mask -out=bin/hub-mine-mask.json
+go run . --silent --debug --work=bin/ --load=bin/hub-mine-mask.json --silent-script=tools/replays/mine-puzzle.json
+```
+
 `fountain-to-hub.json` runs the courtyard fountain route: the save is in Scene C5 facing north, day 4 at night, with the tstone item in the box. The click plays OPENFOUN.MOV and the game reaches the hub (Scene D7).
 
 ```bash

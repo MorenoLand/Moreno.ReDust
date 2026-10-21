@@ -22,6 +22,7 @@ func main() {
 	scene := flag.String("scene", "Scene C5", "view name; C5 is the courtyard's south view, facing south")
 	path6 := flag.String("path6", "", "script context page 6, the path prefix a set's stage search uses (for example dust:target:)")
 	gun := flag.Bool("gun", false, "hold the gun with six bullets and show its gunhand prop, for the target range's shots")
+	hand := flag.String("hand", "", "hold this inventory item in hand and give it to the player (for example mask, for the mine puzzle)")
 	clock := flag.Int("clock", 1, "game clock; 3 is night, which opens nitecour when the set is night")
 	point := flag.String("point", "2,4,2", "world point as direction,scene,facing (1 north, 2 south, 3 east, 4 west)")
 	flag.Parse()
@@ -47,6 +48,9 @@ func main() {
 	}
 	if *gun {
 		holdGun(&progress)
+	}
+	if *hand != "" {
+		holdItem(&progress, *hand)
 	}
 	if err := save.SaveGameProgress(*out, progress); err != nil {
 		log.Fatal(err)
@@ -90,4 +94,22 @@ func holdGun(progress *save.GameProgress) {
 	if !found {
 		log.Printf("no gunhand prop in the save; the shot needs the target range's shop open")
 	}
+}
+
+// holdItem puts a named inventory item in the player's hand and gives it to the player, the
+// state a save needs before the item can be used (BOOTFILE's mousedown and an actor's offerobject
+// read handitem).
+func holdItem(progress *save.GameProgress, item string) {
+	progress.HandItem = item
+	if progress.InventoryOwners == nil {
+		progress.InventoryOwners = map[string]string{}
+	}
+	progress.InventoryOwners[item] = "stranger"
+	for index := range progress.ScriptGlobals {
+		if progress.ScriptGlobals[index].Name == "handitem" {
+			progress.ScriptGlobals[index] = scripts.GlobalVariable{Name: "handitem", Kind: 3, Text: item}
+			return
+		}
+	}
+	progress.ScriptGlobals = append(progress.ScriptGlobals, scripts.GlobalVariable{Name: "handitem", Kind: 3, Text: item})
 }
