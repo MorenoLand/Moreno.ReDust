@@ -695,6 +695,7 @@ func (p *MoviePlayback) rebuildRGBA() {
 }
 
 func DecodeMoviePixels(data, previous []byte) (MoviePixels, error) {
+	data = append(data[:len(data):len(data)], 0, 0)
 	if len(data) < 4 {
 		return MoviePixels{}, fmt.Errorf("movie frame payload is shorter than its dimensions")
 	}
