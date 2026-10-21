@@ -23,6 +23,7 @@ func main() {
 	path6 := flag.String("path6", "", "script context page 6, the path prefix a set's stage search uses (for example dust:target:)")
 	gun := flag.Bool("gun", false, "hold the gun with six bullets and show its gunhand prop, for the target range's shots")
 	hand := flag.String("hand", "", "hold this inventory item in hand and give it to the player (for example mask, for the mine puzzle)")
+	room := flag.String("room", "", "next underground room the hub's arch enters: flute, mine, snake or tbird (the sundial's exit sets it)")
 	clock := flag.Int("clock", 1, "game clock; 3 is night, which opens nitecour when the set is night")
 	point := flag.String("point", "2,4,2", "world point as direction,scene,facing (1 north, 2 south, 3 east, 4 west)")
 	flag.Parse()
@@ -51,6 +52,9 @@ func main() {
 	}
 	if *hand != "" {
 		holdItem(&progress, *hand)
+	}
+	if *room != "" {
+		setStringGlobal(&progress, "nextroom", *room)
 	}
 	if err := save.SaveGameProgress(*out, progress); err != nil {
 		log.Fatal(err)
@@ -105,11 +109,16 @@ func holdItem(progress *save.GameProgress, item string) {
 		progress.InventoryOwners = map[string]string{}
 	}
 	progress.InventoryOwners[item] = "stranger"
+	setStringGlobal(progress, "handitem", item)
+}
+
+// setStringGlobal sets a string script global, adding it when the save does not name it.
+func setStringGlobal(progress *save.GameProgress, name, text string) {
 	for index := range progress.ScriptGlobals {
-		if progress.ScriptGlobals[index].Name == "handitem" {
-			progress.ScriptGlobals[index] = scripts.GlobalVariable{Name: "handitem", Kind: 3, Text: item}
+		if progress.ScriptGlobals[index].Name == name {
+			progress.ScriptGlobals[index] = scripts.GlobalVariable{Name: name, Kind: 3, Text: text}
 			return
 		}
 	}
-	progress.ScriptGlobals = append(progress.ScriptGlobals, scripts.GlobalVariable{Name: "handitem", Kind: 3, Text: item})
+	progress.ScriptGlobals = append(progress.ScriptGlobals, scripts.GlobalVariable{Name: name, Kind: 3, Text: text})
 }

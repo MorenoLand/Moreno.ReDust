@@ -1,0 +1,433 @@
+{
+ "actions": [
+  {
+   "type": "wait",
+   "milliseconds": 1000
+  },
+  {
+   "type": "click",
+   "x": 260,
+   "y": 150
+  },
+  {
+   "type": "wait",
+   "milliseconds": 6000
+  },
+  {
+   "type": "mouse_move",
+   "x": 316,
+   "y": 320
+  },
+  {
+   "type": "mouse_down",
+   "x": 316,
+   "y": 320
+  },
+  {
+   "type": "wait",
+   "milliseconds": 300
+  },
+  {
+   "type": "mouse_move",
+   "x": 290,
+   "y": 280
+  },
+  {
+   "type": "wait",
+   "milliseconds": 200
+  },
+  {
+   "type": "mouse_move",
+   "x": 255,
+   "y": 215
+  },
+  {
+   "type": "wait",
+   "milliseconds": 300
+  },
+  {
+   "type": "mouse_up",
+   "x": 255,
+   "y": 215
+  },
+  {
+   "type": "wait",
+   "milliseconds": 8000
+  },
+  {
+   "type": "mouse_move",
+   "x": 115,
+   "y": 120
+  },
+  {
+   "type": "mouse_down",
+   "x": 115,
+   "y": 120
+  },
+  {
+   "type": "wait",
+   "milliseconds": 80
+  },
+  {
+   "type": "mouse_up",
+   "x": 115,
+   "y": 120
+  },
+  {
+   "type": "wait",
+   "milliseconds": 1500
+  },
+  {
+   "type": "mouse_move",
+   "x": 115,
+   "y": 120
+  },
+  {
+   "type": "mouse_down",
+   "x": 115,
+   "y": 120
+  },
+  {
+   "type": "wait",
+   "milliseconds": 80
+  },
+  {
+   "type": "mouse_up",
+   "x": 115,
+   "y": 120
+  },
+  {
+   "type": "wait",
+   "milliseconds": 1500
+  },
+  {
+   "type": "mouse_move",
+   "x": 186,
+   "y": 120
+  },
+  {
+   "type": "mouse_down",
+   "x": 186,
+   "y": 120
+  },
+  {
+   "type": "wait",
+   "milliseconds": 80
+  },
+  {
+   "type": "mouse_up",
+   "x": 186,
+   "y": 120
+  },
+  {
+   "type": "wait",
+   "milliseconds": 1500
+  },
+  {
+   "type": "mouse_move",
+   "x": 186,
+   "y": 120
+  },
+  {
+   "type": "mouse_down",
+   "x": 186,
+   "y": 120
+  },
+  {
+   "type": "wait",
+   "milliseconds": 80
+  },
+  {
+   "type": "mouse_up",
+   "x": 186,
+   "y": 120
+  },
+  {
+   "type": "wait",
+   "milliseconds": 1500
+  },
+  {
+   "type": "mouse_move",
+   "x": 256,
+   "y": 120
+  },
+  {
+   "type": "mouse_down",
+   "x": 256,
+   "y": 120
+  },
+  {
+   "type": "wait",
+   "milliseconds": 80
+  },
+  {
+   "type": "mouse_up",
+   "x": 256,
+   "y": 120
+  },
+  {
+   "type": "wait",
+   "milliseconds": 1500
+  },
+  {
+   "type": "mouse_move",
+   "x": 326,
+   "y": 120
+  },
+  {
+   "type": "mouse_down",
+   "x": 326,
+   "y": 120
+  },
+  {
+   "type": "wait",
+   "milliseconds": 80
+  },
+  {
+   "type": "mouse_up",
+   "x": 326,
+   "y": 120
+  },
+  {
+   "type": "wait",
+   "milliseconds": 1500
+  },
+  {
+   "type": "mouse_move",
+   "x": 326,
+   "y": 120
+  },
+  {
+   "type": "mouse_down",
+   "x": 326,
+   "y": 120
+  },
+  {
+   "type": "wait",
+   "milliseconds": 80
+  },
+  {
+   "type": "mouse_up",
+   "x": 326,
+   "y": 120
+  },
+  {
+   "type": "wait",
+   "milliseconds": 1500
+  },
+  {
+   "type": "mouse_move",
+   "x": 326,
+   "y": 120
+  },
+  {
+   "type": "mouse_down",
+   "x": 326,
+   "y": 120
+  },
+  {
+   "type": "wait",
+   "milliseconds": 80
+  },
+  {
+   "type": "mouse_up",
+   "x": 326,
+   "y": 120
+  },
+  {
+   "type": "wait",
+   "milliseconds": 1500
+  },
+  {
+   "type": "mouse_move",
+   "x": 326,
+   "y": 120
+  },
+  {
+   "type": "mouse_down",
+   "x": 326,
+   "y": 120
+  },
+  {
+   "type": "wait",
+   "milliseconds": 80
+  },
+  {
+   "type": "mouse_up",
+   "x": 326,
+   "y": 120
+  },
+  {
+   "type": "wait",
+   "milliseconds": 1500
+  },
+  {
+   "type": "mouse_move",
+   "x": 326,
+   "y": 120
+  },
+  {
+   "type": "mouse_down",
+   "x": 326,
+   "y": 120
+  },
+  {
+   "type": "wait",
+   "milliseconds": 80
+  },
+  {
+   "type": "mouse_up",
+   "x": 326,
+   "y": 120
+  },
+  {
+   "type": "wait",
+   "milliseconds": 1500
+  },
+  {
+   "type": "mouse_move",
+   "x": 395,
+   "y": 120
+  },
+  {
+   "type": "mouse_down",
+   "x": 395,
+   "y": 120
+  },
+  {
+   "type": "wait",
+   "milliseconds": 80
+  },
+  {
+   "type": "mouse_up",
+   "x": 395,
+   "y": 120
+  },
+  {
+   "type": "wait",
+   "milliseconds": 1500
+  },
+  {
+   "type": "mouse_move",
+   "x": 395,
+   "y": 120
+  },
+  {
+   "type": "mouse_down",
+   "x": 395,
+   "y": 120
+  },
+  {
+   "type": "wait",
+   "milliseconds": 80
+  },
+  {
+   "type": "mouse_up",
+   "x": 395,
+   "y": 120
+  },
+  {
+   "type": "wait",
+   "milliseconds": 1500
+  },
+  {
+   "type": "mouse_move",
+   "x": 395,
+   "y": 120
+  },
+  {
+   "type": "mouse_down",
+   "x": 395,
+   "y": 120
+  },
+  {
+   "type": "wait",
+   "milliseconds": 80
+  },
+  {
+   "type": "mouse_up",
+   "x": 395,
+   "y": 120
+  },
+  {
+   "type": "wait",
+   "milliseconds": 1500
+  },
+  {
+   "type": "assert",
+   "expect": {
+    "scriptProps": {
+     "tumbler1": {
+      "degree": 8
+     }
+    }
+   }
+  },
+  {
+   "type": "assert",
+   "expect": {
+    "scriptProps": {
+     "tumbler2": {
+      "degree": 8
+     }
+    }
+   }
+  },
+  {
+   "type": "assert",
+   "expect": {
+    "scriptProps": {
+     "tumbler3": {
+      "degree": 4
+     }
+    }
+   }
+  },
+  {
+   "type": "assert",
+   "expect": {
+    "scriptProps": {
+     "tumbler4": {
+      "degree": 20
+     }
+    }
+   }
+  },
+  {
+   "type": "assert",
+   "expect": {
+    "scriptProps": {
+     "tumbler5": {
+      "degree": 12
+     }
+    }
+   }
+  },
+  {
+   "type": "click",
+   "x": 93,
+   "y": 322
+  },
+  {
+   "type": "wait_until",
+   "milliseconds": 60000,
+   "expect": {
+    "set": "hub"
+   }
+  },
+  {
+   "type": "assert",
+   "expect": {
+    "scriptGlobals": {
+     "tbirdpuzzle": "done"
+    }
+   }
+  },
+  {
+   "type": "assert",
+   "expect": {
+    "set": "hub"
+   }
+  }
+ ]
+}

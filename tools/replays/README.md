@@ -97,6 +97,18 @@ go run ./tools/courtsave -from=bin/saves/ballsacks.rtd -set=hub -scene="Scene C4
 go run . --silent --debug --work=bin/ --load=bin/hub-mine-mask.json --silent-script=tools/replays/mine-puzzle.json
 ```
 
+`snake-puzzle.json` solves the snake room's hex puzzle. It opens the puzzle from the south view of Scene B3 (the
+hex glyph at 350,162), which plays HEXOPEN.MOV and loads the seven wheels from SNAKE.PRP with mangle(). A wheel turns one
+notch per clockwise drag, and it moves its neighbours by their ring index (the neighbours' distances, 50 to 100 is one
+ring, 100 to 150 two, over 150 three). From the start state the 14 drags below solve it: stop4 twice, stop5 five times,
+stop6 twice and stop7 five times. The replay checks every wheel reads 0, presses the solve button at 413,202, and asserts
+snakepuzzle is done and the set returns to the hub.
+
+```bash
+go run ./tools/courtsave -from=bin/saves/ballsacks.rtd -set=snake -scene="Scene B3" -point=1,2,2 -out=bin/snake-puzzle.json
+go run . --silent --debug --work=bin/ --load=bin/snake-puzzle.json --silent-script=tools/replays/snake-puzzle.json
+```
+
 `fountain-to-hub.json` runs the courtyard fountain route: the save is in Scene C5 facing north, day 4 at night, with the tstone item in the box. The click plays OPENFOUN.MOV and the game reaches the hub (Scene D7).
 
 ```bash
@@ -126,4 +138,26 @@ right on that turn, so each number is reached by going around.
 
 ```bash
 go run . --silent --debug --work=bin/ --load=bin/bank.json --silent-script=tools/replays/bank-crack-solve.json
+```
+
+`tbird-puzzle.json` solves the tumbler lock in the tbird room. The save is at the podium in Scene B2 facing north,
+with the tbird in hand. The replay clicks the podium, drops the tbird on the tumble flat (its offer runs gotoflat("tumble1"),
+TUMOPEN.MOV and gotoflat("tumble2")), and turns the five tumblers to 8, 8, 4, 20 and 12. A click in a tumbler's lower
+half (y at least 100) moves its degree forward 4 and a click in its upper half moves it back 4. The EXIT button then runs
+gototbird(): tbirdpuzzle becomes done, TUMTRAN.MOV plays and the hub opens at Scene D7.
+
+```bash
+go run ./tools/courtsave -from=bin/saves/ballsacks.rtd -set=tbird -scene="Scene B2" -point=1,1,1 -hand=tbird -out=bin/tbird-hand.json
+go run . --silent --debug --work=bin/ --load=bin/tbird-hand.json --silent-script=tools/replays/tbird-puzzle.json
+```
+
+`flute-puzzle.json` solves the flute room. The save is the hub's Scene G4 facing east, with the flute in hand and
+nextroom set to flute (courtsave's `-room`, the value the sundial's exit leaves for the flute arch). The replay goes
+up the arch (uparrow starts the blackout, the keys count it down), which opens flute.set at Scene B4 facing north.
+It clicks the flute, drops it on flat 0 (its offer runs gotoflat("flat 1")), presses buttons 1 to 5 in order, which solves the
+room: FLUTE.MOV plays and the hub opens.
+
+```bash
+go run ./tools/courtsave -from=bin/saves/ballsacks.rtd -set=hub -scene="Scene G4" -point=6,3,3 -hand=flute -room=flute -out=bin/hub-flute.json
+go run . --silent --debug --work=bin/ --load=bin/hub-flute.json --silent-script=tools/replays/flute-puzzle.json
 ```

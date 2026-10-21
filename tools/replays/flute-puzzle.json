@@ -1,0 +1,262 @@
+{
+ "actions": [
+  {
+   "type": "wait",
+   "milliseconds": 1000
+  },
+  {
+   "type": "key",
+   "key": "ArrowUp"
+  },
+  {
+   "type": "wait",
+   "milliseconds": 2000
+  },
+  {
+   "type": "key",
+   "key": "Space"
+  },
+  {
+   "type": "wait",
+   "milliseconds": 1500
+  },
+  {
+   "type": "key",
+   "key": "Space"
+  },
+  {
+   "type": "wait",
+   "milliseconds": 1500
+  },
+  {
+   "type": "key",
+   "key": "Space"
+  },
+  {
+   "type": "wait",
+   "milliseconds": 1500
+  },
+  {
+   "type": "key",
+   "key": "Space"
+  },
+  {
+   "type": "wait",
+   "milliseconds": 1500
+  },
+  {
+   "type": "key",
+   "key": "Space"
+  },
+  {
+   "type": "wait",
+   "milliseconds": 1500
+  },
+  {
+   "type": "key",
+   "key": "Space"
+  },
+  {
+   "type": "wait",
+   "milliseconds": 1500
+  },
+  {
+   "type": "wait",
+   "milliseconds": 8000
+  },
+  {
+   "type": "click",
+   "x": 424,
+   "y": 232
+  },
+  {
+   "type": "wait",
+   "milliseconds": 8000
+  },
+  {
+   "type": "snapshot",
+   "path": "bin/flute-room.png"
+  },
+  {
+   "type": "mouse_move",
+   "x": 316,
+   "y": 320
+  },
+  {
+   "type": "mouse_down",
+   "x": 316,
+   "y": 320
+  },
+  {
+   "type": "wait",
+   "milliseconds": 300
+  },
+  {
+   "type": "mouse_move",
+   "x": 290,
+   "y": 280
+  },
+  {
+   "type": "wait",
+   "milliseconds": 200
+  },
+  {
+   "type": "mouse_move",
+   "x": 255,
+   "y": 215
+  },
+  {
+   "type": "wait",
+   "milliseconds": 300
+  },
+  {
+   "type": "mouse_up",
+   "x": 255,
+   "y": 215
+  },
+  {
+   "type": "wait",
+   "milliseconds": 8000
+  },
+  {
+   "type": "wait",
+   "milliseconds": 1000
+  },
+  {
+   "type": "mouse_move",
+   "x": 431,
+   "y": 123
+  },
+  {
+   "type": "mouse_down",
+   "x": 431,
+   "y": 123
+  },
+  {
+   "type": "wait",
+   "milliseconds": 80
+  },
+  {
+   "type": "mouse_up",
+   "x": 431,
+   "y": 123
+  },
+  {
+   "type": "wait",
+   "milliseconds": 2000
+  },
+  {
+   "type": "mouse_move",
+   "x": 431,
+   "y": 177
+  },
+  {
+   "type": "mouse_down",
+   "x": 431,
+   "y": 177
+  },
+  {
+   "type": "wait",
+   "milliseconds": 80
+  },
+  {
+   "type": "mouse_up",
+   "x": 431,
+   "y": 177
+  },
+  {
+   "type": "wait",
+   "milliseconds": 2000
+  },
+  {
+   "type": "mouse_move",
+   "x": 430,
+   "y": 96
+  },
+  {
+   "type": "mouse_down",
+   "x": 430,
+   "y": 96
+  },
+  {
+   "type": "wait",
+   "milliseconds": 80
+  },
+  {
+   "type": "mouse_up",
+   "x": 430,
+   "y": 96
+  },
+  {
+   "type": "wait",
+   "milliseconds": 2000
+  },
+  {
+   "type": "mouse_move",
+   "x": 430,
+   "y": 149
+  },
+  {
+   "type": "mouse_down",
+   "x": 430,
+   "y": 149
+  },
+  {
+   "type": "wait",
+   "milliseconds": 80
+  },
+  {
+   "type": "mouse_up",
+   "x": 430,
+   "y": 149
+  },
+  {
+   "type": "wait",
+   "milliseconds": 2000
+  },
+  {
+   "type": "mouse_move",
+   "x": 429,
+   "y": 69
+  },
+  {
+   "type": "mouse_down",
+   "x": 429,
+   "y": 69
+  },
+  {
+   "type": "wait",
+   "milliseconds": 80
+  },
+  {
+   "type": "mouse_up",
+   "x": 429,
+   "y": 69
+  },
+  {
+   "type": "wait",
+   "milliseconds": 2000
+  },
+  {
+   "type": "wait_until",
+   "milliseconds": 60000,
+   "expect": {
+    "set": "hub"
+   }
+  },
+  {
+   "type": "assert",
+   "expect": {
+    "scriptGlobals": {
+     "flutepuzzle": "done"
+    }
+   }
+  },
+  {
+   "type": "assert",
+   "expect": {
+    "set": "hub"
+   }
+  }
+ ]
+}
