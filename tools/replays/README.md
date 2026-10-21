@@ -68,3 +68,6 @@ go run ./tools/courtsave -from=bin/saves/ballsacks.rtd -set=bank -scene="Scene D
 # then set "day": 3 in bin/bank.json
 go run . --silent --debug --work=bin/ --load=bin/bank.json --silent-script=tools/replays/bank-crack.json
 ```
+
+`bank-crack-exit.json` continues the safe: the same click, then the EXIT button. The button's script runs
+giveup(), which closes the crack stage and returns to the bank's vault door. It uses the bank save above.

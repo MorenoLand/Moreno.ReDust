@@ -6065,6 +6065,16 @@ func run() error {
 		if err != nil {
 			return render.IndexedFrame{}, false, fmt.Errorf("run button script resource %d: %w", handler.ScriptResource, err)
 		}
+		if !found && stage != mainStage {
+			// A button of another stage (the crack safe's giveup, for one) runs its own script
+			// as sendtobutton(flat, button, mousedown(point)), the message the native sends.
+			flatName := currentFlatName(stage, currentScene)
+			buttonName := string(handler.Name[1:])
+			if err := startScriptSource(flatName+" "+buttonName+" mousedown", fmt.Sprintf("sendtobutton(%q,%q,mousedown(%d))", flatName, buttonName, int32(point)), nil); err != nil {
+				return render.IndexedFrame{}, false, err
+			}
+			return currentFrame, true, nil
+		}
 		if !found {
 			if *debug {
 				recordKinds := make([]uint16, len(program.Records))

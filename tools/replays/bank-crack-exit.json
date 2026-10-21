@@ -1,0 +1,11 @@
+{
+  "actions": [
+    {"type": "wait", "milliseconds": 500},
+    {"type": "assert", "expect": {"set": "bank"}},
+    {"type": "click", "x": 250, "y": 150},
+    {"type": "wait", "milliseconds": 4000},
+    {"type": "click", "x": 298, "y": 341},
+    {"type": "wait", "milliseconds": 4000},
+    {"type": "snapshot", "path": "bin/bank-after-crack-exit.png"}
+  ]
+}
