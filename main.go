@@ -3910,6 +3910,11 @@ func run() error {
 		case assets.SetDirectionWest:
 			direction = "west"
 		}
+		// The saved pages are in place before the set opens, so its openset can open the stage and
+		// the track and shop files its path statements name (the stage search reads slot 6, for one).
+		if err := scriptInterpreter.RestoreContextPages(progress.ScriptContextPages); err != nil {
+			return err
+		}
 		if _, err := switchSpecialSet(progress.SetName, progress.ViewName, direction); err != nil {
 			return err
 		}

@@ -659,6 +659,23 @@ func (h *GameHost) command(call *ScriptCall) (int, uint16, error) {
 		actor.HitboxWidth = int16(args[1].Int)
 		actor.HitboxSide = int16(args[2].Int)
 		return consumed, 0, nil
+	case "actordist":
+		// FUN_0040AFC0, the actordist statement (the value form is FUN_0040B070). FUN_00417070
+		// reads the name and the number (0x1C for a missing comma). The name must be a string in
+		// the actor table (0x0E, 0x0A) and the number a number (0x0E, checked after the lookup).
+		// An unplaced actor (word 9 zero) takes a negative number as its depth, word 21. The
+		// record is then stored back. A placed actor is stored unchanged.
+		actor, args, consumed, status, err := h.actorArgs(call, 2)
+		if err != nil || status != 0 {
+			return 0, status, err
+		}
+		if args[1].Kind != 4 {
+			return 0, ScriptStatusWrongType, nil
+		}
+		if !actor.Placed && args[1].Int < 0 {
+			actor.Depth = int16(args[1].Int)
+		}
+		return consumed, 0, nil
 	case "actorxy":
 		// FUN_0040BA60: a name and two numbers (0x0E otherwise). The actor's jobs stop, its
 		// two position words take x and y, word 9 (placed) is cleared, and a depth of 0 or
