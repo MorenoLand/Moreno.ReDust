@@ -4055,6 +4055,14 @@ func run() error {
 					}
 				}
 			}
+			// The instances propinstance made (HUB.PRP's spring2 and the rest) are not archive names, so
+			// the same restore puts their copies back from their sources.
+			for instance, source := range propInstances {
+				if scriptHost.Props.Known(instance) || !scriptHost.Props.Known(source) {
+					continue
+				}
+				scriptHost.Props.AddInstance(source, instance)
+			}
 		}
 		if progress.ScriptActors == nil {
 			// A save from before script-managed actors (or a new game):
@@ -5837,6 +5845,11 @@ func run() error {
 						return
 					}
 					pendingPlayerMovement = assets.SceneMoveRight
+				default:
+					// BOOTFILE's keydown raises every key to the scene, not only the directions, as
+					// sendtoscene(currentscene(), keydown(arg)). A scene counts a key down this way (the
+					// hub's blackout countdown, for one), so the other keys go to the chain too.
+					raiseKey(strings.ToLower(key.String()))
 				}
 			}
 			return

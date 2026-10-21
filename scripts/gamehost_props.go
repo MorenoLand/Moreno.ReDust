@@ -135,6 +135,15 @@ func (t *ScriptProps) AddToTable(name string) {
 	}
 }
 
+// AddInstance adds a copy of the source prop under a new name, as propinstance does
+// (FUN_0041E840): the copy takes the source's record and the new name, and gets a row.
+func (t *ScriptProps) AddInstance(source, name string) {
+	copied := *t.Get(source)
+	copied.Name = name
+	t.props[strings.ToLower(name)] = &copied
+	t.AddToTable(name)
+}
+
 // RemoveFromTable deletes the first row named name the way FUN_00420630 does for a
 // closing shop's rows: the last row is copied into the freed slot and the count drops.
 func (t *ScriptProps) RemoveFromTable(name string) {

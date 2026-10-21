@@ -77,6 +77,15 @@ save as `target-shot.json`. The range's score is given and the set returns to th
 go run . --silent --debug --work=bin/ --load=bin/target-hold.json --silent-script=tools/replays/target-exit.json
 ```
 
+`hub-mine-entry.json` runs the hub's mine route from its start: the sundial's three dials to 4, 8 and 12,
+the EXIT (which sets nextroom to mine, since the mine puzzle is not done), the walk through C4, C3, D3 and D2
+to Scene D1 facing north, one up-arrow to start the blackout, then keys to count it down. The mine set opens.
+
+```bash
+go run ./tools/courtsave -from=bin/saves/ballsacks.rtd -set=hub -scene="Scene C4" -point=2,3,3 -out=bin/hub-mine-entry.json
+go run . --silent --debug --work=bin/ --load=bin/hub-mine-entry.json --silent-script=tools/replays/hub-mine-entry.json
+```
+
 `fountain-to-hub.json` runs the courtyard fountain route: the save is in Scene C5 facing north, day 4 at night, with the tstone item in the box. The click plays OPENFOUN.MOV and the game reaches the hub (Scene D7).
 
 ```bash
