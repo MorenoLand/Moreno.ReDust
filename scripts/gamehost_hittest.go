@@ -430,6 +430,14 @@ func (h *GameHost) HitTest(packed uint32) (name string, kind string, err error) 
 	return name, kind, nil
 }
 
+// PointInSet is pointinset's test for a packed point (FUN_0041B330): the point is on the
+// open set's pointer rectangle, and false when no set is open or it is not visible.
+func (h *GameHost) PointInSet(packed uint32) bool {
+	rect, open := h.setRect()
+	result, status := PointInSetValue(ValueTypeNumeric, packed, SetState{Active: open, Visible: h.setVisible}, rect)
+	return status == 0 && result.Value != 0
+}
+
 // setResultLabel writes a label into the result slot as its Pascal string.
 func (h *GameHost) setResultLabel(label string) {
 	h.context.ResultBuffer = PascalFromCString(label)

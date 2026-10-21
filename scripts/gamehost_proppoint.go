@@ -226,6 +226,19 @@ func (h *GameHost) pointInProp(call *ScriptCall) (Record, int, uint16, error) {
 	return Record{Kind: 2, Data: boolWord(hit)}, consumed, 0, nil
 }
 
+// PointInProp is pointinprop's test for one named prop and a packed point, without the
+// script's argument checks. A prop that is not in the table is not hit.
+func (h *GameHost) PointInProp(name string, packed uint32) (bool, error) {
+	if h.Env.PropPoint == nil {
+		return false, fmt.Errorf("%w: pointinprop", ErrHostOpcodeUnimplemented)
+	}
+	prop, found, err := h.Env.PropPoint(name)
+	if err != nil || !found {
+		return false, err
+	}
+	return h.propPointHit(prop, packed)
+}
+
 // propPointHit is FUN_00421820 followed by the hit test of FUN_0041FA40. Its visible
 // flag is tested first, as the reference does. A projected record (word 9 non-zero)
 // runs path B, projectedPropHit; the others run path A.

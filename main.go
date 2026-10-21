@@ -1727,8 +1727,9 @@ func run() error {
 		return nil
 	}
 	refreshWorldScene := func() error {
-		// A stage other than the main panel draws its own frames; the world is not on screen.
-		if stage != mainStage {
+		// A stage whose current flat is not its main panel draws its own frames, and the world is
+		// not on screen. A stage's own mainpanel flat (target.flt's) shows the world as the panel does.
+		if stage != mainStage && scriptHost.Env.CurrentFlat() != "mainpanel" {
 			return refreshFlatStage()
 		}
 		if currentScene != 0 {
@@ -1749,6 +1750,13 @@ func run() error {
 		nextFrame, err := composeMainPanel(worldBackground, panel)
 		if err != nil {
 			return fmt.Errorf("compose refreshed NITE scene: %w", err)
+		}
+		if stage != mainStage {
+			// The open shops' props show over a stage's mainpanel flat as they do over a flat.
+			nextFrame, _, err = render.CompositeFlatProps(nextFrame, scriptFlatProps())
+			if err != nil {
+				return fmt.Errorf("draw stage props over the world: %w", err)
+			}
 		}
 		worldActors, projectedActors = actors, projected
 		stageFrame, currentFrame = nextFrame, nextFrame
@@ -5937,6 +5945,23 @@ func run() error {
 					log.Printf("inventory-select item=%s owner=%s flat=avatar", handItem, inventoryOwners[strings.ToLower(handItem)])
 				}
 				return currentFrame, true, nil
+			}
+		}
+		// BOOTFILE's mousedown fires the gun before any hit test: with the gun in hand, the point
+		// in the set, the main panel as the current flat, and gunhand shown in a view other than
+		// reload with the point off the gun itself, the click is sendtoflat("mainpanel", bullet).
+		if mouseEvent.Button == ebiten.MouseButtonLeft && strings.EqualFold(handItem, "gun") && scriptHost.Env.CurrentFlat() == "mainpanel" && scriptHost.PointInSet(point) {
+			if gunhand, found := scriptHost.Props.Lookup("gunhand"); found && gunhand.Visible && !strings.EqualFold(gunhand.View, "reload") {
+				onGun, err := scriptHost.PointInProp("gunhand", point)
+				if err != nil {
+					return render.IndexedFrame{}, false, err
+				}
+				if !onGun {
+					if err := startScriptSource("bullet", fmt.Sprintf("sendtoflat(%q,bullet(%d))", "mainpanel", int32(point)), nil); err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+					return currentFrame, true, nil
+				}
 			}
 		}
 		handler, hit, err := stage.HitTestSceneHandler(currentScene, point)

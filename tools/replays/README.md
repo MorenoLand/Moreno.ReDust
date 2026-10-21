@@ -61,6 +61,15 @@ go run ./tools/courtsave -from=bin/saves/ballsacks.rtd -set=hub -scene="Scene C4
 go run . --silent --debug --work=bin/ --load=bin/hub-chest.json --silent-script=tools/replays/hub-sundial-chest.json
 ```
 
+`target-shot.json` fires once at the target range. The save holds the gun in hand with six bullets
+(courtsave's `-gun`), and the click at (256,140) runs the shot. The replay asserts that one shot was
+counted.
+
+```bash
+go run ./tools/courtsave -from=bin/saves/ballsacks.rtd -set=target -scene="Scene I13" -point=8,12,1 -path6="dust:target:" -gun -out=bin/target-hold.json
+go run . --silent --debug --work=bin/ --load=bin/target-hold.json --silent-script=tools/replays/target-shot.json
+```
+
 `fountain-to-hub.json` runs the courtyard fountain route: the save is in Scene C5 facing north, day 4 at night, with the tstone item in the box. The click plays OPENFOUN.MOV and the game reaches the hub (Scene D7).
 
 ```bash
