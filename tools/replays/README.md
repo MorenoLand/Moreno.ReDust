@@ -71,3 +71,14 @@ go run . --silent --debug --work=bin/ --load=bin/bank.json --silent-script=tools
 
 `bank-crack-exit.json` continues the safe: the same click, then the EXIT button. The button's script runs
 giveup(), which closes the crack stage and returns to the bank's vault door. It uses the bank save above.
+
+`bank-crack-solve.json` opens the safe the whole way, on the same bank save. It turns the dial
+three times to the combination 08, 23, 41 and clicks OPEN. The dial's drags are clockwise to
+08, counterclockwise to 23, and clockwise to 41, each ending on the number the dial lands on
+when released. The replay asserts the combination after each turn and the set after the vault
+movie. The first turn needs about 300 degrees of drag: the dial starts at 0 and only turns
+right on that turn, so each number is reached by going around.
+
+```bash
+go run . --silent --debug --work=bin/ --load=bin/bank.json --silent-script=tools/replays/bank-crack-solve.json
+```

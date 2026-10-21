@@ -281,7 +281,9 @@ func (h *GameHost) propWalkList(names []string) ([]propWalkEntry, error) {
 	for _, name := range names {
 		folded := strings.ToLower(name)
 		if seen[folded] {
-			return nil, fmt.Errorf("%w: hittest with prop %q twice in the prop table (two native rows are not modelled)", ErrHostOpcodeUnimplemented, name)
+			// Two rows with one name share the one record the port keeps for that name, so the
+			// walk tests that record once. The native would test each row against the same box.
+			continue
 		}
 		seen[folded] = true
 		record, found, err := h.Env.PropPoint(name)
@@ -413,6 +415,19 @@ func (h *GameHost) hitStageFlat(point Point) (string, uint16, error) {
 	}
 	h.setResultLabel(HitLabelFlat)
 	return flat, 0, nil
+}
+
+// HitTest is the world hit test BOOTFILE's mousedown runs before it routes a click: the name
+// it hit and the kind the result slot holds (actor, prop, flat, set or none). A gap is an error.
+func (h *GameHost) HitTest(packed uint32) (name string, kind string, err error) {
+	name, _, err = h.hitTestPoint(packed)
+	if err != nil {
+		return "", "", err
+	}
+	if len(h.context.ResultBuffer) > 0 {
+		kind = string(h.context.ResultBuffer[1:])
+	}
+	return name, kind, nil
 }
 
 // setResultLabel writes a label into the result slot as its Pascal string.

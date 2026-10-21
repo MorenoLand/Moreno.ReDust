@@ -1,0 +1,729 @@
+{
+ "actions": [
+  {
+   "type": "wait",
+   "milliseconds": 500
+  },
+  {
+   "type": "assert",
+   "expect": {
+    "set": "bank"
+   }
+  },
+  {
+   "type": "click",
+   "x": 250,
+   "y": 150
+  },
+  {
+   "type": "wait",
+   "milliseconds": 4000
+  },
+  {
+   "type": "mouse_move",
+   "x": 256,
+   "y": 70
+  },
+  {
+   "type": "mouse_down",
+   "x": 256,
+   "y": 70
+  },
+  {
+   "type": "mouse_move",
+   "x": 266,
+   "y": 71
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 276,
+   "y": 73
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 285,
+   "y": 78
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 293,
+   "y": 84
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 300,
+   "y": 91
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 306,
+   "y": 99
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 311,
+   "y": 108
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 313,
+   "y": 118
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 314,
+   "y": 128
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 313,
+   "y": 138
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 311,
+   "y": 148
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 306,
+   "y": 157
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 300,
+   "y": 165
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 293,
+   "y": 172
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 285,
+   "y": 178
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 276,
+   "y": 183
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 266,
+   "y": 185
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 256,
+   "y": 186
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 246,
+   "y": 185
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 236,
+   "y": 183
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 227,
+   "y": 178
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 219,
+   "y": 172
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 212,
+   "y": 165
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 206,
+   "y": 157
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 201,
+   "y": 148
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 199,
+   "y": 138
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 198,
+   "y": 128
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 199,
+   "y": 118
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 201,
+   "y": 108
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 206,
+   "y": 99
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 209,
+   "y": 94
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "wait",
+   "milliseconds": 300
+  },
+  {
+   "type": "mouse_up",
+   "x": 209,
+   "y": 94
+  },
+  {
+   "type": "wait",
+   "milliseconds": 2500
+  },
+  {
+   "type": "assert",
+   "expect": {
+    "scriptGlobals": {
+     "combo": "08,-1,-1,"
+    }
+   }
+  },
+  {
+   "type": "mouse_move",
+   "x": 251,
+   "y": 70
+  },
+  {
+   "type": "mouse_down",
+   "x": 251,
+   "y": 70
+  },
+  {
+   "type": "mouse_move",
+   "x": 241,
+   "y": 72
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 231,
+   "y": 75
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 223,
+   "y": 80
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 215,
+   "y": 87
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 208,
+   "y": 95
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 203,
+   "y": 103
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 200,
+   "y": 113
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 198,
+   "y": 123
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 198,
+   "y": 133
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 200,
+   "y": 143
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 202,
+   "y": 150
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "wait",
+   "milliseconds": 300
+  },
+  {
+   "type": "mouse_up",
+   "x": 202,
+   "y": 150
+  },
+  {
+   "type": "wait",
+   "milliseconds": 2500
+  },
+  {
+   "type": "assert",
+   "expect": {
+    "scriptGlobals": {
+     "combo": "08,23,-1,"
+    }
+   }
+  },
+  {
+   "type": "mouse_move",
+   "x": 256,
+   "y": 70
+  },
+  {
+   "type": "mouse_down",
+   "x": 256,
+   "y": 70
+  },
+  {
+   "type": "mouse_move",
+   "x": 266,
+   "y": 71
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 276,
+   "y": 73
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 285,
+   "y": 78
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 293,
+   "y": 84
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 300,
+   "y": 91
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 306,
+   "y": 99
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 311,
+   "y": 108
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 313,
+   "y": 118
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 314,
+   "y": 128
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 313,
+   "y": 138
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 311,
+   "y": 148
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 306,
+   "y": 157
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 300,
+   "y": 165
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 293,
+   "y": 172
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 285,
+   "y": 178
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 276,
+   "y": 183
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 266,
+   "y": 185
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 256,
+   "y": 186
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 246,
+   "y": 185
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 236,
+   "y": 183
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 227,
+   "y": 178
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 219,
+   "y": 172
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 212,
+   "y": 165
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "mouse_move",
+   "x": 209,
+   "y": 162
+  },
+  {
+   "type": "wait",
+   "milliseconds": 60
+  },
+  {
+   "type": "wait",
+   "milliseconds": 300
+  },
+  {
+   "type": "mouse_up",
+   "x": 209,
+   "y": 162
+  },
+  {
+   "type": "wait",
+   "milliseconds": 2500
+  },
+  {
+   "type": "assert",
+   "expect": {
+    "scriptGlobals": {
+     "combo": "08,23,41,"
+    }
+   }
+  },
+  {
+   "type": "snapshot",
+   "path": "bin/crack-solved.png"
+  },
+  {
+   "type": "click",
+   "x": 299,
+   "y": 309
+  },
+  {
+   "type": "wait",
+   "milliseconds": 20000
+  },
+  {
+   "type": "assert",
+   "expect": {
+    "set": "bank"
+   }
+  }
+ ]
+}

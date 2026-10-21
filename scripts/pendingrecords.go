@@ -144,6 +144,19 @@ func buttonUpRecord(point uint32) pendingRecord {
 	return pendingRecord{Kind: pendingButtonUpKind, Arg3: 0, Point: point, Param5: 0, Flag: pendingButtonUpFlag}
 }
 
+// NotePress is the left button going down. The native main loop (FUN_0041C180) takes
+// one queued record per pass, first in, first out, before it dispatches a press. A
+// press therefore never meets an earlier button-up, so those are cleared here, and
+// stilldown reads the button as held from the press on (GetKeyState(VK_LBUTTON) < 0).
+func (h *GameHost) NotePress(point uint32) {
+	for {
+		if _, found := h.pending.remove(pendingStilldownMask); !found {
+			break
+		}
+	}
+	h.NoteMouse(point, true, false, false)
+}
+
 // NoteMouse feeds the pending table and the left-button state from the game's
 // per-frame mouse state. Each release is one WM_LBUTTONUP or WM_RBUTTONUP, so
 // each enqueues a kind-2 record. The native record holds the screen point; the

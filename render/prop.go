@@ -36,6 +36,9 @@ type FlatPropSprite struct {
 	Anchor   image.Point
 	Archive  *assets.PropArchive
 	Frame    int
+	// Angle selects the variant of a view that turns with the prop, such as a dial's
+	// degree. Zero is the view's first variant, which is what the static props use.
+	Angle int16
 }
 
 type ProjectedFlatProp struct {
@@ -60,7 +63,7 @@ func CompositeFlatProps(background IndexedFrame, props []FlatPropSprite) (Indexe
 		if prop.Archive == nil {
 			return IndexedFrame{}, nil, fmt.Errorf("flat prop %q has no archive", prop.Name)
 		}
-		info, err := prop.Archive.FrameInfo(prop.PropName, prop.ViewName, prop.Frame, 0)
+		info, err := prop.Archive.FrameInfo(prop.PropName, prop.ViewName, prop.Frame, prop.Angle)
 		if err != nil {
 			return IndexedFrame{}, nil, fmt.Errorf("select flat prop %q frame: %w", prop.Name, err)
 		}

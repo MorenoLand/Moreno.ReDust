@@ -48,16 +48,6 @@ func drawStringFrame(frame render.IndexedFrame, draw scripts.TextDraw) (render.I
 	return render.DrawSubstituteText(frame, draw.Text, image.Pt(draw.X, draw.Y), draw.Bold, draw.Height)
 }
 
-// nativeMoviePath resolves a movie name a script gives playmovie against the
-// movies directory BOOTFILE sets with path(3, "dust:movies:").
-func nativeMoviePath(name string) string {
-	name = strings.TrimSpace(strings.ReplaceAll(name, "\\", "/"))
-	if strings.Contains(name, "/") {
-		return name
-	}
-	return "MOVIES/" + strings.ToUpper(name)
-}
-
 func nativeMovieHasEmbeddedAudio(movie *render.Movie) bool {
 	if movie == nil {
 		return false
@@ -769,7 +759,7 @@ func run() error {
 			nativeCamera.Place(worldPoint[0], worldPoint[1], worldPoint[2])
 		}
 	}
-	scriptHost := &scripts.GameHost{Actors: scriptActors, Props: scripts.NewScriptProps(), Loops: &nativeLoops, Random: &nativeRandom, Shops: []string{"house", "inven"}, Env: scripts.GameHostEnv{
+	scriptHost := &scripts.GameHost{Actors: scriptActors, Props: scripts.NewScriptProps(), Loops: &nativeLoops, Random: &nativeRandom, Shops: []string{"house", "inven"}, FrameInterval: 3, Env: scripts.GameHostEnv{
 		CurrentSet: func() string { return activeSetName },
 		StageOpen:  stageOpen,
 		CloseStage: func() { closedStage = stage },
@@ -895,7 +885,6 @@ func run() error {
 		// frame() is DAT_00459998, which FUN_004059D0 advances once per pump (20 a
 		// second), not the 60 Hz tick counter.
 		Frame:     func() int32 { return int32(nativePumpCount) },
-		FrameRate: func() int32 { return 3 },
 		ShiftKey:  func() bool { return ebiten.IsKeyPressed(ebiten.KeyShift) },
 		ControlDown: func() bool {
 			return ebiten.IsKeyPressed(ebiten.KeyControlLeft) || ebiten.IsKeyPressed(ebiten.KeyControlRight)
@@ -997,6 +986,32 @@ func run() error {
 				continue
 			}
 			sprites = append(sprites, sprite)
+		}
+		return sprites
+	}
+	// scriptFlatProps are the shop props a flat stage draws over its scene: the visible
+	// path A records (no projection) that no set owns. The boot house and inventory files
+	// are left out, since their props show in the world or the inventory, not on a stage.
+	// Anchor and degree select the frame, and table order is the draw order.
+	scriptFlatProps := func() []render.FlatPropSprite {
+		var sprites []render.FlatPropSprite
+		for _, name := range scriptHost.Props.Names() {
+			if strings.EqualFold(name, "bone") {
+				continue
+			}
+			prop := scriptHost.Props.Get(name)
+			if !prop.Visible || prop.View == "" || prop.Projected || prop.Set != "" {
+				continue
+			}
+			key := strings.ToLower(name)
+			if original, aliased := propInstances[key]; aliased {
+				key = original
+			}
+			archive := archiveForProp(key)
+			if archive == propArchive || archive == inventoryArchive {
+				continue
+			}
+			sprites = append(sprites, render.FlatPropSprite{Name: name, PropName: key, ViewName: prop.View, Anchor: image.Pt(int(prop.AnchorX), int(prop.AnchorY)), Archive: archive, Frame: int(prop.Frame), Angle: prop.Degree})
 		}
 		return sprites
 	}
@@ -1690,7 +1705,32 @@ func run() error {
 	currentScene, currentPixels := 0, pixels
 	currentFrame := stageFrame
 	var renderMarieInventory func() error
+	// refreshFlatStage redraws a stage other than the main panel from its scene pixels, with the
+	// open shops' props over it. A stage with no such props keeps the frame it was given, and
+	// one whose props have all gone is redrawn once without them.
+	flatPropsShown := false
+	refreshFlatStage := func() error {
+		sprites := scriptFlatProps()
+		if len(sprites) == 0 && !flatPropsShown {
+			return nil
+		}
+		base, err := render.StageFrame(stage, currentPixels.Pixels)
+		if err != nil {
+			return fmt.Errorf("refresh flat stage: %w", err)
+		}
+		frame, _, err := render.CompositeFlatProps(base, sprites)
+		if err != nil {
+			return fmt.Errorf("draw flat stage props: %w", err)
+		}
+		flatPropsShown = len(sprites) > 0
+		stageFrame, currentFrame = frame, frame
+		return nil
+	}
 	refreshWorldScene := func() error {
+		// A stage other than the main panel draws its own frames; the world is not on screen.
+		if stage != mainStage {
+			return refreshFlatStage()
+		}
 		if currentScene != 0 {
 			return nil
 		}
@@ -3106,6 +3146,10 @@ func run() error {
 		openShops = append(openShops, openShopFile{file: resolved, name: shopName, archive: archive})
 		for _, prop := range archive.ListNames() {
 			scriptHost.Props.AddToTable(prop)
+			// FUN_00420370 starts each new record on its definition's default view (+0x6E).
+			if definition, found := archive.Definition(prop); found && definition.DefaultView != "" {
+				scriptHost.Props.Get(prop).View = definition.DefaultView
+			}
 		}
 		for _, prop := range archive.ListNames() {
 			if err := sendPropMessage("openprop "+prop, fmt.Sprintf("sendtoprop(%q,openprop())", prop)); err != nil {
@@ -3292,9 +3336,8 @@ func run() error {
 	schedulerPasses, schedulerWindow := 0, native.NativeTickMilliseconds()
 	// The native pump (FUN_00406920) finishes each render by waiting until the
 	// timer FUN_0042B700, which counts 60 units a second, has advanced by the
-	// boot script's framerate(3). Walk jobs, loops and projection therefore run
-	// 20 times a second, not once per host update.
-	const nativePumpInterval uint32 = 3
+	// framerate the scripts set (DAT_004599CE, 3 at boot). Walk jobs, loops and
+	// projection therefore run 20 times a second, not once per host update.
 	nextNativePump := uint32(0)
 	forceNativePump := false
 	nativePumpDue := func() bool {
@@ -3302,7 +3345,7 @@ func run() error {
 		if int32(now-nextNativePump) < 0 {
 			return false
 		}
-		nextNativePump = now + nativePumpInterval
+		nextNativePump = now + uint32(scriptHost.FrameInterval)
 		nativePumpCount++
 		return true
 	}
@@ -3461,8 +3504,36 @@ func run() error {
 		}
 		return displayChanged, nil
 	}
+	// nativeMovieName resolves a movie name a script gives playmovie. A bare name is searched
+	// through the path pages in slot order, as a stage file is, so a set or stage that keeps
+	// its movie under its own page (BANK.SET's path(6, "dust:crack:") holds VAULT.MOV) finds
+	// it there; the movies page (path 3, BOOTFILE's "dust:movies:") is one of the slots. A
+	// name with a folder is taken as given, and a missing name keeps the movies page.
+	nativeMovieName := func(name string) string {
+		name = strings.TrimSpace(strings.ReplaceAll(name, "\\", "/"))
+		if strings.Contains(name, "/") {
+			return name
+		}
+		found := ""
+		scripts.ResolveStageFileInPrefixes(name, scriptInterpreter.StagePrefix, func(candidate string) (bool, bool) {
+			asset, err := assets.ResolveAssetName(candidate)
+			if err != nil {
+				return false, false
+			}
+			path := strings.ToUpper(asset)
+			if !workspace.HasAsset(path) {
+				return false, false
+			}
+			found = path
+			return true, true
+		})
+		if found != "" {
+			return found
+		}
+		return "MOVIES/" + strings.ToUpper(name)
+	}
 	startSceneMovie := func(name string) error {
-		movieName := nativeMoviePath(name)
+		movieName := nativeMovieName(name)
 		if currentScene == 0 {
 			if err := refreshWorldScene(); err != nil {
 				return fmt.Errorf("refresh scene before movie %s: %w", name, err)
@@ -5783,6 +5854,9 @@ func run() error {
 			return currentFrame, false, nil
 		}
 		point := mouseEvent.Point
+		if mouseEvent.Button == ebiten.MouseButtonLeft {
+			scriptHost.NotePress(point)
+		}
 		if eventsLocked() {
 			return currentFrame, false, nil
 		}
@@ -5978,6 +6052,24 @@ func run() error {
 						return currentFrame, true, nil
 					}
 					return currentFrame, false, nil
+				}
+			}
+			if mouseEvent.Button == ebiten.MouseButtonLeft && stage != mainStage {
+				// A stage other than the main panel has no world, so its props and actors take the
+				// click the way BOOTFILE's mousedown routes it: sendtoprop or sendtoactor.
+				name, kind, hitErr := scriptHost.HitTest(point)
+				if *debug {
+					log.Printf("stage-hit name=%s kind=%s err=%v", name, kind, hitErr)
+				}
+				if hitErr == nil && (kind == "prop" || kind == "actor") {
+					send := "sendtoprop"
+					if kind == "actor" {
+						send = "sendtoactor"
+					}
+					if err := startScriptSource(name+" mousedown", fmt.Sprintf("%s(%q,mousedown(%d))", send, name, int32(point)), nil); err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+					return currentFrame, true, nil
 				}
 			}
 			if mouseEvent.Button == ebiten.MouseButtonLeft && (scriptedSets[activeSetName] && setEventsOpen || activeSetName == "sallower" && story.SallowerMouseScripted(view.Resource)) && view.Name[0] != 0 {

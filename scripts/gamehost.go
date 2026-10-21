@@ -42,9 +42,8 @@ type GameHostEnv struct {
 	PlayerCenter func() (x, y, z int32)
 	// EndBall sends a prop endball(message) the way a loop callback is sent.
 	EndBall func(name, message string) error
-	// Frame is the frame() counter and FrameRate the boot framerate.
-	Frame     func() int32
-	FrameRate func() int32
+	// Frame is the frame() counter.
+	Frame func() int32
 	// ShiftKey reports whether a Shift key is down, the state FUN_0042EBA0 reads
 	// as GetKeyState(VK_SHIFT) < 0 for shiftkey. optionkey has no hook: its native
 	// callee always returns 0.
@@ -300,6 +299,10 @@ type GameHost struct {
 	// Shops are the shop files open for the whole game, in openshopfile order
 	// (FUN_00420110 appends each record). BOOTFILE opens house.prp, then inven.prp.
 	Shops []string
+	// FrameInterval is DAT_004599CE, the native pump interval in 60-unit ticks
+	// (FUN_0042B700). BOOTFILE's framerate(3) sets it to 3, and the framerate statement
+	// (FUN_00426190) replaces it, clamped to 0..60.
+	FrameInterval int32
 	// PuppetGrab and PuppetBase are DAT_004599AC and the puppetbase name.
 	PuppetGrab bool
 	// PuppetParams are puppetparam's eight 16-bit slots (DAT_0045999C..AA).
@@ -550,6 +553,25 @@ func (h *GameHost) command(call *ScriptCall) (int, uint16, error) {
 		if len(args) != 1 || args[0].Kind != 2 {
 			return 0, ScriptStatusWrongType, nil
 		}
+		return consumed, 0, nil
+	case "framerate":
+		// FUN_00426190: one numeric argument (0x0E otherwise) sets DAT_004599CE, clamped to
+		// 0..60. The native pump waits on it between renders (FUN_00406920).
+		args, consumed, status, err := call.Args()
+		if err != nil || status != 0 {
+			return 0, status, err
+		}
+		if len(args) != 1 || args[0].Kind != ValueTypeNumeric {
+			return 0, ScriptStatusWrongType, nil
+		}
+		interval := args[0].Int
+		if interval < 0 {
+			interval = 0
+		}
+		if interval > 60 {
+			interval = 60
+		}
+		h.FrameInterval = interval
 		return consumed, 0, nil
 	case "actorvisible":
 		actor, args, consumed, status, err := h.actorArgs(call, 2)
@@ -1832,10 +1854,11 @@ func (h *GameHost) value(call *ScriptCall) (Record, int, uint16, error) {
 		if err != nil || status != 0 {
 			return Record{}, 0, status, err
 		}
-		source := h.Env.Frame
 		if name == "framerate" {
-			source = h.Env.FrameRate
+			// FUN_00416540 returns DAT_004599CE, the value the framerate statement sets.
+			return number(h.FrameInterval, consumed)
 		}
+		source := h.Env.Frame
 		if source == nil {
 			return Record{}, 0, 0, fmt.Errorf("%s has no source", name)
 		}

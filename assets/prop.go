@@ -47,6 +47,9 @@ type PropDefinition struct {
 	// viewResources is each view's descriptor key in table order, the blocks the
 	// warm-up walk (FUN_00421DD0) acquires for this definition.
 	viewResources []uint32
+	// DefaultView is the Pascal string at definition +0x6E. FUN_00420370 copies it into the
+	// record's view (+0x7E), so a new record starts with this view.
+	DefaultView string
 }
 
 type PropView struct {
@@ -150,6 +153,19 @@ func (w Workspace) OpenPropArchive(name string) (*PropArchive, error) {
 	return archive, nil
 }
 
+// defaultViewField reads the definition's default view at +0x6E, a Pascal string. An
+// empty or short field gives the empty view.
+func defaultViewField(data []byte) string {
+	if len(data) <= 0x6E {
+		return ""
+	}
+	exact, err := pascalField(data[0x6E:])
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(exact)
+}
+
 func parsePropDefinition(resource uint32, data []byte, resourceCount uint32) (PropDefinition, error) {
 	if len(data) <= propDefinitionName {
 		return PropDefinition{}, fmt.Errorf("definition resource is shorter than its name field")
@@ -166,7 +182,7 @@ func parsePropDefinition(resource uint32, data []byte, resourceCount uint32) (Pr
 		return PropDefinition{}, fmt.Errorf("definition %q view count %d exceeds resource size %d", name, countValue, len(data))
 	}
 	count := int(countValue)
-	definition := PropDefinition{Resource: resource, ScriptResource: binary.LittleEndian.Uint32(data[0x26:0x2a]), Name: name, views: make(map[string]uint32, count)}
+	definition := PropDefinition{Resource: resource, ScriptResource: binary.LittleEndian.Uint32(data[0x26:0x2a]), DefaultView: defaultViewField(data), Name: name, views: make(map[string]uint32, count)}
 	for index := range count {
 		row := data[propViewRowsOffset+index*propViewRowSize : propViewRowsOffset+(index+1)*propViewRowSize]
 		descriptor := binary.LittleEndian.Uint32(row[:4])
