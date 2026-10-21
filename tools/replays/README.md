@@ -70,6 +70,13 @@ go run ./tools/courtsave -from=bin/saves/ballsacks.rtd -set=target -scene="Scene
 go run . --silent --debug --work=bin/ --load=bin/target-hold.json --silent-script=tools/replays/target-shot.json
 ```
 
+`target-exit.json` leaves the range by its EXIT button (held for a moment, as a click is), on the same gun
+save as `target-shot.json`. The range's score is given and the set returns to the town.
+
+```bash
+go run . --silent --debug --work=bin/ --load=bin/target-hold.json --silent-script=tools/replays/target-exit.json
+```
+
 `fountain-to-hub.json` runs the courtyard fountain route: the save is in Scene C5 facing north, day 4 at night, with the tstone item in the box. The click plays OPENFOUN.MOV and the game reaches the hub (Scene D7).
 
 ```bash

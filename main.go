@@ -4012,7 +4012,23 @@ func run() error {
 			}
 		}
 		worldPoint = progress.Point
-		if err := scriptInterpreter.RestoreGlobals(progress.ScriptGlobals); err != nil {
+		// A set's open can declare globals that the save does not list: the range's opencast sets
+		// targetshotcount to 0. Those keep the open's values, since the save cannot name them.
+		savedGlobals := make(map[string]bool, len(progress.ScriptGlobals))
+		for _, variable := range progress.ScriptGlobals {
+			savedGlobals[strings.ToLower(variable.Name)] = true
+		}
+		restoredGlobals := append([]scripts.GlobalVariable(nil), progress.ScriptGlobals...)
+		openedGlobals, err := scriptInterpreter.SnapshotGlobals()
+		if err != nil {
+			return err
+		}
+		for _, variable := range openedGlobals {
+			if !savedGlobals[strings.ToLower(variable.Name)] {
+				restoredGlobals = append(restoredGlobals, variable)
+			}
+		}
+		if err := scriptInterpreter.RestoreGlobals(restoredGlobals); err != nil {
 			return err
 		}
 		// Saves from before the set scripts keep neither global. The town's
@@ -4025,6 +4041,20 @@ func run() error {
 		}
 		if progress.ScriptProps != nil {
 			scriptHost.Props.Restore(*progress.ScriptProps)
+			// The set's openset has already opened its shops, and a save from before they were open
+			// does not list their props. The rows openshopfile would have added are put back, each
+			// on its definition's default view (FUN_00420370), unless the save already lists them.
+			for _, shop := range openShops {
+				for _, prop := range shop.archive.ListNames() {
+					if scriptHost.Props.Known(prop) {
+						continue
+					}
+					scriptHost.Props.AddToTable(prop)
+					if definition, found := shop.archive.Definition(prop); found && definition.DefaultView != "" {
+						scriptHost.Props.Get(prop).View = definition.DefaultView
+					}
+				}
+			}
 		}
 		if progress.ScriptActors == nil {
 			// A save from before script-managed actors (or a new game):

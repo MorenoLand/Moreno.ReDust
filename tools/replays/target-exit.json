@@ -1,0 +1,41 @@
+{
+ "actions": [
+  {
+   "type": "wait",
+   "milliseconds": 800
+  },
+  {
+   "type": "mouse_move",
+   "x": 297,
+   "y": 304
+  },
+  {
+   "type": "mouse_down",
+   "x": 297,
+   "y": 304
+  },
+  {
+   "type": "wait",
+   "milliseconds": 300
+  },
+  {
+   "type": "mouse_up",
+   "x": 297,
+   "y": 304
+  },
+  {
+   "type": "wait",
+   "milliseconds": 12000
+  },
+  {
+   "type": "assert",
+   "expect": {
+    "set": "town"
+   }
+  },
+  {
+   "type": "snapshot",
+   "path": "bin/target-exited.png"
+  }
+ ]
+}
