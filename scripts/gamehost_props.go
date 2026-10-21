@@ -610,6 +610,36 @@ func (h *GameHost) propCommand(name string, call *ScriptCall) (consumed int, sta
 			return consumed, ScriptStatusMalformed, true, nil
 		}
 		return consumed, 0, true, nil
+	case "propdist":
+		// FUN_0041F350, the propdist statement (opcode 16013 in the statement switch; the value
+		// form is FUN_0041F400). FUN_00417070 reads the name and the number (0x1C for a missing
+		// comma). The name must be a string in the prop table (0x0E, 0x0A), and the number a number
+		// (0x0E, checked after the lookup). A path A record (word 9 zero) takes a negative number as
+		// its walker word, word 20. Other records are stored back unchanged.
+		args, consumed, extra, status, err := h.propReadArgs(call, 2)
+		if err != nil || status != 0 {
+			return 0, status, true, err
+		}
+		if h.Props == nil {
+			return 0, 0, true, fmt.Errorf("props are unavailable")
+		}
+		if args[0].Kind != 3 {
+			return 0, ScriptStatusWrongType, true, nil
+		}
+		if !h.Props.Known(args[0].Text) {
+			return 0, StatusNameNotFound, true, nil
+		}
+		if args[1].Kind != 4 {
+			return 0, ScriptStatusWrongType, true, nil
+		}
+		prop := h.Props.Get(args[0].Text)
+		if !prop.Projected && args[1].Int < 0 {
+			prop.Walker = int16(args[1].Int)
+		}
+		if extra {
+			return consumed, ScriptStatusMalformed, true, nil
+		}
+		return consumed, 0, true, nil
 	case "propis3d":
 		// FUN_0041FFD0, the propis3d statement. FUN_00417070 reads the name and the
 		// boolean (0x1C for a missing comma). The name must be a string (0x0E) and in the

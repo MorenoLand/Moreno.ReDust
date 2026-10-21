@@ -2904,12 +2904,15 @@ func run() error {
 	// stage's own cache. Their stage frame is NEW.FLT's script (StageScript), so
 	// only NEW.FLT runs here; any other open stage reports not runnable and keeps
 	// the fallback.
-	flatPrograms := map[uint32]*scripts.Program{}
+	// flatPrograms caches the flat and button scripts by the open stage file and resource, so
+	// a flat in one stage never reuses another stage's program.
+	flatPrograms := map[string]*scripts.Program{}
 	flatResourceProgram := func(resource uint32) (*scripts.Program, error) {
-		if program, found := flatPrograms[resource]; found {
+		key := fmt.Sprintf("%s#%d", stage.Path, resource)
+		if program, found := flatPrograms[key]; found {
 			return program, nil
 		}
-		lease, err := mainStage.AcquireResource(resource)
+		lease, err := stage.AcquireResource(resource)
 		if err != nil {
 			return nil, err
 		}
@@ -2922,20 +2925,20 @@ func run() error {
 		}
 		program, err := scripts.ParseProgram(data)
 		if err != nil {
-			return nil, fmt.Errorf("parse NEW.FLT resource %d: %w", resource, err)
+			return nil, fmt.Errorf("parse stage %s resource %d: %w", stage.Path, resource, err)
 		}
-		flatPrograms[resource] = &program
+		flatPrograms[key] = &program
 		return &program, nil
 	}
 	scriptHost.Env.FlatScript = func(index int) (*scripts.Program, bool, error) {
-		if !stageOpen() || stage != mainStage || index < 0 || index >= len(stage.Scenes) {
+		if !stageOpen() || index < 0 || index >= len(stage.Scenes) {
 			return nil, false, nil
 		}
 		program, err := flatResourceProgram(stage.Scenes[index].Fields[0])
 		return program, err == nil, err
 	}
 	scriptHost.Env.FlatButtonScript = func(flat, index int) (*scripts.Program, bool, error) {
-		if !stageOpen() || stage != mainStage {
+		if !stageOpen() {
 			return nil, false, nil
 		}
 		handlers, err := stage.SceneHandlers(flat)

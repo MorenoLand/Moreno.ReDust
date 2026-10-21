@@ -59,3 +59,12 @@ go run ./tools/courtsave -from=bin/saves/ballsacks.rtd -set=court -scene="Scene 
 # then set "day": 4 and inventoryOwners.tstone to "box" in bin/fountain.json
 go run . --silent --debug --work=bin/ --load=bin/fountain.json --silent-script=tools/replays/fountain-to-hub.json
 ```
+
+`bank-crack.json` opens the bank's safe. The save is in the bank's Scene D1 facing west, on day 3 at night.
+Clicking the sign runs docrack, which opens the crack stage with its dial and combination buttons.
+
+```bash
+go run ./tools/courtsave -from=bin/saves/ballsacks.rtd -set=bank -scene="Scene D1" -point=3,0,4 -clock=3 -out=bin/bank.json
+# then set "day": 3 in bin/bank.json
+go run . --silent --debug --work=bin/ --load=bin/bank.json --silent-script=tools/replays/bank-crack.json
+```
