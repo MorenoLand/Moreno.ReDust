@@ -859,22 +859,6 @@ func (h *GameHost) puppetValue(name string, call *ScriptCall) (Record, int, uint
 			return Record{}, 0, ScriptStatusWrongType, true, nil
 		}
 		return Record{Kind: 4, Data: uint32(scanDecimal(args[0].Text))}, consumed, 0, true, nil
-	case "propdeg":
-		args, consumed, status, err := call.Args()
-		if err != nil || status != 0 {
-			return Record{}, 0, status, true, err
-		}
-		if len(args) != 1 || args[0].Kind != 3 {
-			return Record{}, 0, ScriptStatusWrongType, true, nil
-		}
-		if h.Env.PropDegree == nil {
-			return Record{}, 0, 0, true, fmt.Errorf("propdeg has no prop table")
-		}
-		degree, ok := h.Env.PropDegree(args[0].Text)
-		if !ok {
-			return Record{}, 0, 0x0a, true, nil
-		}
-		return Record{Kind: 4, Data: uint32(int32(degree))}, consumed, 0, true, nil
 	}
 	return Record{}, 0, 0, false, nil
 }

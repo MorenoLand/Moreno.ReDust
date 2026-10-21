@@ -1793,7 +1793,7 @@ func run() error {
 			return false, nil
 		}
 		refresh := func() error {
-			if currentScene == 2 {
+			if stage == mainStage && currentScene == 2 {
 				return renderMarieInventory()
 			}
 			return refreshWorldScene()
@@ -2444,8 +2444,33 @@ func run() error {
 			}
 			return refreshWorldScene()
 		},
-		cursor:   func(name string) error { scriptCursorName = name; return nil },
-		gotoFlat: func(name string) error { return nil },
+		cursor: func(name string) error { scriptCursorName = name; return nil },
+		gotoFlat: func(name string) error {
+			// FUN_00411AD0: a string argument resolves through the open stage's flat
+			// names, then the flat switch runs as the score-menu buttons run it. An
+			// unknown name is native status 10 and changes nothing.
+			resolved, status, err := scripts.ResolveGotoflatTarget(stageOpen(), scripts.GotoflatValue{Type: 3, Name: name}, func(flat string) (int, error) {
+				index, found := scriptHost.Env.FlatIndex(flat)
+				if !found {
+					return -1, scripts.ErrUnknownFlat
+				}
+				return index, nil
+			})
+			if err != nil {
+				return err
+			}
+			if status != 0 {
+				if *debug {
+					log.Printf("gotoflat %q unresolved status=%#x", name, status)
+				}
+				return nil
+			}
+			if _, _, err := applyFlatTarget(resolved-1, 0, 0, 0); err != nil {
+				return err
+			}
+			convDirty = true
+			return nil
+		},
 		play: func(name string) error {
 			scriptMovieFinished = false
 			return scriptPlayMovie(name)
@@ -2460,7 +2485,7 @@ func run() error {
 			return nil
 		},
 		picked: func() bool {
-			if currentScene == 2 {
+			if stage == mainStage && currentScene == 2 {
 				scriptInventorySeen = true
 				return false
 			}
@@ -2744,9 +2769,6 @@ func run() error {
 			return "", 0, false
 		}
 		return file, binary.LittleEndian.Uint32(data[0x924:0x928]), true
-	}
-	scriptHost.Env.PropDegree = func(name string) (int16, bool) {
-		return inventoryDegrees[strings.ToLower(name)], true
 	}
 	// propinstance (FUN_0041E840) adds props that share their source's script.
 	scriptHost.Env.PropInstance = func(source, name string) (uint16, bool) {
@@ -4907,7 +4929,7 @@ func run() error {
 	}
 	returnToMainPanel := func(effect uint16, duration int) (render.IndexedFrame, bool, error) {
 		oldFrame := currentFrame
-		if currentScene == 2 {
+		if stage == mainStage && currentScene == 2 {
 			setInventoryLoopsPaused(false)
 		}
 		currentScene, currentPixels = 0, pixels
@@ -5132,6 +5154,13 @@ func run() error {
 			for index, choice := range convChoices {
 				choiceEvents[index] = choice.EventID
 			}
+			// scriptProps reports each prop in the table by name: its degree, its visible flag and
+			// its position, which the replays assert on (a puzzle's wheels, for one).
+			propStates := map[string]any{}
+			for _, name := range scriptHost.Props.Names() {
+				prop := scriptHost.Props.Get(name)
+				propStates[strings.ToLower(name)] = map[string]any{"degree": int(prop.Degree), "visible": prop.Visible, "x": int(prop.AnchorX), "y": int(prop.AnchorY)}
+			}
 			globals := map[string]any{}
 			if values, err := scriptInterpreter.SnapshotGlobals(); err == nil {
 				for _, value := range values {
@@ -5144,12 +5173,12 @@ func run() error {
 			} else {
 				globals["snapshotError"] = err.Error()
 			}
-			return map[string]any{"day": gameDay, "clock": gameClock, "phase": gamePhase, "set": activeSetName, "scene": string(stage.Scenes[currentScene].Name[1:]), "point": worldPoint, "cash": playercash, "inventory": inventoryOwners, "inventoryMenu": inventoryMenuActive, "breakfast": hotelHotplateStage != nil && stage == hotelHotplateStage, "jonesPhase": jonesPhase, "jonesRingStory": jonesRingStory, "laurelPhase": laurelPhase, "helpPhase": helpPhase, "scriptGlobals": globals, "engineBusy": engineBusy, "bone": map[string]any{"visible": boneWorldProp.Visible, "owner": boneOwner, "position": boneWorldProp.Position, "view": boneWorldProp.View.Name}, "movieFrame": movieFrame, "movieWaiting": movieWaiting, "conversation": map[string]any{"open": convPuppet != nil, "choosing": convChoosing, "choiceEvents": choiceEvents, "taskActive": scriptTask != nil}, "options": map[string]any{"subtitles": scriptHost.PuppetParams[6] != 0, "seldir": options.menu.seldir, "keys": map[string]any{"north": options.key("north"), "east": options.key("east"), "west": options.key("west")}, "dialog": options.modal.Active(), "credits": creditsScr.Active(), "quit": quitRequested, "volume": audio.WaveVolume(), "lastSave": options.lastName}, "scriptActors": scriptActors.Snapshot([]string{"mwife", "blood", "buick", "marie", "jones", "leroy", "help", "laurel", "trotter", "isao", "dog"})}
+			return map[string]any{"scriptProps": propStates, "day": gameDay, "clock": gameClock, "phase": gamePhase, "set": activeSetName, "scene": string(stage.Scenes[currentScene].Name[1:]), "point": worldPoint, "cash": playercash, "inventory": inventoryOwners, "inventoryMenu": inventoryMenuActive, "breakfast": hotelHotplateStage != nil && stage == hotelHotplateStage, "jonesPhase": jonesPhase, "jonesRingStory": jonesRingStory, "laurelPhase": laurelPhase, "helpPhase": helpPhase, "scriptGlobals": globals, "engineBusy": engineBusy, "bone": map[string]any{"visible": boneWorldProp.Visible, "owner": boneOwner, "position": boneWorldProp.Position, "view": boneWorldProp.View.Name}, "movieFrame": movieFrame, "movieWaiting": movieWaiting, "conversation": map[string]any{"open": convPuppet != nil, "choosing": convChoosing, "choiceEvents": choiceEvents, "taskActive": scriptTask != nil}, "options": map[string]any{"subtitles": scriptHost.PuppetParams[6] != 0, "seldir": options.menu.seldir, "keys": map[string]any{"north": options.key("north"), "east": options.key("east"), "west": options.key("west")}, "dialog": options.modal.Active(), "credits": creditsScr.Active(), "quit": quitRequested, "volume": audio.WaveVolume(), "lastSave": options.lastName}, "scriptActors": scriptActors.Snapshot([]string{"mwife", "blood", "buick", "marie", "jones", "leroy", "help", "laurel", "trotter", "isao", "dog"})}
 		})
 	}
 	scriptBlackFrame = blackFrame
 	scriptEngineBusy = func() bool {
-		busy := currentScene == 2 || playback != nil || transition != nil || sceneMovieAfter != nil || pendingMovement != 0
+		busy := (stage == mainStage && currentScene == 2) || playback != nil || transition != nil || sceneMovieAfter != nil || pendingMovement != 0
 		if busy && *debug && *debugLoops {
 			log.Printf("script-busy scene=%d playback=%t transition=%t sceneMovieAfter=%t frame=%d waiting=%t", currentScene, playback != nil, transition != nil, sceneMovieAfter != nil, playback.FrameIndex(), playback.WaitingForInput())
 		}
@@ -5991,7 +6020,7 @@ func run() error {
 				return currentFrame, true, nil
 			}
 		}
-		if scriptTask != nil && currentScene == 2 && mouseEvent.Button == ebiten.MouseButtonLeft {
+		if scriptTask != nil && stage == mainStage && currentScene == 2 && mouseEvent.Button == ebiten.MouseButtonLeft {
 			if name, found := render.HitTestFlatProps(marieInventoryProjected, image.Pt(int(int16(point>>16)), int(int16(point)))); found {
 				handItem = name
 				if err := renderMarieInventory(); err != nil {
@@ -6140,24 +6169,26 @@ func run() error {
 					return currentFrame, false, nil
 				}
 			}
-			if mouseEvent.Button == ebiten.MouseButtonLeft && stage != mainStage {
-				// A stage other than the main panel has no world, so its props and actors take the
-				// click the way BOOTFILE's mousedown routes it: sendtoprop or sendtoactor.
-				name, kind, hitErr := scriptHost.HitTest(point)
-				if *debug {
-					log.Printf("stage-hit name=%s kind=%s err=%v", name, kind, hitErr)
-				}
-				if hitErr == nil && (kind == "prop" || kind == "actor") {
-					send := "sendtoprop"
-					if kind == "actor" {
-						send = "sendtoactor"
-					}
-					if err := startScriptSource(name+" mousedown", fmt.Sprintf("%s(%q,mousedown(%d))", send, name, int32(point)), nil); err != nil {
-						return render.IndexedFrame{}, false, err
-					}
-					return currentFrame, true, nil
-				}
+		}
+		if !hit && mouseEvent.Button == ebiten.MouseButtonLeft && stage != mainStage {
+			// A stage other than the main panel has no world, so its props and actors take the
+			// click the way BOOTFILE's mousedown routes it: sendtoprop or sendtoactor.
+			name, kind, hitErr := scriptHost.HitTest(point)
+			if *debug {
+				log.Printf("stage-hit name=%s kind=%s err=%v", name, kind, hitErr)
 			}
+			if hitErr == nil && (kind == "prop" || kind == "actor") {
+				send := "sendtoprop"
+				if kind == "actor" {
+					send = "sendtoactor"
+				}
+				if err := startScriptSource(name+" mousedown", fmt.Sprintf("%s(%q,mousedown(%d))", send, name, int32(point)), nil); err != nil {
+					return render.IndexedFrame{}, false, err
+				}
+				return currentFrame, true, nil
+			}
+		}
+		if !hit && currentScene == 0 {
 			if mouseEvent.Button == ebiten.MouseButtonLeft && (scriptedSets[activeSetName] && setEventsOpen || activeSetName == "sallower" && story.SallowerMouseScripted(view.Resource)) && view.Name[0] != 0 {
 				// BOOTFILE mousedown: hittest found no actor or button, so the
 				// click goes to the scene as sendtoscene(<scene>, mousedown(<point>)).
@@ -6389,8 +6420,25 @@ func run() error {
 				if err := refreshWorldScene(); err != nil {
 					return render.IndexedFrame{}, false, err
 				}
-				if hit && scriptManaged[strings.ToLower(actor)] {
+				// INVEN.PRP's drop: an actor under the point gets offerobject, else a point in the set
+				// goes to the scene, else a point above the panel line in the stage goes to the flat.
+				offer := ""
+				packed := uint32(uint16(int16(point.X)))<<16 | uint32(uint16(int16(point.Y)))
+				switch {
+				case hit && scriptManaged[strings.ToLower(actor)]:
 					if err := startScriptTask(scripts.ActorEvent{Actor: actor, Message: fmt.Sprintf("offerobject(%q)", heldItemDragName)}); err != nil {
+						return render.IndexedFrame{}, false, err
+					}
+				case scriptHost.PointInSet(packed):
+					offer = fmt.Sprintf("sendtoscene(%q,offerobject(%q))", strings.ToLower(string(view.Name[1:])), heldItemDragName)
+				case point.Y < 264 && stageOpen() && stage != mainStage:
+					// pointinstage is the stage view; the panel starts at y 264, as the stage's own check does.
+					if result, status := scripts.PointInStageValue(scripts.ValueTypeNumeric, packed, stageOpen(), true); status == 0 && result.Value != 0 && scriptHost.Env.CurrentFlat != nil {
+						offer = fmt.Sprintf("sendtoflat(%q,offerobject(%q))", scriptHost.Env.CurrentFlat(), heldItemDragName)
+					}
+				}
+				if offer != "" {
+					if err := startScriptSource(heldItemDragName+" offer", offer, nil); err != nil {
 						return render.IndexedFrame{}, false, err
 					}
 				}

@@ -81,8 +81,6 @@ type GameHostEnv struct {
 	// PropInstance registers an instance of a prop under a new name and returns
 	// the status propinstance reports.
 	PropInstance func(source, name string) (status uint16, added bool)
-	// PropDegree is a prop's degree (propdeg).
-	PropDegree func(name string) (int16, bool)
 	// PropViewListed reports whether a view is in the view list of the definition
 	// behind a prop, and whether that definition is known. propview returns 0x0A
 	// for a view that is not listed (FUN_00421D00, called from FUN_0041F130).
