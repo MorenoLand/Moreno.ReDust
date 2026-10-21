@@ -20,6 +20,10 @@ type WorldActorSprite struct {
 	Metric   uint16
 	Frame    PuppetFrame
 	Visible  bool
+	// Placed is false for an actor positioned in the screen (actorxy), which the native draws at
+	// its anchor without projection (FUN_0040DB70's path A, word 9 zero). Placed actors are
+	// projected from the set's camera (path B).
+	Placed bool
 }
 
 type ProjectedWorldActor struct {
@@ -329,6 +333,9 @@ func nativeScaleSourceIndex(destination, sourceSize, destinationSize int) int {
 }
 
 func projectWorldActor(background IndexedFrame, point [3]int16, actor WorldActorSprite) (ProjectedWorldActor, bool, error) {
+	if !actor.Placed {
+		return project2DWorldActor(background, actor)
+	}
 	forwardX, forwardY := 0, -1
 	switch point[2] {
 	case assets.SetDirectionSouth:
@@ -386,6 +393,49 @@ func projectWorldActor(background IndexedFrame, point [3]int16, actor WorldActor
 		pixels, mask = clippedPixels, clippedMask
 	}
 	return ProjectedWorldActor{Name: actor.Name, Depth: depth, Bounds: visible, pixels: pixels, mask: mask}, true, nil
+}
+
+// project2DWorldActor draws an actor positioned in the screen (actorxy). Its anchor is its
+// position's x and y, the frame is its own size at the actor's scale (1000 is the frame's
+// size), and it is drawn last so it covers the projected actors behind it, as the native
+// path A records are drawn after the projection.
+func project2DWorldActor(background IndexedFrame, actor WorldActorSprite) (ProjectedWorldActor, bool, error) {
+	scale := int(actor.Scale)
+	if scale <= 0 {
+		scale = 1000
+	}
+	width, height := actor.Frame.Width*scale/1000, actor.Frame.Height*scale/1000
+	if width < 1 || height < 1 {
+		return ProjectedWorldActor{}, false, nil
+	}
+	sourcePixels, sourceMask, err := decodeWorldActorFrame(actor.Frame)
+	if err != nil {
+		return ProjectedWorldActor{}, false, fmt.Errorf("decode screen actor %q frame: %w", actor.Name, err)
+	}
+	pixels, mask := sourcePixels, sourceMask
+	if width != actor.Frame.Width || height != actor.Frame.Height {
+		pixels, mask = scaleWorldActorFrame(actor.Frame, sourcePixels, sourceMask, width, height)
+	}
+	anchorX, anchorY := int(actor.Position[0]), int(actor.Position[1])
+	left := anchorX - actor.Frame.Origin.X*width/actor.Frame.Width
+	top := anchorY - actor.Frame.Origin.Y*height/actor.Frame.Height
+	bounds := image.Rect(left, top, left+width, top+height)
+	visible := bounds.Intersect(image.Rect(0, 0, background.Width, background.Height))
+	if visible.Empty() {
+		return ProjectedWorldActor{}, false, nil
+	}
+	if visible != bounds {
+		clippedPixels, clippedMask := make([]byte, visible.Dx()*visible.Dy()), make([]bool, visible.Dx()*visible.Dy())
+		for y := range visible.Dy() {
+			for x := range visible.Dx() {
+				source := (visible.Min.Y-bounds.Min.Y+y)*bounds.Dx() + visible.Min.X - bounds.Min.X + x
+				destination := y*visible.Dx() + x
+				clippedPixels[destination], clippedMask[destination] = pixels[source], mask[source]
+			}
+		}
+		pixels, mask = clippedPixels, clippedMask
+	}
+	return ProjectedWorldActor{Name: actor.Name, Depth: 0, Bounds: visible, pixels: pixels, mask: mask}, true, nil
 }
 
 func scaleWorldActorFrame(frame PuppetFrame, sourcePixels []byte, sourceMask []bool, width, height int) ([]byte, []bool) {

@@ -605,7 +605,10 @@ func run() error {
 		actors := make([]render.WorldActorSprite, 0, 4)
 		for _, key := range scriptActors.Names() {
 			record, _ := scriptActors.Lookup(key)
-			if !scriptManaged[key] || !record.Visible || !strings.EqualFold(record.Set, activeSetName) {
+			// A screen-positioned actor with no set (the range's bottles and targets, placed by actorxy)
+			// shows with the open set's cast, as the native draws path A records by their visible flag.
+			ownedBySet := strings.EqualFold(record.Set, activeSetName) || record.Set == "" && !record.Placed
+			if !scriptManaged[key] || !record.Visible || !ownedBySet {
 				continue
 			}
 			castActor := scriptActorRecords[key]
@@ -613,10 +616,17 @@ func run() error {
 			if *debug && *debugLoops {
 				log.Printf("script-actor-draw %s", record)
 			}
-			sprite, err := render.LoadCastActorFrame(workspace, scriptActorCasts[key], castActor, record.Pose, int(record.Frame), int16(record.Scale), render.NativeActorViewAngle(record.Position, point, record.Heading), record.ZClip)
+			// A projected actor's frame turns with the camera; a screen-positioned one (actorxy) keeps
+			// its own heading (FUN_0040DB70 path A reads word 12, the heading, as the angle).
+			angle := record.Heading
+			if record.Placed {
+				angle = render.NativeActorViewAngle(record.Position, point, record.Heading)
+			}
+			sprite, err := render.LoadCastActorFrame(workspace, scriptActorCasts[key], castActor, record.Pose, int(record.Frame), int16(record.Scale), angle, record.ZClip)
 			if err != nil {
 				return nil, fmt.Errorf("load script actor %s in %s: %w", record.Name, activeSetName, err)
 			}
+			sprite.Placed = record.Placed
 			actors = append(actors, sprite)
 		}
 		
