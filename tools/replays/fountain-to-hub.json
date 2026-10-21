@@ -1,0 +1,10 @@
+{
+  "actions": [
+    {"type": "wait", "milliseconds": 500},
+    {"type": "assert", "expect": {"set": "court"}},
+    {"type": "click", "x": 260, "y": 230},
+    {"type": "wait", "milliseconds": 20000},
+    {"type": "assert", "expect": {"set": "hub"}},
+    {"type": "snapshot", "path": "bin/fountain-hub.png"}
+  ]
+}

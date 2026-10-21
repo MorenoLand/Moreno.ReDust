@@ -51,3 +51,11 @@ go run . --silent --debug --work=bin/ --load=bin/snake.json --silent-script=tool
 The target range (`TARGET/TARGET.SET`) opens from its first row, Scene I13, facing west
 (`-point=8,12,1`). Its openset expects the game's entry script to have set the path first,
 so a save-started open reports `openstagefile` status 0x2a, which is a test artifact.
+
+`fountain-to-hub.json` runs the courtyard fountain route: the save is in Scene C5 facing north, day 4 at night, with the tstone item in the box. The click plays OPENFOUN.MOV and the game reaches the hub (Scene D7).
+
+```bash
+go run ./tools/courtsave -from=bin/saves/ballsacks.rtd -set=court -scene="Scene C5" -point=2,4,1 -clock=3 -out=bin/fountain.json
+# then set "day": 4 and inventoryOwners.tstone to "box" in bin/fountain.json
+go run . --silent --debug --work=bin/ --load=bin/fountain.json --silent-script=tools/replays/fountain-to-hub.json
+```
