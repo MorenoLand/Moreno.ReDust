@@ -2739,10 +2739,10 @@ func run() error {
 		if original, aliased := propInstances[sourceKey]; aliased {
 			sourceKey = original
 		}
-		if _, found := inventoryArchive.Definition(sourceKey); !found {
-			if _, found := propArchive.Definition(sourceKey); !found {
-				return 0x0a, false
-			}
+		// FUN_0041E840 copies the source from the prop table, which holds the house and inventory
+		// props and the ones an open shop added (HUB.PRP's spring1 is one of those).
+		if !scriptHost.Props.Known(sourceKey) {
+			return 0x0a, false
 		}
 		if _, found := inventoryArchive.Definition(key); found {
 			return 0, false
@@ -3150,6 +3150,11 @@ func run() error {
 			if definition, found := archive.Definition(prop); found && definition.DefaultView != "" {
 				scriptHost.Props.Get(prop).View = definition.DefaultView
 			}
+		}
+		// FUN_004204D0 runs the shop's own openshop() before it sends openprop() to each of its
+		// props, so a shop script such as SUNDIAL.PRP's initprops sets its props up first.
+		if err := sendPropMessage("openshop "+shopName, fmt.Sprintf("sendtoshop(%q,openshop())", shopName)); err != nil {
+			return "", 0, err
 		}
 		for _, prop := range archive.ListNames() {
 			if err := sendPropMessage("openprop "+prop, fmt.Sprintf("sendtoprop(%q,openprop())", prop)); err != nil {

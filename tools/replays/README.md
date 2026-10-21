@@ -52,6 +52,15 @@ The target range (`TARGET/TARGET.SET`) opens from its first row, Scene I13, faci
 (`-point=8,12,1`). Its openset expects the game's entry script to have set the path first,
 so a save-started open reports `openstagefile` status 0x2a, which is a test artifact.
 
+`hub-sundial-chest.json` turns the hub's sundial dials to 12, 4, 12 and leaves by the EXIT button. That
+is the chest branch of exitsundial: the phase becomes 3 and CHESTAPP.MOV plays. The save starts in the hub
+(Scene C4) at phase 2, as the courtsave command sets it.
+
+```bash
+go run ./tools/courtsave -from=bin/saves/ballsacks.rtd -set=hub -scene="Scene C4" -point=2,3,3 -out=bin/hub-chest.json
+go run . --silent --debug --work=bin/ --load=bin/hub-chest.json --silent-script=tools/replays/hub-sundial-chest.json
+```
+
 `fountain-to-hub.json` runs the courtyard fountain route: the save is in Scene C5 facing north, day 4 at night, with the tstone item in the box. The click plays OPENFOUN.MOV and the game reaches the hub (Scene D7).
 
 ```bash
