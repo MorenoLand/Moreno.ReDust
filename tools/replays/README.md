@@ -112,8 +112,8 @@ go run . --silent --debug --work=bin/ --load=bin/snake-puzzle.json --silent-scri
 `fountain-to-hub.json` runs the courtyard fountain route: the save is in Scene C5 facing north, day 4 at night, with the tstone item in the box. The click plays OPENFOUN.MOV and the game reaches the hub (Scene D7).
 
 ```bash
-go run ./tools/courtsave -from=bin/saves/ballsacks.rtd -set=court -scene="Scene C5" -point=2,4,1 -clock=3 -out=bin/fountain.json
-# then set "day": 4 and inventoryOwners.tstone to "box" in bin/fountain.json
+go run ./tools/courtsave -from=bin/saves/ballsacks.rtd -set=court -scene="Scene C5" -point=2,4,1 -clock=3 -day=4 -out=bin/fountain.json
+# then set inventoryOwners.tstone to "box" in bin/fountain.json
 go run . --silent --debug --work=bin/ --load=bin/fountain.json --silent-script=tools/replays/fountain-to-hub.json
 ```
 
@@ -121,8 +121,7 @@ go run . --silent --debug --work=bin/ --load=bin/fountain.json --silent-script=t
 Clicking the sign runs docrack, which opens the crack stage with its dial and combination buttons.
 
 ```bash
-go run ./tools/courtsave -from=bin/saves/ballsacks.rtd -set=bank -scene="Scene D1" -point=3,0,4 -clock=3 -out=bin/bank.json
-# then set "day": 3 in bin/bank.json
+go run ./tools/courtsave -from=bin/saves/ballsacks.rtd -set=bank -scene="Scene D1" -point=3,0,4 -clock=3 -day=3 -out=bin/bank.json
 go run . --silent --debug --work=bin/ --load=bin/bank.json --silent-script=tools/replays/bank-crack.json
 ```
 

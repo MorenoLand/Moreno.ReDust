@@ -24,6 +24,7 @@ func main() {
 	gun := flag.Bool("gun", false, "hold the gun with six bullets and show its gunhand prop, for the target range's shots")
 	hand := flag.String("hand", "", "hold this inventory item in hand and give it to the player (for example mask, for the mine puzzle)")
 	room := flag.String("room", "", "next underground room the hub's arch enters: flute, mine, snake or tbird (the sundial's exit sets it)")
+	day := flag.Int("day", 1, "game day; the scripts read it from the day global, so courtsave sets both")
 	clock := flag.Int("clock", 1, "game clock; 3 is night, which opens nitecour when the set is night")
 	point := flag.String("point", "2,4,2", "world point as direction,scene,facing (1 north, 2 south, 3 east, 4 west)")
 	flag.Parse()
@@ -41,8 +42,12 @@ func main() {
 		log.Fatalf("-point must be direction,scene,facing: %v", err)
 	}
 	progress.Point = pointValue
-	progress.Day = 1
+	progress.Day = *day
 	progress.Clock = *clock
+	// The scripts read day and clock from their globals, which a save keeps apart from the
+	// top-level fields, so both are set here.
+	setIntGlobal(&progress, "day", int32(*day))
+	setIntGlobal(&progress, "clock", int32(*clock))
 	progress.TownReturnScene = "Scene G8"
 	if *path6 != "" && len(progress.ScriptContextPages) == 9 {
 		progress.ScriptContextPages[6] = []byte(*path6)
@@ -110,6 +115,17 @@ func holdItem(progress *save.GameProgress, item string) {
 	}
 	progress.InventoryOwners[item] = "stranger"
 	setStringGlobal(progress, "handitem", item)
+}
+
+// setIntGlobal sets a numeric script global, adding it when the save does not name it.
+func setIntGlobal(progress *save.GameProgress, name string, value int32) {
+	for index := range progress.ScriptGlobals {
+		if progress.ScriptGlobals[index].Name == name {
+			progress.ScriptGlobals[index] = scripts.GlobalVariable{Name: name, Kind: 4, Int: value}
+			return
+		}
+	}
+	progress.ScriptGlobals = append(progress.ScriptGlobals, scripts.GlobalVariable{Name: name, Kind: 4, Int: value})
 }
 
 // setStringGlobal sets a string script global, adding it when the save does not name it.
