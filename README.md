@@ -2,6 +2,12 @@
 
 ReDust is a work-in-progress Go and Ebitengine port of the 1995 adventure game DUST. It reconstructs game behavior from the original engine and local game data.
 
+> **Work in progress: about 60% done.** This is an estimate, not a measured figure, and it is updated with each push.
+>
+> Done so far: the courtyard, bank, hub, mine, snake, tumbler and flute rooms, the target range, save and load, and most of the town and hotel sets. Not started: the checkers, fight, scorpion, yunnibox, saloon, drug and kid minigames. The target range's white upper backdrop is still unresolved.
+
+Last updated 2026-10-26.
+
 ## Game data
 
 Original game assets are not included. Place legally obtained files in `bin/assets/`, preserving their original relative paths. A different work directory can be selected with `--work`; assets are read from its `assets` child. See [assets/README.md](assets/README.md).
